@@ -1,14 +1,16 @@
 # Zeabur deployment
 
-Deploy this project as **five services**, not one process:
+Deploy this project as **six services**, not one process:
 
 1. PostgreSQL 16 service (Zeabur managed PostgreSQL is preferred).
-2. `control-api`, built from `Dockerfile`, exposed on port 8080.
-3. `outbox-relay`, built from `Dockerfile` with entrypoint
+2. RabbitMQ 4.1 with the management image and quorum-queue support; keep it
+   private to the project network.
+3. `control-api`, built from `Dockerfile`, exposed on port 8080.
+4. `outbox-relay`, built from `Dockerfile` with entrypoint
    `/app/outbox-relay`, with no public port.
-4. `interaction-responder`, built from `Dockerfile` with entrypoint
+5. `interaction-responder`, built from `Dockerfile` with entrypoint
    `/app/interaction-responder`, with no public port.
-5. `runner`, built from `Dockerfile.runner`, with no public port.
+6. `runner`, built from `Dockerfile.runner`, with no public port.
 
 Run `/app/migrate` as a release command or one-off job before rolling either
 application workload. Give both workloads the same `CONTROL_DATABASE_URL` from
