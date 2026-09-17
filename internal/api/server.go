@@ -56,6 +56,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/tenants/{slug}/provider-identities/{provider}/{externalID}", s.upsertProviderIdentity)
 	mux.HandleFunc("GET /v1/tenants/{slug}/runs", s.listRuns)
 	mux.HandleFunc("GET /v1/tenants/{slug}/runs/{runID}", s.getRun)
+	mux.HandleFunc("GET /v1/tenants/{slug}/runs/{runID}/rule-snapshot", s.getRuleSnapshot)
 	mux.HandleFunc("POST /v1/tenants/{slug}/runs/{runID}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /v1/tenants/{slug}/runs/{runID}/events", s.streamRunEvents)
 	mux.HandleFunc("POST /v1/webhooks/github", s.githubWebhook)
@@ -395,6 +396,30 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+func (s *Server) getRuleSnapshot(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	runID, err := uuid.Parse(r.PathValue("runID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "run id is invalid"})
+		return
+	}
+	snapshot, err := s.store.GetRuleSnapshot(r.Context(), principal.Subject, r.PathValue("slug"), runID)
+	if errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "rule snapshot was not found"})
+		return
+	}
+	if err != nil {
+		slog.Error("get rule snapshot failed", "tenant", r.PathValue("slug"), "run_id", runID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load rule snapshot"})
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {

@@ -34,6 +34,7 @@ type Store interface {
 	ProcessInteraction(ctx context.Context, input domain.InteractionCommand) (domain.InteractionOutcome, error)
 	ListReviewRuns(ctx context.Context, actor, tenantSlug string, limit int) ([]domain.ReviewRunSummary, error)
 	GetReviewRun(ctx context.Context, actor, tenantSlug string, runID uuid.UUID) (domain.ReviewRunSummary, error)
+	GetRuleSnapshot(ctx context.Context, actor, tenantSlug string, runID uuid.UUID) (domain.RuleSnapshot, error)
 	ListRunEvents(ctx context.Context, actor, tenantSlug string, runID uuid.UUID, afterRevision int) ([]domain.RunEvent, error)
 	RequestRunCancellation(ctx context.Context, actor, tenantSlug string, runID uuid.UUID, expectedRevision int) (domain.ReviewRun, error)
 	// AdvanceRun is used by durable stage consumers that receive a review-run

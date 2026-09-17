@@ -71,6 +71,10 @@ func (*recordingStore) GetReviewRun(context.Context, string, string, uuid.UUID) 
 	return domain.ReviewRunSummary{}, nil
 }
 
+func (*recordingStore) GetRuleSnapshot(context.Context, string, string, uuid.UUID) (domain.RuleSnapshot, error) {
+	return domain.RuleSnapshot{}, nil
+}
+
 func (*recordingStore) ListRunEvents(context.Context, string, string, uuid.UUID, int) ([]domain.RunEvent, error) {
 	return nil, nil
 }

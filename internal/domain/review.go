@@ -139,12 +139,20 @@ type RuleBinding struct {
 // RuleSnapshot is the immutable, canonical rule resolution attached to a
 // review run. It never contains provider credentials or pull-request content.
 type RuleSnapshot struct {
-	ID               uuid.UUID       `json:"id"`
-	SHA256           string          `json:"sha256"`
-	CompilerVersion  string          `json:"compiler_version"`
-	Engine           string          `json:"engine"`
-	CanonicalPayload json.RawMessage `json:"canonical_payload"`
-	CreatedAt        time.Time       `json:"created_at"`
+	ID               uuid.UUID            `json:"id"`
+	SHA256           string               `json:"sha256"`
+	CompilerVersion  string               `json:"compiler_version"`
+	Engine           string               `json:"engine"`
+	CanonicalPayload json.RawMessage      `json:"canonical_payload"`
+	Sources          []RuleSnapshotSource `json:"sources"`
+	CreatedAt        time.Time            `json:"created_at"`
+}
+
+type RuleSnapshotSource struct {
+	RuleVersionID uuid.UUID `json:"rule_version_id"`
+	RuleSetID     uuid.UUID `json:"rule_set_id"`
+	Version       int       `json:"version"`
+	Precedence    int       `json:"precedence"`
 }
 
 type InboundEvent struct {

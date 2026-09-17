@@ -265,6 +265,57 @@ func (s *PostgresStore) RuleSnapshotForJob(ctx context.Context, jobID uuid.UUID)
 	return snapshot, nil
 }
 
+// GetRuleSnapshot exposes the immutable resolution used by one authorized
+// review run. It is intentionally separate from mutable rule-set endpoints so
+// task history continues to explain prior behavior after bindings change.
+func (s *PostgresStore) GetRuleSnapshot(ctx context.Context, actor, tenantSlug string, runID uuid.UUID) (domain.RuleSnapshot, error) {
+	if runID == uuid.Nil {
+		return domain.RuleSnapshot{}, ErrNotFound
+	}
+	tenantID, _, err := s.authorizedTenant(ctx, actor, tenantSlug)
+	if err != nil {
+		return domain.RuleSnapshot{}, err
+	}
+	var snapshot domain.RuleSnapshot
+	var payload []byte
+	err = s.pool.QueryRow(ctx, `
+		SELECT s.id, s.sha256, s.compiler_version, s.engine, s.canonical_payload, s.created_at
+		FROM review_runs r
+		JOIN review_requests request ON request.id = r.request_id
+		JOIN rule_snapshots s ON s.id = r.rule_snapshot_id
+		WHERE r.id = $1 AND request.tenant_id = $2`, runID, tenantID).
+		Scan(&snapshot.ID, &snapshot.SHA256, &snapshot.CompilerVersion, &snapshot.Engine, &payload, &snapshot.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RuleSnapshot{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.RuleSnapshot{}, fmt.Errorf("load rule snapshot: %w", err)
+	}
+	snapshot.CanonicalPayload = append(json.RawMessage(nil), payload...)
+	rows, err := s.pool.Query(ctx, `
+		SELECT source.rule_version_id, version.rule_set_id, version.version, source.precedence
+		FROM rule_snapshot_sources source
+		JOIN rule_versions version ON version.id = source.rule_version_id
+		WHERE source.snapshot_id = $1
+		ORDER BY source.precedence ASC, source.rule_version_id ASC`, snapshot.ID)
+	if err != nil {
+		return domain.RuleSnapshot{}, fmt.Errorf("list rule snapshot sources: %w", err)
+	}
+	defer rows.Close()
+	snapshot.Sources = make([]domain.RuleSnapshotSource, 0)
+	for rows.Next() {
+		var source domain.RuleSnapshotSource
+		if err := rows.Scan(&source.RuleVersionID, &source.RuleSetID, &source.Version, &source.Precedence); err != nil {
+			return domain.RuleSnapshot{}, fmt.Errorf("scan rule snapshot source: %w", err)
+		}
+		snapshot.Sources = append(snapshot.Sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.RuleSnapshot{}, fmt.Errorf("iterate rule snapshot sources: %w", err)
+	}
+	return snapshot, nil
+}
+
 func validRuleBindingInput(input *domain.RuleBindingInput) bool {
 	input.ScopeKind = strings.ToLower(strings.TrimSpace(input.ScopeKind))
 	input.ScopeRef = strings.TrimSpace(input.ScopeRef)
