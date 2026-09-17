@@ -46,6 +46,11 @@ func (p Processor) RunOnce(ctx context.Context) (worked bool, err error) {
 		if failureErr := p.Store.Fail(ctx, job.ID, p.WorkerID, err.Error()); failureErr != nil && !errors.Is(failureErr, store.ErrJobClaimLost) {
 			return true, fmt.Errorf("process job %s: %w (record failure: %v)", job.ID, err, failureErr)
 		}
+		if job.Attempts >= 5 {
+			if transitionErr := p.advance(ctx, job.ID, domain.RunFailed); transitionErr != nil && !errors.Is(transitionErr, store.ErrJobClaimLost) {
+				return true, fmt.Errorf("mark review run %s failed: %w", job.ID, transitionErr)
+			}
+		}
 		if p.Logger != nil {
 			p.Logger.Error("review job failed; queued for retry or terminal failure", "job_id", job.ID, "attempt", job.Attempts, "error", err)
 		}

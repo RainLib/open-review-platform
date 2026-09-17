@@ -633,6 +633,12 @@ func (s *PostgresStore) AdvanceLegacyRun(ctx context.Context, jobID uuid.UUID, n
 	if run.State == next {
 		return run, tx.Commit(ctx)
 	}
+	// A retried legacy job resumes from the furthest durable stage it reached.
+	// Replaying the worker's initial admitted/preparing calls must therefore be
+	// a no-op rather than an invalid backwards transition.
+	if runStateRank(run.State) > runStateRank(next) && !next.Terminal() {
+		return run, tx.Commit(ctx)
+	}
 	if err := domain.ValidateRunTransition(run.State, next); err != nil {
 		return domain.ReviewRun{}, err
 	}
@@ -659,6 +665,25 @@ func (s *PostgresStore) AdvanceLegacyRun(ctx context.Context, jobID uuid.UUID, n
 		return domain.ReviewRun{}, fmt.Errorf("commit legacy run transition: %w", err)
 	}
 	return run, nil
+}
+
+func runStateRank(state domain.RunState) int {
+	switch state {
+	case domain.RunAcknowledged:
+		return 1
+	case domain.RunAdmitted:
+		return 2
+	case domain.RunPreparing:
+		return 3
+	case domain.RunAnalyzing:
+		return 4
+	case domain.RunNormalizing:
+		return 5
+	case domain.RunPublishing:
+		return 6
+	default:
+		return 0
+	}
 }
 
 func (s *PostgresStore) authorizedTenant(ctx context.Context, actor, tenantSlug string) (uuid.UUID, string, error) {
