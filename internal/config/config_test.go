@@ -32,3 +32,13 @@ func TestGitHubWebhookSecretIsOptionalForLocalDevelopment(t *testing.T) {
 		t.Fatalf("development config should be allowed without a GitHub secret: %v", err)
 	}
 }
+
+func TestOCRTimeoutMustBePositiveDuration(t *testing.T) {
+	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("AUTH_MODE", "development")
+	t.Setenv("OCR_TIMEOUT", "0s")
+	if _, err := Load(); err == nil {
+		t.Fatal("OCR_TIMEOUT must reject a non-positive duration")
+	}
+}

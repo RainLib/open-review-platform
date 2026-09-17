@@ -48,6 +48,7 @@ type RunnerConfig struct {
 	OCRBinary      string
 	OCRVersion     string
 	OCRConcurrency int
+	OCRTimeout     time.Duration
 	PollInterval   time.Duration
 	GitHubToken    string
 	GitLabToken    string
@@ -62,6 +63,10 @@ func Load() (Config, error) {
 	ocrConcurrency, err := envInt("OCR_CONCURRENCY", 0)
 	if err != nil || ocrConcurrency < 0 {
 		return Config{}, fmt.Errorf("OCR_CONCURRENCY must be a non-negative integer")
+	}
+	ocrTimeout, err := time.ParseDuration(env("OCR_TIMEOUT", "15m"))
+	if err != nil || ocrTimeout <= 0 {
+		return Config{}, fmt.Errorf("OCR_TIMEOUT must be a positive duration")
 	}
 	c := Config{
 		DatabaseURL: os.Getenv("CONTROL_DATABASE_URL"),
@@ -90,6 +95,7 @@ func Load() (Config, error) {
 			OCRBinary:      env("OCR_BINARY", "ocr"),
 			OCRVersion:     env("OCR_VERSION", "1.12.4"),
 			OCRConcurrency: ocrConcurrency,
+			OCRTimeout:     ocrTimeout,
 			PollInterval:   poll,
 			GitHubToken:    os.Getenv("GITHUB_TOKEN"),
 			GitLabToken:    os.Getenv("GITLAB_TOKEN"),

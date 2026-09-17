@@ -65,6 +65,21 @@ func TestConfigureProcessGroupCancelsWrappedChild(t *testing.T) {
 	t.Fatalf("child process %d survived parent cancellation", childPID)
 }
 
+func TestReviewReportsWholeProcessTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("executes a short-lived shell process")
+	}
+	directory := t.TempDir()
+	script := filepath.Join(directory, "slow-ocr")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 30\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (Executor{Binary: script, Timeout: 20 * time.Millisecond}).Review(context.Background(), directory, "base", "head")
+	if err == nil || !strings.Contains(err.Error(), "timed out after 20ms") {
+		t.Fatalf("expected bounded OCR timeout, got %v", err)
+	}
+}
+
 func waitForChildPID(t *testing.T, path string) int {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

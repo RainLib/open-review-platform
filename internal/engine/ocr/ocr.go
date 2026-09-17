@@ -3,6 +3,7 @@ package ocr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ type Executor struct {
 	Version     string
 	GitBinary   string
 	Concurrency int
+	Timeout     time.Duration
 }
 
 var gitVersionPattern = regexp.MustCompile(`git version (\d+)\.(\d+)`)
@@ -89,6 +91,11 @@ func (e Executor) ReviewWithRule(ctx context.Context, directory, base, head stri
 }
 
 func (e Executor) review(ctx context.Context, directory, base, head, rulePath string) ([]domain.Finding, error) {
+	if e.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, e.Timeout)
+		defer cancel()
+	}
 	output := filepath.Join(directory, "open-review-result.json")
 	arguments := []string{"review", "--from", base, "--to", head, "--format", "json", "--output", output}
 	if e.Concurrency > 0 {
@@ -103,6 +110,9 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 	configureProcessGroup(command)
 	logs, err := command.CombinedOutput()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("OCR review timed out after %s", e.Timeout)
+		}
 		return nil, fmt.Errorf("execute OCR review: %w: %s", err, trimmedOutput(logs))
 	}
 	raw, err := os.ReadFile(output)
