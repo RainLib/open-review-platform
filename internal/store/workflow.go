@@ -151,6 +151,427 @@ func jsonPayload(value map[string]any) string {
 	return string(encoded)
 }
 
+func (s *PostgresStore) UpsertProviderIdentity(ctx context.Context, actor, tenantSlug string, input domain.ProviderIdentity) (domain.ProviderIdentity, error) {
+	if !input.Provider.Valid() || input.ExternalID == "" || input.Subject == "" {
+		return domain.ProviderIdentity{}, fmt.Errorf("provider identity is invalid")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ProviderIdentity{}, fmt.Errorf("begin provider identity update: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var tenantID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT t.id FROM tenants t JOIN memberships m ON m.tenant_id = t.id
+		WHERE t.slug = $1 AND m.subject = $2 AND m.role IN ('owner', 'admin')`, tenantSlug, actor).Scan(&tenantID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProviderIdentity{}, ErrForbidden
+	}
+	if err != nil {
+		return domain.ProviderIdentity{}, fmt.Errorf("authorize provider identity update: %w", err)
+	}
+	input.TenantID = tenantID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO provider_actor_mappings (tenant_id, provider, external_id, subject)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (tenant_id, provider, external_id) DO UPDATE
+		SET subject = EXCLUDED.subject, updated_at = now()
+		RETURNING tenant_id, provider, external_id, subject`, input.TenantID, input.Provider, input.ExternalID, input.Subject).
+		Scan(&input.TenantID, &input.Provider, &input.ExternalID, &input.Subject)
+	if isUniqueViolation(err) {
+		return domain.ProviderIdentity{}, ErrConflict
+	}
+	if err != nil {
+		return domain.ProviderIdentity{}, fmt.Errorf("upsert provider identity: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target) VALUES ($1, $2, 'provider_identity.upserted', $3)`, tenantID, actor, string(input.Provider)+":"+input.ExternalID); err != nil {
+		return domain.ProviderIdentity{}, fmt.Errorf("audit provider identity update: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ProviderIdentity{}, fmt.Errorf("commit provider identity update: %w", err)
+	}
+	return input, nil
+}
+
+func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.InteractionCommand) (domain.InteractionOutcome, error) {
+	if input.Event.Provider != domain.ProviderGitHub && input.Event.Provider != domain.ProviderGitLab {
+		return domain.InteractionOutcome{}, fmt.Errorf("unsupported interaction provider %q", input.Event.Provider)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.InteractionOutcome{}, fmt.Errorf("begin interaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var installation domain.Installation
+	err = tx.QueryRow(ctx, `
+		SELECT id, tenant_id, provider, external_id, repository_scope, api_base_url, credential_ref, active
+		FROM provider_installations
+		WHERE provider = $1 AND external_id = $2 AND active = TRUE`, input.Event.Provider, input.Event.InstallationExternalID).
+		Scan(&installation.ID, &installation.TenantID, &installation.Provider, &installation.ExternalID, &installation.RepositoryScope, &installation.APIBaseURL, &installation.CredentialRef, &installation.Active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.InteractionOutcome{}, ErrUnknownInstallation
+	}
+	if err != nil {
+		return domain.InteractionOutcome{}, fmt.Errorf("resolve interaction installation: %w", err)
+	}
+
+	var requestID uuid.UUID
+	var currentRunID *uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT id, current_run_id FROM review_requests
+		WHERE tenant_id = $1 AND installation_id = $2 AND repository = $3 AND review_number = $4
+		FOR UPDATE`, installation.TenantID, installation.ID, input.Event.Repository, input.Event.ReviewNumber).Scan(&requestID, &currentRunID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.InteractionOutcome{}, ErrUnknownInstallation
+	}
+	if err != nil {
+		return domain.InteractionOutcome{}, fmt.Errorf("resolve interaction request: %w", err)
+	}
+
+	var interactionID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO review_interactions (tenant_id, request_id, provider, provider_delivery_id, actor_external_id, command, normalized_input, result)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'ignored')
+		ON CONFLICT (provider, provider_delivery_id) DO NOTHING
+		RETURNING id`, installation.TenantID, requestID, input.Event.Provider, input.Event.DeliveryID, input.Event.ActorExternalID, input.Command, input.Normalized).Scan(&interactionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.InteractionOutcome{Duplicate: true}, nil
+	}
+	if err != nil {
+		return domain.InteractionOutcome{}, fmt.Errorf("record interaction: %w", err)
+	}
+
+	var role string
+	err = tx.QueryRow(ctx, `
+		SELECT m.role
+		FROM provider_actor_mappings p
+		JOIN memberships m ON m.tenant_id = p.tenant_id AND m.subject = p.subject
+		WHERE p.tenant_id = $1 AND p.provider = $2 AND p.external_id = $3`, installation.TenantID, input.Event.Provider, input.Event.ActorExternalID).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return rejectInteraction(ctx, tx, interactionID, "actor is not mapped to an organization member")
+	}
+	if err != nil {
+		return domain.InteractionOutcome{}, fmt.Errorf("authorize interaction actor: %w", err)
+	}
+	if !commandAllowed(role, input.Command) {
+		return rejectInteraction(ctx, tx, interactionID, "actor role is not allowed to run this command")
+	}
+
+	if input.Command == "invalid" {
+		return rejectInteraction(ctx, tx, interactionID, "invalid command; use @openreview help")
+	}
+	if input.Command == "help" || input.Command == "status" {
+		if err := tx.Commit(ctx); err != nil {
+			return domain.InteractionOutcome{}, fmt.Errorf("commit read-only interaction: %w", err)
+		}
+		return domain.InteractionOutcome{Accepted: true, Reason: "command accepted"}, nil
+	}
+	if currentRunID == nil {
+		return rejectInteraction(ctx, tx, interactionID, "no review run is available for this pull request")
+	}
+	current, err := scanReviewRun(tx.QueryRow(ctx, `
+		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, created_at, started_at, finished_at
+		FROM review_runs WHERE id = $1 FOR UPDATE`, *currentRunID))
+	if err != nil {
+		return domain.InteractionOutcome{}, fmt.Errorf("load current review run: %w", err)
+	}
+
+	if input.Command == "cancel" {
+		if current.State.Terminal() || current.CancelRequestedAt != nil {
+			return rejectInteraction(ctx, tx, interactionID, "run cannot be cancelled")
+		}
+		current.Revision++
+		if _, err := tx.Exec(ctx, `UPDATE review_runs SET cancel_requested_at = now(), revision = $2 WHERE id = $1`, current.ID, current.Revision); err != nil {
+			return domain.InteractionOutcome{}, fmt.Errorf("request run cancellation: %w", err)
+		}
+		if err := appendRunEvent(ctx, tx, current.ID, current.Revision, "run.cancel_requested", "user", "", map[string]any{"interaction_id": interactionID.String()}); err != nil {
+			return domain.InteractionOutcome{}, err
+		}
+		if err := insertOutbox(ctx, tx, current.ID, "review.run.cancel-requested", "run:"+current.ID.String()+fmt.Sprintf(":%d:cancel-requested", current.Revision), map[string]any{"run_id": current.ID.String(), "revision": current.Revision}); err != nil {
+			return domain.InteractionOutcome{}, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'accepted', result_run_id = $2 WHERE id = $1`, interactionID, current.ID); err != nil {
+			return domain.InteractionOutcome{}, fmt.Errorf("accept cancel interaction: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return domain.InteractionOutcome{}, fmt.Errorf("commit cancel interaction: %w", err)
+		}
+		return domain.InteractionOutcome{Accepted: true, RunID: &current.ID, Reason: "cancellation requested"}, nil
+	}
+
+	if input.Command == "review" && !current.State.Terminal() {
+		if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'accepted', result_run_id = $2 WHERE id = $1`, interactionID, current.ID); err != nil {
+			return domain.InteractionOutcome{}, fmt.Errorf("accept active review interaction: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return domain.InteractionOutcome{}, fmt.Errorf("commit active review interaction: %w", err)
+		}
+		return domain.InteractionOutcome{Accepted: true, RunID: &current.ID, Reason: "review is already active"}, nil
+	}
+	if input.Command == "retry" && !current.State.Terminal() {
+		return rejectInteraction(ctx, tx, interactionID, "retry is only available after a terminal run")
+	}
+	if input.Command != "review" && input.Command != "retry" {
+		return rejectInteraction(ctx, tx, interactionID, "unsupported command")
+	}
+
+	run, err := createCommentRun(ctx, tx, requestID, current.HeadSHA, current.BaseSHA, input.Command, interactionID)
+	if err != nil {
+		return domain.InteractionOutcome{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'accepted', result_run_id = $2 WHERE id = $1`, interactionID, run.ID); err != nil {
+		return domain.InteractionOutcome{}, fmt.Errorf("accept review interaction: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.InteractionOutcome{}, fmt.Errorf("commit review interaction: %w", err)
+	}
+	return domain.InteractionOutcome{Accepted: true, RunID: &run.ID, Reason: "review acknowledged"}, nil
+}
+
+func commandAllowed(role, command string) bool {
+	if command == "help" || command == "status" || command == "invalid" {
+		return role == "owner" || role == "admin" || role == "reviewer" || role == "viewer"
+	}
+	return role == "owner" || role == "admin" || role == "reviewer"
+}
+
+func rejectInteraction(ctx context.Context, tx pgx.Tx, interactionID uuid.UUID, reason string) (domain.InteractionOutcome, error) {
+	if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'rejected' WHERE id = $1`, interactionID); err != nil {
+		return domain.InteractionOutcome{}, fmt.Errorf("reject interaction: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.InteractionOutcome{}, fmt.Errorf("commit rejected interaction: %w", err)
+	}
+	return domain.InteractionOutcome{Reason: reason}, nil
+}
+
+func createCommentRun(ctx context.Context, tx pgx.Tx, requestID uuid.UUID, headSHA, baseSHA, triggerKind string, interactionID uuid.UUID) (domain.ReviewRun, error) {
+	run, err := scanReviewRun(tx.QueryRow(ctx, `
+		INSERT INTO review_runs (request_id, state, trigger_kind, head_sha, base_sha)
+		VALUES ($1, 'acknowledged', $2, $3, $4)
+		RETURNING id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, created_at, started_at, finished_at`, requestID, triggerKind, headSHA, baseSHA))
+	if err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("create comment review run: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE review_requests SET current_run_id = $2, updated_at = now() WHERE id = $1`, requestID, run.ID); err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("set comment review current run: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO review_run_stages (run_id, stage, state) SELECT $1, stage, 'pending' FROM unnest(ARRAY['ack', 'admit', 'prepare', 'analyze', 'normalize', 'publish']) AS stage`, run.ID); err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("initialize comment run stages: %w", err)
+	}
+	if err := appendRunEvent(ctx, tx, run.ID, run.Revision, "run.acknowledged", "user", "", map[string]any{"interaction_id": interactionID.String(), "trigger": triggerKind}); err != nil {
+		return domain.ReviewRun{}, err
+	}
+	if err := insertOutbox(ctx, tx, run.ID, "review.run.acknowledged", "run:"+run.ID.String()+":1:acknowledged", map[string]any{"run_id": run.ID.String(), "revision": run.Revision}); err != nil {
+		return domain.ReviewRun{}, err
+	}
+	return run, nil
+}
+
+func appendRunEvent(ctx context.Context, tx pgx.Tx, runID uuid.UUID, revision int, eventType, actorKind, actorSubject string, payload map[string]any) error {
+	if _, err := tx.Exec(ctx, `INSERT INTO review_run_events (run_id, revision, event_type, actor_kind, actor_subject, payload) VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, runID, revision, eventType, actorKind, actorSubject, jsonPayload(payload)); err != nil {
+		return fmt.Errorf("append %s event: %w", eventType, err)
+	}
+	return nil
+}
+
+func scanReviewRun(row rowScanner) (domain.ReviewRun, error) {
+	var run domain.ReviewRun
+	var failureCode, failureMessage *string
+	if err := row.Scan(&run.ID, &run.RequestID, &run.LegacyJobID, &run.Revision, &run.State, &run.TriggerKind, &run.HeadSHA, &run.BaseSHA, &run.CancelRequestedAt, &run.SupersededBy, &failureCode, &failureMessage, &run.CreatedAt, &run.StartedAt, &run.FinishedAt); err != nil {
+		return domain.ReviewRun{}, err
+	}
+	if failureCode != nil {
+		run.FailureCode = *failureCode
+	}
+	if failureMessage != nil {
+		run.FailureMessage = *failureMessage
+	}
+	return run, nil
+}
+
+func (s *PostgresStore) ListReviewRuns(ctx context.Context, actor, tenantSlug string, limit int) ([]domain.ReviewRunSummary, error) {
+	tenantID, _, err := s.authorizedTenant(ctx, actor, tenantSlug)
+	if err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > 100 {
+		limit = 25
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.created_at, r.started_at, r.finished_at,
+		       request.provider, request.repository, request.review_number
+		FROM review_runs r
+		JOIN review_requests request ON request.id = r.request_id
+		WHERE request.tenant_id = $1
+		ORDER BY r.created_at DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list review runs: %w", err)
+	}
+	defer rows.Close()
+	runs := make([]domain.ReviewRunSummary, 0)
+	for rows.Next() {
+		run, err := scanReviewRunSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate review runs: %w", err)
+	}
+	return runs, nil
+}
+
+func (s *PostgresStore) GetReviewRun(ctx context.Context, actor, tenantSlug string, runID uuid.UUID) (domain.ReviewRunSummary, error) {
+	tenantID, _, err := s.authorizedTenant(ctx, actor, tenantSlug)
+	if err != nil {
+		return domain.ReviewRunSummary{}, err
+	}
+	run, err := scanReviewRunSummary(s.pool.QueryRow(ctx, `
+		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.created_at, r.started_at, r.finished_at,
+		       request.provider, request.repository, request.review_number
+		FROM review_runs r
+		JOIN review_requests request ON request.id = r.request_id
+		WHERE request.tenant_id = $1 AND r.id = $2`, tenantID, runID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ReviewRunSummary{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.ReviewRunSummary{}, fmt.Errorf("get review run: %w", err)
+	}
+	return run, nil
+}
+
+func (s *PostgresStore) ListRunEvents(ctx context.Context, actor, tenantSlug string, runID uuid.UUID, afterRevision int) ([]domain.RunEvent, error) {
+	if afterRevision < 0 {
+		return nil, fmt.Errorf("after revision cannot be negative")
+	}
+	if _, err := s.GetReviewRun(ctx, actor, tenantSlug, runID); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, run_id, revision, event_type, actor_kind, actor_subject, payload, created_at
+		FROM review_run_events WHERE run_id = $1 AND revision > $2 ORDER BY revision`, runID, afterRevision)
+	if err != nil {
+		return nil, fmt.Errorf("list run events: %w", err)
+	}
+	defer rows.Close()
+	events := make([]domain.RunEvent, 0)
+	for rows.Next() {
+		var event domain.RunEvent
+		var payload []byte
+		if err := rows.Scan(&event.ID, &event.RunID, &event.Revision, &event.EventType, &event.ActorKind, &event.ActorSubject, &payload, &event.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan run event: %w", err)
+		}
+		if err := json.Unmarshal(payload, &event.Payload); err != nil {
+			return nil, fmt.Errorf("decode run event payload: %w", err)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate run events: %w", err)
+	}
+	return events, nil
+}
+
+func (s *PostgresStore) RequestRunCancellation(ctx context.Context, actor, tenantSlug string, runID uuid.UUID, expectedRevision int) (domain.ReviewRun, error) {
+	if expectedRevision < 1 {
+		return domain.ReviewRun{}, ErrRevisionConflict
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("begin cancellation request: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tenantID, role, err := authorizedTenantTx(ctx, tx, actor, tenantSlug)
+	if err != nil {
+		return domain.ReviewRun{}, err
+	}
+	if role != "owner" && role != "admin" && role != "reviewer" {
+		return domain.ReviewRun{}, ErrForbidden
+	}
+	run, err := scanReviewRun(tx.QueryRow(ctx, `
+		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.created_at, r.started_at, r.finished_at
+		FROM review_runs r JOIN review_requests request ON request.id = r.request_id
+		WHERE r.id = $1 AND request.tenant_id = $2 FOR UPDATE`, runID, tenantID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ReviewRun{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("load review run for cancellation: %w", err)
+	}
+	if run.Revision != expectedRevision {
+		return domain.ReviewRun{}, ErrRevisionConflict
+	}
+	if run.State.Terminal() || run.CancelRequestedAt != nil {
+		return domain.ReviewRun{}, ErrConflict
+	}
+	run.Revision++
+	if _, err := tx.Exec(ctx, `UPDATE review_runs SET cancel_requested_at = now(), revision = $2 WHERE id = $1`, runID, run.Revision); err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("update cancellation request: %w", err)
+	}
+	if err := appendRunEvent(ctx, tx, runID, run.Revision, "run.cancel_requested", "user", actor, map[string]any{"source": "task_api"}); err != nil {
+		return domain.ReviewRun{}, err
+	}
+	if err := insertOutbox(ctx, tx, runID, "review.run.cancel-requested", "run:"+runID.String()+fmt.Sprintf(":%d:cancel-requested", run.Revision), map[string]any{"run_id": runID.String(), "revision": run.Revision}); err != nil {
+		return domain.ReviewRun{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("commit cancellation request: %w", err)
+	}
+	now := time.Now().UTC()
+	run.CancelRequestedAt = &now
+	return run, nil
+}
+
+func (s *PostgresStore) authorizedTenant(ctx context.Context, actor, tenantSlug string) (uuid.UUID, string, error) {
+	var tenantID uuid.UUID
+	var role string
+	err := s.pool.QueryRow(ctx, `
+		SELECT t.id, m.role FROM tenants t JOIN memberships m ON m.tenant_id = t.id
+		WHERE t.slug = $1 AND m.subject = $2`, tenantSlug, actor).Scan(&tenantID, &role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, "", ErrForbidden
+	}
+	if err != nil {
+		return uuid.Nil, "", fmt.Errorf("authorize tenant: %w", err)
+	}
+	return tenantID, role, nil
+}
+
+func authorizedTenantTx(ctx context.Context, tx pgx.Tx, actor, tenantSlug string) (uuid.UUID, string, error) {
+	var tenantID uuid.UUID
+	var role string
+	err := tx.QueryRow(ctx, `
+		SELECT t.id, m.role FROM tenants t JOIN memberships m ON m.tenant_id = t.id
+		WHERE t.slug = $1 AND m.subject = $2`, tenantSlug, actor).Scan(&tenantID, &role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, "", ErrForbidden
+	}
+	if err != nil {
+		return uuid.Nil, "", fmt.Errorf("authorize tenant: %w", err)
+	}
+	return tenantID, role, nil
+}
+
+func scanReviewRunSummary(row rowScanner) (domain.ReviewRunSummary, error) {
+	var summary domain.ReviewRunSummary
+	var failureCode, failureMessage *string
+	if err := row.Scan(&summary.ID, &summary.RequestID, &summary.LegacyJobID, &summary.Revision, &summary.State, &summary.TriggerKind, &summary.HeadSHA, &summary.BaseSHA, &summary.CancelRequestedAt, &summary.SupersededBy, &failureCode, &failureMessage, &summary.CreatedAt, &summary.StartedAt, &summary.FinishedAt, &summary.Provider, &summary.Repository, &summary.ReviewNumber); err != nil {
+		return domain.ReviewRunSummary{}, err
+	}
+	if failureCode != nil {
+		summary.FailureCode = *failureCode
+	}
+	if failureMessage != nil {
+		summary.FailureMessage = *failureMessage
+	}
+	return summary, nil
+}
+
 func (s *PostgresStore) ClaimOutbox(ctx context.Context, relayID string, limit int) ([]domain.OutboxMessage, error) {
 	if relayID == "" || limit < 1 || limit > 100 {
 		return nil, fmt.Errorf("relay id and an outbox limit from 1 to 100 are required")

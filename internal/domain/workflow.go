@@ -73,32 +73,39 @@ type ReviewRequest struct {
 }
 
 type ReviewRun struct {
-	ID                uuid.UUID
-	RequestID         uuid.UUID
-	LegacyJobID       *uuid.UUID
-	Revision          int
-	State             RunState
-	TriggerKind       string
-	HeadSHA           string
-	BaseSHA           string
-	CancelRequestedAt *time.Time
-	SupersededBy      *uuid.UUID
-	FailureCode       string
-	FailureMessage    string
-	CreatedAt         time.Time
-	StartedAt         *time.Time
-	FinishedAt        *time.Time
+	ID                uuid.UUID  `json:"id"`
+	RequestID         uuid.UUID  `json:"request_id"`
+	LegacyJobID       *uuid.UUID `json:"-"`
+	Revision          int        `json:"revision"`
+	State             RunState   `json:"state"`
+	TriggerKind       string     `json:"trigger_kind"`
+	HeadSHA           string     `json:"head_sha"`
+	BaseSHA           string     `json:"base_sha"`
+	CancelRequestedAt *time.Time `json:"cancel_requested_at,omitempty"`
+	SupersededBy      *uuid.UUID `json:"superseded_by,omitempty"`
+	FailureCode       string     `json:"failure_code,omitempty"`
+	FailureMessage    string     `json:"failure_message,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	FinishedAt        *time.Time `json:"finished_at,omitempty"`
+}
+
+type ReviewRunSummary struct {
+	ReviewRun
+	Provider     Provider `json:"provider"`
+	Repository   string   `json:"repository"`
+	ReviewNumber int      `json:"review_number"`
 }
 
 type RunEvent struct {
-	ID           uuid.UUID
-	RunID        uuid.UUID
-	Revision     int
-	EventType    string
-	ActorKind    string
-	ActorSubject string
-	Payload      map[string]any
-	CreatedAt    time.Time
+	ID           uuid.UUID      `json:"id"`
+	RunID        uuid.UUID      `json:"run_id"`
+	Revision     int            `json:"revision"`
+	EventType    string         `json:"event_type"`
+	ActorKind    string         `json:"actor_kind"`
+	ActorSubject string         `json:"actor_subject,omitempty"`
+	Payload      map[string]any `json:"payload"`
+	CreatedAt    time.Time      `json:"created_at"`
 }
 
 type OutboxMessage struct {

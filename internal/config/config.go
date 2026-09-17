@@ -12,7 +12,7 @@ type Config struct {
 	HTTPAddress string
 	Environment string
 	Auth        AuthConfig
-	GitHub      WebhookConfig
+	GitHub      GitHubConfig
 	GitLab      WebhookConfig
 	Broker      BrokerConfig
 	Runner      RunnerConfig
@@ -26,6 +26,13 @@ type AuthConfig struct {
 
 type WebhookConfig struct {
 	Secret string
+}
+
+type GitHubConfig struct {
+	Secret         string
+	AppID          string
+	PrivateKeyPath string
+	APIURL         string
 }
 
 type BrokerConfig struct {
@@ -58,7 +65,12 @@ func Load() (Config, error) {
 			Issuer:   strings.TrimSuffix(os.Getenv("CASDOOR_ISSUER"), "/"),
 			Audience: os.Getenv("CASDOOR_AUDIENCE"),
 		},
-		GitHub: WebhookConfig{Secret: os.Getenv("GITHUB_WEBHOOK_SECRET")},
+		GitHub: GitHubConfig{
+			Secret:         os.Getenv("GITHUB_WEBHOOK_SECRET"),
+			AppID:          os.Getenv("GITHUB_APP_ID"),
+			PrivateKeyPath: os.Getenv("GITHUB_APP_PRIVATE_KEY_PATH"),
+			APIURL:         env("GITHUB_API_URL", "https://api.github.com"),
+		},
 		GitLab: WebhookConfig{Secret: os.Getenv("GITLAB_WEBHOOK_SECRET")},
 		Broker: BrokerConfig{
 			URL:      env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),

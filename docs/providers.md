@@ -8,10 +8,13 @@ read, and webhook events for `pull_request`. The control API checks
 `X-GitHub-Delivery` as the idempotency key. Only `opened`, `reopened`, and
 `synchronize` events become review jobs.
 
-Production publishing must obtain a short-lived installation token from the
-GitHub App private key held by the credential service. The runner then clones
-with an HTTP authorization header and the publisher uses the PR review API;
-low-confidence/unpositioned findings go to a summary, never a guessed line.
+Production publishing obtains a short-lived installation token from the
+GitHub App private key mounted into the runner. Configure `GITHUB_APP_ID` and
+`GITHUB_APP_PRIVATE_KEY_PATH`, then save `credential_ref=github-app` for the
+installation. The runner exchanges an App JWT immediately before clone or
+publish; the token never enters PostgreSQL, RabbitMQ, logs, or traces. The
+publisher uses the PR review API; low-confidence/unpositioned findings go to a
+summary, never a guessed line.
 
 ## GitLab
 

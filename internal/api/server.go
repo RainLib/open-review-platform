@@ -4,17 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/identity"
+	"github.com/RainLib/open-review-platform/internal/interaction"
 	"github.com/RainLib/open-review-platform/internal/store"
 	"github.com/RainLib/open-review-platform/internal/webhook"
+	"github.com/google/uuid"
 )
 
 const maxWebhookBytes = 2 << 20
@@ -43,6 +47,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tenants", s.createTenant)
 	mux.HandleFunc("PUT /v1/tenants/{slug}/members/{subject}", s.upsertMembership)
 	mux.HandleFunc("POST /v1/tenants/{slug}/installations", s.createInstallation)
+	mux.HandleFunc("PUT /v1/tenants/{slug}/provider-identities/{provider}/{externalID}", s.upsertProviderIdentity)
+	mux.HandleFunc("GET /v1/tenants/{slug}/runs", s.listRuns)
+	mux.HandleFunc("GET /v1/tenants/{slug}/runs/{runID}", s.getRun)
+	mux.HandleFunc("POST /v1/tenants/{slug}/runs/{runID}/cancel", s.cancelRun)
+	mux.HandleFunc("GET /v1/tenants/{slug}/runs/{runID}/events", s.streamRunEvents)
 	mux.HandleFunc("POST /v1/webhooks/github", s.githubWebhook)
 	mux.HandleFunc("POST /v1/webhooks/gitlab", s.gitlabWebhook)
 }
@@ -157,6 +166,176 @@ func (s *Server) upsertMembership(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, membership)
 }
 
+func (s *Server) upsertProviderIdentity(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var request struct {
+		Subject string `json:"subject"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	input := domain.ProviderIdentity{Provider: domain.Provider(strings.TrimSpace(r.PathValue("provider"))), ExternalID: strings.TrimSpace(r.PathValue("externalID")), Subject: strings.TrimSpace(request.Subject)}
+	identity, err := s.store.UpsertProviderIdentity(r.Context(), principal.Subject, r.PathValue("slug"), input)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "tenant administrator role is required"})
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "provider identity is already mapped"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider identity is invalid"})
+		return
+	}
+	writeJSON(w, http.StatusOK, identity)
+}
+
+func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	limit := 25
+	if value := r.URL.Query().Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be from 1 to 100"})
+			return
+		}
+		limit = parsed
+	}
+	runs, err := s.store.ListReviewRuns(r.Context(), principal.Subject, r.PathValue("slug"), limit)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list review runs"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	runID, err := uuid.Parse(r.PathValue("runID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "run id is invalid"})
+		return
+	}
+	run, err := s.store.GetReviewRun(r.Context(), principal.Subject, r.PathValue("slug"), runID)
+	if errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "review run not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load review run"})
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
+}
+
+func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	runID, err := uuid.Parse(r.PathValue("runID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "run id is invalid"})
+		return
+	}
+	var request struct {
+		Revision int `json:"revision"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	run, err := s.store.RequestRunCancellation(r.Context(), principal.Subject, r.PathValue("slug"), runID, request.Revision)
+	if errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "review run not found"})
+		return
+	}
+	if errors.Is(err, store.ErrRevisionConflict) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "review run revision is stale"})
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "review run cannot be cancelled"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not cancel review run"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, run)
+}
+
+func (s *Server) streamRunEvents(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	runID, err := uuid.Parse(r.PathValue("runID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "run id is invalid"})
+		return
+	}
+	after := 0
+	if value := r.URL.Query().Get("after_revision"); value != "" {
+		after, err = strconv.Atoi(value)
+		if err != nil || after < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "after_revision is invalid"})
+			return
+		}
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming is not supported"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("Connection", "keep-alive")
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		events, err := s.store.ListRunEvents(r.Context(), principal.Subject, r.PathValue("slug"), runID, after)
+		if errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNotFound) {
+			return
+		}
+		if err != nil {
+			return
+		}
+		for _, event := range events {
+			encoded, _ := json.Marshal(event)
+			_, _ = fmt.Fprintf(w, "id: %d\nevent: transition\ndata: %s\n\n", event.Revision, encoded)
+			after = event.Revision
+		}
+		if len(events) == 0 {
+			_, _ = fmt.Fprint(w, ": keepalive\n\n")
+		}
+		flusher.Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := readWebhookBody(w, r)
 	if err != nil {
@@ -166,8 +345,50 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid webhook signature"})
 		return
 	}
-	event, accepted, err := webhook.NormalizeGitHub(r.Header.Get("X-GitHub-Delivery"), r.Header.Get("X-GitHub-Event"), body, s.now())
-	s.enqueueNormalized(r.Context(), w, event, accepted, err)
+	switch r.Header.Get("X-GitHub-Event") {
+	case "pull_request":
+		event, accepted, err := webhook.NormalizeGitHub(r.Header.Get("X-GitHub-Delivery"), "pull_request", body, s.now())
+		s.enqueueNormalized(r.Context(), w, event, accepted, err)
+	case "issue_comment":
+		s.githubIssueComment(r.Context(), w, r.Header.Get("X-GitHub-Delivery"), body)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (s *Server) githubIssueComment(ctx context.Context, w http.ResponseWriter, deliveryID string, body []byte) {
+	event, accepted, err := webhook.NormalizeGitHubIssueComment(deliveryID, body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid webhook payload"})
+		return
+	}
+	if !accepted {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	parsed, mentioned, parseErr := interaction.Parse(event.Body)
+	if !mentioned {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	input := domain.InteractionCommand{Event: event, Command: string(parsed.Kind), Mode: parsed.Mode, Normalized: parsed.Normalized}
+	if parseErr != nil {
+		input.Command, input.Normalized = "invalid", strings.TrimSpace(event.Body)
+	}
+	outcome, err := s.store.ProcessInteraction(ctx, input)
+	if errors.Is(err, store.ErrUnknownInstallation) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not process interaction"})
+		return
+	}
+	response := map[string]any{"accepted": outcome.Accepted, "duplicate": outcome.Duplicate, "reason": outcome.Reason}
+	if outcome.RunID != nil {
+		response["run_id"] = outcome.RunID.String()
+	}
+	writeJSON(w, http.StatusAccepted, response)
 }
 
 func (s *Server) gitlabWebhook(w http.ResponseWriter, r *http.Request) {

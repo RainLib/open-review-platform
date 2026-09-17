@@ -172,11 +172,11 @@ func (s *PostgresStore) Enqueue(ctx context.Context, event domain.InboundEvent) 
 			tenant_id, installation_id, delivery_id, provider, api_base_url, repository, clone_url,
 			review_number, base_ref, base_sha, head_ref, head_sha, state
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'queued')
-		RETURNING id, tenant_id, installation_id, delivery_id, provider, api_base_url, repository, clone_url,
+		RETURNING id, tenant_id, installation_id, $13::text, $14::text, delivery_id, provider, api_base_url, repository, clone_url,
 			review_number, base_ref, base_sha, head_ref, head_sha, state, attempts,
 			locked_by, locked_until, error_message, created_at, started_at, finished_at`,
 		installation.TenantID, installation.ID, deliveryID, event.Provider, installation.APIBaseURL, event.Repository, event.CloneURL,
-		event.ReviewNumber, event.BaseRef, event.BaseSHA, event.HeadRef, event.HeadSHA))
+		event.ReviewNumber, event.BaseRef, event.BaseSHA, event.HeadRef, event.HeadSHA, installation.ExternalID, installation.CredentialRef))
 	if err != nil {
 		return domain.ReviewJob{}, false, fmt.Errorf("create review job: %w", err)
 	}
@@ -201,9 +201,9 @@ func (s *PostgresStore) Claim(ctx context.Context, workerID string) (*domain.Rev
 		UPDATE review_jobs AS j
 		SET state = 'running', attempts = attempts + 1, locked_by = $1,
 			locked_until = now() + interval '30 minutes', started_at = now()
-		FROM candidate
-		WHERE j.id = candidate.id
-		RETURNING j.id, j.tenant_id, j.installation_id, j.delivery_id, j.provider, j.api_base_url, j.repository, j.clone_url,
+		FROM candidate, provider_installations AS i
+		WHERE j.id = candidate.id AND i.id = j.installation_id
+		RETURNING j.id, j.tenant_id, j.installation_id, i.external_id, i.credential_ref, j.delivery_id, j.provider, j.api_base_url, j.repository, j.clone_url,
 			j.review_number, j.base_ref, j.base_sha, j.head_ref, j.head_sha, j.state, j.attempts,
 			j.locked_by, j.locked_until, j.error_message, j.created_at, j.started_at, j.finished_at`, workerID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -285,7 +285,7 @@ func scanJob(row rowScanner) (domain.ReviewJob, error) {
 	var errorMessage *string
 	var lockedUntil, startedAt, finishedAt *time.Time
 	err := row.Scan(
-		&job.ID, &job.TenantID, &job.InstallationID, &job.DeliveryID, &job.Provider, &job.APIBaseURL, &job.Repository, &job.CloneURL,
+		&job.ID, &job.TenantID, &job.InstallationID, &job.InstallationExternalID, &job.CredentialRef, &job.DeliveryID, &job.Provider, &job.APIBaseURL, &job.Repository, &job.CloneURL,
 		&job.ReviewNumber, &job.BaseRef, &job.BaseSHA, &job.HeadRef, &job.HeadSHA, &job.State, &job.Attempts,
 		&lockedBy, &lockedUntil, &errorMessage, &job.CreatedAt, &startedAt, &finishedAt,
 	)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/config"
+	"github.com/RainLib/open-review-platform/internal/credentials"
 	"github.com/RainLib/open-review-platform/internal/engine/ocr"
 	"github.com/RainLib/open-review-platform/internal/publisher"
 	"github.com/RainLib/open-review-platform/internal/runner"
@@ -29,15 +30,19 @@ func main() {
 		log.Fatal(err)
 	}
 	defer database.Close()
+	resolver, err := credentials.New(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
 	executor := ocr.Executor{Binary: cfg.Runner.OCRBinary, Version: cfg.Runner.OCRVersion}
 	if err := executor.VerifyVersion(ctx); err != nil {
 		log.Fatal(err)
 	}
 	processor := runner.Processor{
 		Store:     database,
-		Checkout:  runner.Checkout{GitHubToken: cfg.Runner.GitHubToken, GitLabToken: cfg.Runner.GitLabToken},
+		Checkout:  runner.Checkout{Resolver: resolver},
 		Executor:  executor,
-		Publisher: publisher.NewHTTP(cfg.Runner.GitHubToken, cfg.Runner.GitLabToken),
+		Publisher: publisher.NewHTTPWithResolver(resolver),
 		WorkerID:  cfg.Runner.ID,
 		Logger:    slog.Default(),
 	}

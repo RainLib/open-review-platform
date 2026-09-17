@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RainLib/open-review-platform/internal/credentials"
 	"github.com/RainLib/open-review-platform/internal/domain"
 )
 
@@ -21,42 +22,44 @@ type Publisher interface {
 }
 
 type HTTPPublisher struct {
-	client      *http.Client
-	githubToken string
-	gitlabToken string
+	client   *http.Client
+	resolver credentials.Resolver
 }
 
 func NewHTTP(githubToken, gitlabToken string) *HTTPPublisher {
+	return NewHTTPWithResolver(&credentials.ProviderResolver{GitHubToken: githubToken, GitLabToken: gitlabToken})
+}
+
+func NewHTTPWithResolver(resolver credentials.Resolver) *HTTPPublisher {
 	return &HTTPPublisher{
-		client:      &http.Client{Timeout: 30 * time.Second},
-		githubToken: githubToken,
-		gitlabToken: gitlabToken,
+		client:   &http.Client{Timeout: 30 * time.Second},
+		resolver: resolver,
 	}
 }
 
 func (p *HTTPPublisher) Publish(ctx context.Context, job domain.ReviewJob, findings []domain.Finding) error {
-	switch job.Provider {
-	case domain.ProviderGitHub:
-		if p.githubToken == "" {
-			return fmt.Errorf("GitHub credential resolver returned no token")
-		}
-		return p.publishGitHub(ctx, job, findings)
-	case domain.ProviderGitLab:
-		if p.gitlabToken == "" {
-			return fmt.Errorf("GitLab credential resolver returned no token")
-		}
-		return p.publishGitLab(ctx, job, findings)
-	default:
-		return fmt.Errorf("unsupported provider %q", job.Provider)
+	if p.resolver == nil {
+		return fmt.Errorf("provider credential resolver is required")
 	}
+	token, err := p.resolver.Resolve(ctx, job)
+	if err != nil {
+		return err
+	}
+	if job.Provider == domain.ProviderGitHub {
+		return p.publishGitHub(ctx, job, token, findings)
+	}
+	if job.Provider == domain.ProviderGitLab {
+		return p.publishGitLab(ctx, job, token, findings)
+	}
+	return fmt.Errorf("unsupported provider %q", job.Provider)
 }
 
-func (p *HTTPPublisher) publishGitHub(ctx context.Context, job domain.ReviewJob, findings []domain.Finding) error {
+func (p *HTTPPublisher) publishGitHub(ctx context.Context, job domain.ReviewJob, token string, findings []domain.Finding) error {
 	base := strings.TrimSuffix(job.APIBaseURL, "/")
 	if base == "" {
 		base = "https://api.github.com"
 	}
-	existing, err := p.githubMarkers(ctx, base, job)
+	existing, err := p.githubMarkers(ctx, base, job, token)
 	if err != nil {
 		return err
 	}
@@ -87,56 +90,56 @@ func (p *HTTPPublisher) publishGitHub(ctx context.Context, job domain.ReviewJob,
 			Comments: inline[start:end],
 		}
 		endpoint := fmt.Sprintf("%s/repos/%s/pulls/%d/reviews", base, job.Repository, job.ReviewNumber)
-		if err := p.requestJSON(ctx, http.MethodPost, endpoint, p.githubToken, payload, nil); err != nil {
+		if err := p.requestJSON(ctx, http.MethodPost, endpoint, token, payload, nil); err != nil {
 			return fmt.Errorf("publish GitHub inline review: %w", err)
 		}
 	}
 	if len(summary) > 0 || len(findings) == 0 {
 		body := renderSummary(job, summary, "open-review-platform:summary:"+job.ID.String())
-		if err := p.githubUpsertSummary(ctx, base, job, body); err != nil {
+		if err := p.githubUpsertSummary(ctx, base, job, token, body); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (p *HTTPPublisher) githubMarkers(ctx context.Context, base string, job domain.ReviewJob) (map[string]bool, error) {
+func (p *HTTPPublisher) githubMarkers(ctx context.Context, base string, job domain.ReviewJob, token string) (map[string]bool, error) {
 	endpoint := fmt.Sprintf("%s/repos/%s/pulls/%d/comments?per_page=100", base, job.Repository, job.ReviewNumber)
 	var comments []struct {
 		Body string `json:"body"`
 	}
-	if err := p.requestJSON(ctx, http.MethodGet, endpoint, p.githubToken, nil, &comments); err != nil {
+	if err := p.requestJSON(ctx, http.MethodGet, endpoint, token, nil, &comments); err != nil {
 		return nil, fmt.Errorf("list GitHub review comments: %w", err)
 	}
 	return markers(comments), nil
 }
 
-func (p *HTTPPublisher) githubUpsertSummary(ctx context.Context, base string, job domain.ReviewJob, body string) error {
+func (p *HTTPPublisher) githubUpsertSummary(ctx context.Context, base string, job domain.ReviewJob, token, body string) error {
 	endpoint := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", base, job.Repository, job.ReviewNumber)
 	var comments []struct {
 		ID   int64  `json:"id"`
 		Body string `json:"body"`
 	}
-	if err := p.requestJSON(ctx, http.MethodGet, endpoint, p.githubToken, nil, &comments); err != nil {
+	if err := p.requestJSON(ctx, http.MethodGet, endpoint, token, nil, &comments); err != nil {
 		return fmt.Errorf("list GitHub summary comments: %w", err)
 	}
 	marker := "open-review-platform:summary:" + job.ID.String()
 	for _, comment := range comments {
 		if strings.Contains(comment.Body, marker) {
 			endpoint := fmt.Sprintf("%s/repos/%s/issues/comments/%d", base, job.Repository, comment.ID)
-			return p.requestJSON(ctx, http.MethodPatch, endpoint, p.githubToken, map[string]string{"body": body}, nil)
+			return p.requestJSON(ctx, http.MethodPatch, endpoint, token, map[string]string{"body": body}, nil)
 		}
 	}
-	return p.requestJSON(ctx, http.MethodPost, endpoint, p.githubToken, map[string]string{"body": body}, nil)
+	return p.requestJSON(ctx, http.MethodPost, endpoint, token, map[string]string{"body": body}, nil)
 }
 
-func (p *HTTPPublisher) publishGitLab(ctx context.Context, job domain.ReviewJob, findings []domain.Finding) error {
+func (p *HTTPPublisher) publishGitLab(ctx context.Context, job domain.ReviewJob, token string, findings []domain.Finding) error {
 	base := strings.TrimSuffix(job.APIBaseURL, "/")
 	if base == "" {
 		base = "https://gitlab.com/api/v4"
 	}
 	project := url.PathEscape(job.Repository)
-	existing, err := p.gitLabMarkers(ctx, base, project, job)
+	existing, err := p.gitLabMarkers(ctx, base, project, job, token)
 	if err != nil {
 		return err
 	}
@@ -163,14 +166,14 @@ func (p *HTTPPublisher) publishGitLab(ctx context.Context, job domain.ReviewJob,
 			payload.Position.BaseSHA, payload.Position.StartSHA, payload.Position.HeadSHA = job.BaseSHA, job.BaseSHA, job.HeadSHA
 			payload.Position.NewPath, payload.Position.NewLine = finding.Path, finding.EndLine
 			endpoint := fmt.Sprintf("%s/projects/%s/merge_requests/%d/discussions", base, project, job.ReviewNumber)
-			if err := p.requestJSON(ctx, http.MethodPost, endpoint, p.gitlabToken, payload, nil); err != nil {
+			if err := p.requestJSON(ctx, http.MethodPost, endpoint, token, payload, nil); err != nil {
 				return fmt.Errorf("publish GitLab inline discussion: %w", err)
 			}
 			posted++
 			continue
 		}
 		endpoint := fmt.Sprintf("%s/projects/%s/merge_requests/%d/notes", base, project, job.ReviewNumber)
-		if err := p.requestJSON(ctx, http.MethodPost, endpoint, p.gitlabToken, map[string]string{"body": body}, nil); err != nil {
+		if err := p.requestJSON(ctx, http.MethodPost, endpoint, token, map[string]string{"body": body}, nil); err != nil {
 			return fmt.Errorf("publish GitLab note: %w", err)
 		}
 		posted++
@@ -179,7 +182,7 @@ func (p *HTTPPublisher) publishGitLab(ctx context.Context, job domain.ReviewJob,
 		endpoint := fmt.Sprintf("%s/projects/%s/merge_requests/%d/notes", base, project, job.ReviewNumber)
 		marker := "open-review-platform:summary:" + job.ID.String()
 		if !existing[marker] {
-			if err := p.requestJSON(ctx, http.MethodPost, endpoint, p.gitlabToken, map[string]string{"body": renderSummary(job, nil, marker)}, nil); err != nil {
+			if err := p.requestJSON(ctx, http.MethodPost, endpoint, token, map[string]string{"body": renderSummary(job, nil, marker)}, nil); err != nil {
 				return fmt.Errorf("publish GitLab empty summary: %w", err)
 			}
 		}
@@ -187,14 +190,14 @@ func (p *HTTPPublisher) publishGitLab(ctx context.Context, job domain.ReviewJob,
 	return nil
 }
 
-func (p *HTTPPublisher) gitLabMarkers(ctx context.Context, base, project string, job domain.ReviewJob) (map[string]bool, error) {
+func (p *HTTPPublisher) gitLabMarkers(ctx context.Context, base, project string, job domain.ReviewJob, token string) (map[string]bool, error) {
 	endpoint := fmt.Sprintf("%s/projects/%s/merge_requests/%d/discussions?per_page=100", base, project, job.ReviewNumber)
 	var discussions []struct {
 		Notes []struct {
 			Body string `json:"body"`
 		} `json:"notes"`
 	}
-	if err := p.requestJSON(ctx, http.MethodGet, endpoint, p.gitlabToken, nil, &discussions); err != nil {
+	if err := p.requestJSON(ctx, http.MethodGet, endpoint, token, nil, &discussions); err != nil {
 		return nil, fmt.Errorf("list GitLab discussions: %w", err)
 	}
 	found := make(map[string]bool)

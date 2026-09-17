@@ -73,6 +73,44 @@ func NormalizeGitHub(deliveryID, eventName string, body []byte, now time.Time) (
 	}, true, nil
 }
 
+// NormalizeGitHubIssueComment accepts only comments attached to pull requests.
+// An issue with the same number is not a review target and is intentionally
+// ignored rather than treated as a command.
+func NormalizeGitHubIssueComment(deliveryID string, body []byte) (domain.CommentEvent, bool, error) {
+	var payload struct {
+		Action       string `json:"action"`
+		Installation struct {
+			ID json.Number `json:"id"`
+		} `json:"installation"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+		Issue struct {
+			Number      int       `json:"number"`
+			PullRequest *struct{} `json:"pull_request"`
+		} `json:"issue"`
+		Comment struct {
+			ID   json.Number `json:"id"`
+			Body string      `json:"body"`
+			User struct {
+				ID json.Number `json:"id"`
+			} `json:"user"`
+		} `json:"comment"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return domain.CommentEvent{}, false, fmt.Errorf("decode GitHub issue_comment payload: %w", err)
+	}
+	if payload.Action != "created" || payload.Issue.PullRequest == nil {
+		return domain.CommentEvent{}, false, nil
+	}
+	if deliveryID == "" || payload.Installation.ID == "" || payload.Repository.FullName == "" || payload.Issue.Number <= 0 || payload.Comment.ID == "" || payload.Comment.User.ID == "" {
+		return domain.CommentEvent{}, false, fmt.Errorf("GitHub issue_comment payload is missing required review fields")
+	}
+	return domain.CommentEvent{Provider: domain.ProviderGitHub, DeliveryID: deliveryID, InstallationExternalID: payload.Installation.ID.String(), Repository: payload.Repository.FullName, ReviewNumber: payload.Issue.Number, CommentExternalID: payload.Comment.ID.String(), ActorExternalID: payload.Comment.User.ID.String(), Body: payload.Comment.Body}, true, nil
+}
+
 func NormalizeGitLab(deliveryID, eventName string, body []byte, now time.Time) (domain.InboundEvent, bool, error) {
 	if eventName != "Merge Request Hook" {
 		return domain.InboundEvent{}, false, nil

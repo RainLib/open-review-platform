@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/RainLib/open-review-platform/internal/credentials"
 	"github.com/RainLib/open-review-platform/internal/domain"
 )
 
@@ -24,11 +25,16 @@ func (w *Workspace) Close() error {
 }
 
 type Checkout struct {
+	Resolver    credentials.Resolver
 	GitHubToken string
 	GitLabToken string
 }
 
 func (c Checkout) Prepare(ctx context.Context, job domain.ReviewJob) (*Workspace, error) {
+	token, err := c.token(ctx, job)
+	if err != nil {
+		return nil, err
+	}
 	directory, err := os.MkdirTemp("", "open-review-")
 	if err != nil {
 		return nil, fmt.Errorf("create isolated workspace: %w", err)
@@ -37,39 +43,39 @@ func (c Checkout) Prepare(ctx context.Context, job domain.ReviewJob) (*Workspace
 		_ = os.RemoveAll(directory)
 		return nil, err
 	}
-	if err := c.git(ctx, "", job.Provider, "clone", "--no-checkout", "--depth=1", job.CloneURL, directory); err != nil {
+	if err := c.git(ctx, "", token, "clone", "--no-checkout", "--depth=1", job.CloneURL, directory); err != nil {
 		return fail(fmt.Errorf("clone review repository: %w", err))
 	}
-	if err := c.git(ctx, directory, job.Provider, "fetch", "--depth=1", "origin", job.BaseRef); err != nil {
+	if err := c.git(ctx, directory, token, "fetch", "--depth=1", "origin", job.BaseRef); err != nil {
 		return fail(fmt.Errorf("fetch base ref: %w", err))
 	}
-	baseSHA, err := c.gitOutput(ctx, directory, job.Provider, "rev-parse", "FETCH_HEAD")
+	baseSHA, err := c.gitOutput(ctx, directory, token, "rev-parse", "FETCH_HEAD")
 	if err != nil {
 		return fail(fmt.Errorf("resolve base SHA: %w", err))
 	}
 	if job.BaseSHA != "" {
 		baseSHA = job.BaseSHA
 	}
-	if err := c.git(ctx, directory, job.Provider, "fetch", "--depth=1", "origin", job.HeadSHA); err != nil {
+	if err := c.git(ctx, directory, token, "fetch", "--depth=1", "origin", job.HeadSHA); err != nil {
 		return fail(fmt.Errorf("fetch head SHA: %w", err))
 	}
-	if err := c.git(ctx, directory, job.Provider, "checkout", "--detach", job.HeadSHA); err != nil {
+	if err := c.git(ctx, directory, token, "checkout", "--detach", job.HeadSHA); err != nil {
 		return fail(fmt.Errorf("checkout head SHA: %w", err))
 	}
 	return &Workspace{Path: directory, BaseSHA: strings.TrimSpace(baseSHA), cleanup: func() error { return os.RemoveAll(directory) }}, nil
 }
 
-func (c Checkout) git(ctx context.Context, directory string, provider domain.Provider, args ...string) error {
-	_, err := c.gitOutput(ctx, directory, provider, args...)
+func (c Checkout) git(ctx context.Context, directory, token string, args ...string) error {
+	_, err := c.gitOutput(ctx, directory, token, args...)
 	return err
 }
 
-func (c Checkout) gitOutput(ctx context.Context, directory string, provider domain.Provider, args ...string) (string, error) {
+func (c Checkout) gitOutput(ctx context.Context, directory, token string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, "git", args...)
 	if directory != "" {
 		command.Dir = directory
 	}
-	if token := c.token(provider); token != "" {
+	if token != "" {
 		command.Env = append(os.Environ(),
 			"GIT_CONFIG_COUNT=1",
 			"GIT_CONFIG_KEY_0=http.extraHeader",
@@ -83,14 +89,17 @@ func (c Checkout) gitOutput(ctx context.Context, directory string, provider doma
 	return string(output), nil
 }
 
-func (c Checkout) token(provider domain.Provider) string {
-	if provider == domain.ProviderGitHub {
-		return c.GitHubToken
+func (c Checkout) token(ctx context.Context, job domain.ReviewJob) (string, error) {
+	if c.Resolver != nil {
+		return c.Resolver.Resolve(ctx, job)
 	}
-	if provider == domain.ProviderGitLab {
-		return c.GitLabToken
+	if job.Provider == domain.ProviderGitHub {
+		return c.GitHubToken, nil
 	}
-	return ""
+	if job.Provider == domain.ProviderGitLab {
+		return c.GitLabToken, nil
+	}
+	return "", fmt.Errorf("unsupported provider %q", job.Provider)
 }
 
 func trim(value []byte) string {

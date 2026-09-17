@@ -86,28 +86,64 @@ type InboundEvent struct {
 	ReceivedAt             time.Time
 }
 
+// CommentEvent carries only the identifiers and raw body required to safely
+// parse an explicit review command. Provider credentials are never embedded.
+type CommentEvent struct {
+	Provider               Provider
+	DeliveryID             string
+	InstallationExternalID string
+	Repository             string
+	ReviewNumber           int
+	CommentExternalID      string
+	ActorExternalID        string
+	Body                   string
+}
+
+type ProviderIdentity struct {
+	TenantID   uuid.UUID `json:"tenant_id"`
+	Provider   Provider  `json:"provider"`
+	ExternalID string    `json:"external_id"`
+	Subject    string    `json:"subject"`
+}
+
+type InteractionCommand struct {
+	Event      CommentEvent
+	Command    string
+	Mode       string
+	Normalized string
+}
+
+type InteractionOutcome struct {
+	Accepted  bool
+	Duplicate bool
+	Reason    string
+	RunID     *uuid.UUID
+}
+
 type ReviewJob struct {
-	ID             uuid.UUID
-	TenantID       uuid.UUID
-	InstallationID uuid.UUID
-	DeliveryID     uuid.UUID
-	Provider       Provider
-	APIBaseURL     string
-	Repository     string
-	CloneURL       string
-	ReviewNumber   int
-	BaseRef        string
-	BaseSHA        string
-	HeadRef        string
-	HeadSHA        string
-	State          JobState
-	Attempts       int
-	LockedBy       string
-	LockedUntil    *time.Time
-	ErrorMessage   string
-	CreatedAt      time.Time
-	StartedAt      *time.Time
-	FinishedAt     *time.Time
+	ID                     uuid.UUID
+	TenantID               uuid.UUID
+	InstallationID         uuid.UUID
+	InstallationExternalID string
+	CredentialRef          string
+	DeliveryID             uuid.UUID
+	Provider               Provider
+	APIBaseURL             string
+	Repository             string
+	CloneURL               string
+	ReviewNumber           int
+	BaseRef                string
+	BaseSHA                string
+	HeadRef                string
+	HeadSHA                string
+	State                  JobState
+	Attempts               int
+	LockedBy               string
+	LockedUntil            *time.Time
+	ErrorMessage           string
+	CreatedAt              time.Time
+	StartedAt              *time.Time
+	FinishedAt             *time.Time
 }
 
 type Finding struct {

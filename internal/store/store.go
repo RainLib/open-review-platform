@@ -16,6 +16,7 @@ var (
 	ErrConflict            = errors.New("resource already exists")
 	ErrRevisionConflict    = errors.New("review run revision does not match")
 	ErrInboxClaimLost      = errors.New("inbox message claim is no longer held")
+	ErrNotFound            = errors.New("resource not found")
 )
 
 // Store owns durable state transitions. A job can only be produced by a
@@ -24,6 +25,12 @@ type Store interface {
 	CreateTenant(ctx context.Context, actor, slug, name string) (domain.Tenant, error)
 	UpsertMembership(ctx context.Context, actor, tenantSlug, subject, role string) (domain.Membership, error)
 	CreateInstallation(ctx context.Context, actor, tenantSlug string, input domain.InstallationInput) (domain.Installation, error)
+	UpsertProviderIdentity(ctx context.Context, actor, tenantSlug string, input domain.ProviderIdentity) (domain.ProviderIdentity, error)
+	ProcessInteraction(ctx context.Context, input domain.InteractionCommand) (domain.InteractionOutcome, error)
+	ListReviewRuns(ctx context.Context, actor, tenantSlug string, limit int) ([]domain.ReviewRunSummary, error)
+	GetReviewRun(ctx context.Context, actor, tenantSlug string, runID uuid.UUID) (domain.ReviewRunSummary, error)
+	ListRunEvents(ctx context.Context, actor, tenantSlug string, runID uuid.UUID, afterRevision int) ([]domain.RunEvent, error)
+	RequestRunCancellation(ctx context.Context, actor, tenantSlug string, runID uuid.UUID, expectedRevision int) (domain.ReviewRun, error)
 	Enqueue(ctx context.Context, event domain.InboundEvent) (job domain.ReviewJob, duplicate bool, err error)
 	Claim(ctx context.Context, workerID string) (*domain.ReviewJob, error)
 	SaveFindings(ctx context.Context, jobID uuid.UUID, findings []domain.Finding) error

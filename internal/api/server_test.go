@@ -16,8 +16,10 @@ import (
 )
 
 type recordingStore struct {
-	event  domain.InboundEvent
-	called bool
+	event             domain.InboundEvent
+	interaction       domain.InteractionCommand
+	called            bool
+	interactionCalled bool
 }
 
 func (s *recordingStore) CreateTenant(context.Context, string, string, string) (domain.Tenant, error) {
@@ -30,6 +32,63 @@ func (s *recordingStore) UpsertMembership(context.Context, string, string, strin
 
 func (s *recordingStore) CreateInstallation(context.Context, string, string, domain.InstallationInput) (domain.Installation, error) {
 	return domain.Installation{}, nil
+}
+
+func (s *recordingStore) UpsertProviderIdentity(context.Context, string, string, domain.ProviderIdentity) (domain.ProviderIdentity, error) {
+	return domain.ProviderIdentity{}, nil
+}
+
+func (s *recordingStore) ProcessInteraction(_ context.Context, input domain.InteractionCommand) (domain.InteractionOutcome, error) {
+	s.interaction, s.interactionCalled = input, true
+	return domain.InteractionOutcome{Accepted: true}, nil
+}
+
+func (*recordingStore) ListReviewRuns(context.Context, string, string, int) ([]domain.ReviewRunSummary, error) {
+	return nil, nil
+}
+
+func (*recordingStore) GetReviewRun(context.Context, string, string, uuid.UUID) (domain.ReviewRunSummary, error) {
+	return domain.ReviewRunSummary{}, nil
+}
+
+func (*recordingStore) ListRunEvents(context.Context, string, string, uuid.UUID, int) ([]domain.RunEvent, error) {
+	return nil, nil
+}
+
+func (*recordingStore) RequestRunCancellation(context.Context, string, string, uuid.UUID, int) (domain.ReviewRun, error) {
+	return domain.ReviewRun{}, nil
+}
+
+func TestGitHubIssueCommentCommandIsVerifiedAndNormalized(t *testing.T) {
+	secret := "secret"
+	body := []byte(`{"action":"created","installation":{"id":123},"repository":{"full_name":"acme/api"},"issue":{"number":42,"pull_request":{"url":"https://api.github.com/repos/acme/api/pulls/42"}},"comment":{"id":99,"body":"@openreview review --mode=deep","user":{"id":7}}}`)
+	recording := &recordingStore{}
+	server := New(recording, nil, secret, "")
+	mux := http.NewServeMux()
+	server.Register(mux)
+	request := httptest.NewRequest(http.MethodPost, "/v1/webhooks/github", bytes.NewReader(body))
+	request.Header.Set("X-GitHub-Event", "issue_comment")
+	request.Header.Set("X-GitHub-Delivery", "delivery-comment-1")
+	request.Header.Set("X-Hub-Signature-256", githubSignature(secret, body))
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !recording.interactionCalled {
+		t.Fatalf("expected accepted interaction, status=%d called=%v", response.Code, recording.interactionCalled)
+	}
+	if recording.interaction.Command != "review" || recording.interaction.Mode != "deep" || recording.interaction.Event.ActorExternalID != "7" {
+		t.Fatalf("unexpected interaction: %#v", recording.interaction)
+	}
+
+	recording.interactionCalled = false
+	request = httptest.NewRequest(http.MethodPost, "/v1/webhooks/github", bytes.NewReader(body))
+	request.Header.Set("X-GitHub-Event", "issue_comment")
+	request.Header.Set("X-GitHub-Delivery", "delivery-comment-2")
+	request.Header.Set("X-Hub-Signature-256", "sha256=wrong")
+	response = httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || recording.interactionCalled {
+		t.Fatalf("invalid signature must not process command, status=%d called=%v", response.Code, recording.interactionCalled)
+	}
 }
 
 func (s *recordingStore) Enqueue(_ context.Context, event domain.InboundEvent) (domain.ReviewJob, bool, error) {
