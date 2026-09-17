@@ -22,8 +22,22 @@ type RuleAwareReviewExecutor interface {
 	ReviewWithRule(context.Context, string, string, string, []byte) ([]domain.Finding, error)
 }
 
+// RunnerStore is intentionally narrower than the control-plane Store. It
+// documents exactly which durable operations a worker may perform and makes
+// execution behavior testable without a live PostgreSQL instance.
+type RunnerStore interface {
+	Claim(context.Context, string) (*domain.ReviewJob, error)
+	ClaimForRun(context.Context, string, uuid.UUID) (*domain.ReviewJob, error)
+	AdvanceLegacyRun(context.Context, uuid.UUID, domain.RunState) (domain.ReviewRun, error)
+	RuleSnapshotForJob(context.Context, uuid.UUID) (domain.RuleSnapshot, error)
+	SaveFindings(context.Context, uuid.UUID, []domain.Finding) error
+	Succeed(context.Context, uuid.UUID, string) error
+	Fail(context.Context, uuid.UUID, string, string) error
+	Cancel(context.Context, uuid.UUID, string) error
+}
+
 type Processor struct {
-	Store     store.Store
+	Store     RunnerStore
 	Checkout  Checkout
 	Executor  ReviewExecutor
 	Publisher publisher.Publisher
