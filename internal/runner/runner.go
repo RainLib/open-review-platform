@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/publisher"
@@ -44,9 +45,21 @@ type Processor struct {
 	Checks    publisher.CheckReporter
 	WorkerID  string
 	Logger    *slog.Logger
+	// TerminalPollInterval controls how quickly an in-flight review observes a
+	// cancellation or supersession. It is configurable for deterministic tests;
+	// production callers should leave it unset.
+	TerminalPollInterval time.Duration
 }
 
 var errTerminalRun = errors.New("review run became terminal")
+
+type terminalRunError struct {
+	run domain.ReviewRun
+}
+
+func (e terminalRunError) Error() string { return errTerminalRun.Error() }
+
+func (e terminalRunError) Is(target error) bool { return target == errTerminalRun }
 
 // RunOnce is intentionally small: all durable transitions are in Store, while
 // all untrusted repository access is scoped to a temporary Workspace.
@@ -99,8 +112,9 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 		return true, stopErr
 	}
 	if err := p.process(ctx, *job); err != nil {
-		if errors.Is(err, errTerminalRun) {
-			_, stopErr := p.stopTerminalRun(ctx, *job, domain.ReviewRun{State: domain.RunCancelled})
+		var terminal terminalRunError
+		if errors.As(err, &terminal) {
+			_, stopErr := p.stopTerminalRun(ctx, *job, terminal.run)
 			return true, stopErr
 		}
 		if failureErr := p.Store.Fail(ctx, job.ID, p.WorkerID, err.Error()); failureErr != nil && !errors.Is(failureErr, store.ErrJobClaimLost) {
@@ -146,9 +160,9 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {
 		return err
 	}
 	if run.State.Terminal() {
-		return errTerminalRun
+		return terminalRunError{run: run}
 	}
-	findings, err := p.reviewWithSnapshot(ctx, job, workspace.Path, workspace.BaseSHA)
+	findings, err := p.reviewUntilTerminal(ctx, job, workspace.Path, workspace.BaseSHA)
 	if err != nil {
 		return err
 	}
@@ -160,14 +174,14 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {
 		return err
 	}
 	if run.State.Terminal() {
-		return errTerminalRun
+		return terminalRunError{run: run}
 	}
 	run, err = p.advance(ctx, job.ID, domain.RunPublishing)
 	if err != nil {
 		return err
 	}
 	if run.State.Terminal() {
-		return errTerminalRun
+		return terminalRunError{run: run}
 	}
 	if err := p.Publisher.Publish(ctx, job, findings); err != nil {
 		return err
@@ -177,9 +191,67 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {
 		return err
 	}
 	if run.State.Terminal() && run.State != domain.RunCompleted {
-		return errTerminalRun
+		return terminalRunError{run: run}
 	}
 	return nil
+}
+
+// reviewUntilTerminal gives the executor a cancellable context while a small
+// watcher observes durable run state. A GitHub push or an explicit cancel can
+// therefore stop an OCR process immediately instead of merely preventing its
+// later findings from being published.
+func (p Processor) reviewUntilTerminal(ctx context.Context, job domain.ReviewJob, directory, base string) ([]domain.Finding, error) {
+	reviewCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go p.cancelReviewWhenTerminal(ctx, job.ID, cancel, done)
+	findings, reviewErr := p.reviewWithSnapshot(reviewCtx, job, directory, base)
+	close(done)
+	cancel()
+
+	run, observeErr := p.advance(ctx, job.ID, domain.RunAnalyzing)
+	if observeErr != nil {
+		if reviewErr != nil {
+			return nil, reviewErr
+		}
+		return nil, fmt.Errorf("observe review run after execution: %w", observeErr)
+	}
+	if run.State.Terminal() {
+		return nil, terminalRunError{run: run}
+	}
+	return findings, reviewErr
+}
+
+func (p Processor) cancelReviewWhenTerminal(ctx context.Context, jobID uuid.UUID, cancel context.CancelFunc, done <-chan struct{}) {
+	ticker := time.NewTicker(p.terminalPollInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			cancel()
+			return
+		case <-ticker.C:
+			run, err := p.advance(ctx, jobID, domain.RunAnalyzing)
+			if err != nil {
+				if p.Logger != nil {
+					p.Logger.Warn("could not observe review run while executing", "job_id", jobID, "error", err)
+				}
+				continue
+			}
+			if run.State.Terminal() {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+func (p Processor) terminalPollInterval() time.Duration {
+	if p.TerminalPollInterval > 0 {
+		return p.TerminalPollInterval
+	}
+	return time.Second
 }
 
 func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob, directory, base string) ([]domain.Finding, error) {

@@ -3,7 +3,9 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/rules"
@@ -85,5 +87,43 @@ func TestReviewWithSnapshotFallsBackOnlyWhenNoSnapshotExists(t *testing.T) {
 	}
 	if executor.defaultCalls != 1 || executor.ruleCalls != 0 {
 		t.Fatalf("expected standard review fallback, defaults=%d rules=%d", executor.defaultCalls, executor.ruleCalls)
+	}
+}
+
+type terminalStore struct {
+	snapshotStore
+	run domain.ReviewRun
+}
+
+func (s terminalStore) AdvanceLegacyRun(context.Context, uuid.UUID, domain.RunState) (domain.ReviewRun, error) {
+	return s.run, nil
+}
+
+type blockingExecutor struct {
+	stopped chan struct{}
+}
+
+func (e blockingExecutor) Review(ctx context.Context, _, _, _ string) ([]domain.Finding, error) {
+	<-ctx.Done()
+	close(e.stopped)
+	return nil, ctx.Err()
+}
+
+func TestReviewUntilTerminalCancelsInFlightExecutor(t *testing.T) {
+	stopped := make(chan struct{})
+	processor := Processor{
+		Store:                terminalStore{snapshotStore: snapshotStore{err: store.ErrNotFound}, run: domain.ReviewRun{State: domain.RunSuperseded}},
+		Executor:             blockingExecutor{stopped: stopped},
+		TerminalPollInterval: time.Millisecond,
+	}
+	_, err := processor.reviewUntilTerminal(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base")
+	var terminal terminalRunError
+	if !errors.As(err, &terminal) || terminal.run.State != domain.RunSuperseded {
+		t.Fatalf("expected superseded terminal error, got %v", err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not receive cancellation")
 	}
 }
