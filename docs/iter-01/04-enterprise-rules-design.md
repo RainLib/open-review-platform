@@ -146,6 +146,11 @@ planner 在 admission 阶段：
 }
 ```
 
+当前实现使用 snapshot schema v2 将 active binding 的 `path_include_glob`
+与 `path_exclude_glob` 去重、排序后写入 OCR 原生规则文件的 `include` /
+`exclude`。include 取并集，exclude 优先；因此同一不可变快照在重试或异步
+恢复时会筛选同一批文件，而不重新读取管理员后来修改的 binding。
+
 ## 7. OCR 对接
 
 OpenCodeReview 官方能力支持命令行 `--rule`、仓库内 `.opencodereview/rule.json` 和 `merge_system_rule` 等规则输入（见 [OCR 官方 skill](https://github.com/alibaba/open-code-review/blob/main/plugins/open-code-review/skills/open-code-review/SKILL.md)）。因此平台适配器采用：

@@ -10,7 +10,9 @@ import (
 // `ocr review --rule`. It is deliberately produced only from a canonical
 // platform snapshot, never from a file in the pull-request head.
 type OCRRuleFile struct {
-	Rules []OCRRule `json:"rules"`
+	Rules   []OCRRule `json:"rules"`
+	Include []string  `json:"include,omitempty"`
+	Exclude []string  `json:"exclude,omitempty"`
 }
 
 type OCRRule struct {
@@ -44,7 +46,7 @@ func OCRRuleFileForSnapshot(snapshot Snapshot) (OCRRuleFile, error) {
 		Path:            "**/*",
 		Rule:            "# Enterprise review rules\n\n" + strings.Join(sections, "\n\n---\n\n"),
 		MergeSystemRule: snapshot.MergeSystemRule,
-	}}}, nil
+	}}, Include: append([]string(nil), snapshot.Include...), Exclude: append([]string(nil), snapshot.Exclude...)}, nil
 }
 
 func ocrPrompt(effective EffectiveRule) (string, error) {

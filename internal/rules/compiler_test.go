@@ -62,3 +62,22 @@ func TestCompileRejectsSameLayerConflictAndRetainsAppendSources(t *testing.T) {
 		t.Fatalf("append sources lost: %#v", compiled.Snapshot.Rules)
 	}
 }
+
+func TestCompileCarriesDeterministicBindingFileFilters(t *testing.T) {
+	compiled, err := Compile([]Source{
+		{VersionID: "repo-v1", Precedence: 30, Include: []string{"services/payments/**", "services/payments/**"}, Exclude: []string{"**/fixtures/**"}, Rules: []Rule{testRule("payments.idempotency", Mandatory, DenyOverride, "critical", `{"prompt":"idempotent"}`)}},
+		{VersionID: "tenant-v1", Precedence: 10, Include: []string{"packages/billing/**"}, Exclude: []string{"**/generated/**"}, Rules: []Rule{testRule("security.secrets", Mandatory, DenyOverride, "critical", `{"prompt":"no secrets"}`)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(compiled.Snapshot.Include, ","), "packages/billing/**,services/payments/**"; got != want {
+		t.Fatalf("include = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(compiled.Snapshot.Exclude, ","), "**/fixtures/**,**/generated/**"; got != want {
+		t.Fatalf("exclude = %q, want %q", got, want)
+	}
+	if !strings.Contains(string(compiled.Canonical), `"schema_version":2`) {
+		t.Fatalf("expected v2 canonical snapshot, got %s", compiled.Canonical)
+	}
+}

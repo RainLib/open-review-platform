@@ -46,6 +46,11 @@ type Source struct {
 	VersionID  string
 	Precedence int
 	Rules      []Rule
+	// Include and Exclude are trusted file-selection globs contributed by an
+	// active binding. They are compiled into the immutable snapshot rather
+	// than consulted again by the runner.
+	Include []string
+	Exclude []string
 }
 
 type EffectiveRule struct {
@@ -62,6 +67,11 @@ type Snapshot struct {
 	Engine          string          `json:"engine"`
 	MergeSystemRule bool            `json:"merge_system_rule"`
 	Rules           []EffectiveRule `json:"rules"`
+	// Include and Exclude use OCR's native file-filter semantics: includes are
+	// unioned and excludes always win. An empty Include means no additional
+	// include restriction.
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 type Compiled struct {
@@ -84,11 +94,23 @@ func Compile(sources []Source) (Compiled, error) {
 
 	byKey := make(map[string][]EffectiveRule)
 	seenAtPrecedence := make(map[string]string)
+	include := make(map[string]struct{})
+	exclude := make(map[string]struct{})
 	for _, source := range sources {
 		if strings.TrimSpace(source.VersionID) == "" {
 			return Compiled{}, fmt.Errorf("rule source version id is required")
 		}
 		source.VersionID = strings.TrimSpace(source.VersionID)
+		for _, pattern := range source.Include {
+			if pattern = strings.TrimSpace(pattern); pattern != "" {
+				include[pattern] = struct{}{}
+			}
+		}
+		for _, pattern := range source.Exclude {
+			if pattern = strings.TrimSpace(pattern); pattern != "" {
+				exclude[pattern] = struct{}{}
+			}
+		}
 		local := make(map[string]struct{})
 		for _, rule := range source.Rules {
 			rule.Key = strings.TrimSpace(rule.Key)
@@ -142,7 +164,7 @@ func Compile(sources []Source) (Compiled, error) {
 		}
 	}
 
-	snapshot := Snapshot{SchemaVersion: 1, Engine: "ocr", MergeSystemRule: true}
+	snapshot := Snapshot{SchemaVersion: 2, Engine: "ocr", MergeSystemRule: true, Include: sortedPatterns(include), Exclude: sortedPatterns(exclude)}
 	keys := make([]string, 0, len(byKey))
 	for key := range byKey {
 		keys = append(keys, key)
@@ -157,6 +179,18 @@ func Compile(sources []Source) (Compiled, error) {
 	}
 	digest := sha256.Sum256(canonical)
 	return Compiled{Snapshot: snapshot, Canonical: canonical, SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func sortedPatterns(patterns map[string]struct{}) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(patterns))
+	for pattern := range patterns {
+		result = append(result, pattern)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func validate(rule Rule) error {

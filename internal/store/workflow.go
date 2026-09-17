@@ -156,7 +156,7 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, runID uuid.UUID, topic, dedupe
 // changes bindings immediately afterwards.
 func resolveRuleSnapshot(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, repository, targetBranch string) (uuid.UUID, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT v.id, b.precedence, v.rules, b.target_branch_glob
+		SELECT v.id, b.precedence, v.rules, b.target_branch_glob, b.path_include_glob, b.path_exclude_glob
 		FROM rule_bindings b
 		JOIN rule_versions v ON v.id = b.rule_version_id
 		JOIN rule_sets rs ON rs.id = v.rule_set_id
@@ -179,7 +179,9 @@ func resolveRuleSnapshot(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, rep
 		var precedence int
 		var rawRules []byte
 		var branchGlob string
-		if err := rows.Scan(&versionID, &precedence, &rawRules, &branchGlob); err != nil {
+		var includeGlob string
+		var excludeGlob string
+		if err := rows.Scan(&versionID, &precedence, &rawRules, &branchGlob, &includeGlob, &excludeGlob); err != nil {
 			return uuid.Nil, fmt.Errorf("scan active rule binding: %w", err)
 		}
 		if !matchesRuleTargetBranch(branchGlob, targetBranch) {
@@ -190,6 +192,21 @@ func resolveRuleSnapshot(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, rep
 			if previous != precedence {
 				return uuid.Nil, fmt.Errorf("published rule version %s is bound at conflicting precedences", versionKey)
 			}
+			// Multiple active bindings can intentionally reuse one published
+			// version at the same precedence. Preserve a single source for merge
+			// semantics while unioning their native OCR file filters.
+			for index := range sources {
+				if sources[index].VersionID != versionKey {
+					continue
+				}
+				if includeGlob != "" {
+					sources[index].Include = append(sources[index].Include, includeGlob)
+				}
+				if excludeGlob != "" {
+					sources[index].Exclude = append(sources[index].Exclude, excludeGlob)
+				}
+				break
+			}
 			continue
 		}
 		var versionRules []rules.Rule
@@ -197,7 +214,14 @@ func resolveRuleSnapshot(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, rep
 			return uuid.Nil, fmt.Errorf("decode published rule version %s: %w", versionKey, err)
 		}
 		seenVersion[versionKey] = precedence
-		sources = append(sources, rules.Source{VersionID: versionKey, Precedence: precedence, Rules: versionRules})
+		source := rules.Source{VersionID: versionKey, Precedence: precedence, Rules: versionRules}
+		if includeGlob != "" {
+			source.Include = []string{includeGlob}
+		}
+		if excludeGlob != "" {
+			source.Exclude = []string{excludeGlob}
+		}
+		sources = append(sources, source)
 	}
 	if err := rows.Err(); err != nil {
 		return uuid.Nil, fmt.Errorf("iterate active rule bindings: %w", err)
@@ -209,7 +233,7 @@ func resolveRuleSnapshot(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, rep
 	var snapshotID uuid.UUID
 	err = tx.QueryRow(ctx, `
 		INSERT INTO rule_snapshots (tenant_id, sha256, compiler_version, engine, canonical_payload)
-		VALUES ($1, $2, 'rules-v1', 'ocr', $3::jsonb)
+		VALUES ($1, $2, 'rules-v2', 'ocr', $3::jsonb)
 		ON CONFLICT (tenant_id, sha256) DO UPDATE SET sha256 = EXCLUDED.sha256
 		RETURNING id`, tenantID, compiled.SHA256, string(compiled.Canonical)).Scan(&snapshotID)
 	if err != nil {

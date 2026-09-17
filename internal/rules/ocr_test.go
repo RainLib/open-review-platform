@@ -9,6 +9,7 @@ import (
 func TestOCRRuleFileForSnapshotAggregatesEffectiveRules(t *testing.T) {
 	file, err := OCRRuleFileForSnapshot(Snapshot{
 		Engine: "ocr", MergeSystemRule: true,
+		Include: []string{"services/**"}, Exclude: []string{"**/fixtures/**"},
 		Rules: []EffectiveRule{
 			{Key: "payments.idempotency", SourceVersion: "version-1", Enforcement: Mandatory, Severity: "critical", Content: json.RawMessage(`{"prompt":"Verify idempotent retries."}`)},
 			{Key: "errors.handling", SourceVersion: "version-2", Enforcement: Advisory, Severity: "medium", Content: json.RawMessage(`{"rule":"Check errors are returned."}`)},
@@ -19,6 +20,12 @@ func TestOCRRuleFileForSnapshotAggregatesEffectiveRules(t *testing.T) {
 	}
 	if len(file.Rules) != 1 || file.Rules[0].Path != "**/*" || !file.Rules[0].MergeSystemRule {
 		t.Fatalf("unexpected OCR file: %#v", file)
+	}
+	if got, want := strings.Join(file.Include, ","), "services/**"; got != want {
+		t.Fatalf("include = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(file.Exclude, ","), "**/fixtures/**"; got != want {
+		t.Fatalf("exclude = %q, want %q", got, want)
 	}
 	for _, expected := range []string{"payments.idempotency", "Verify idempotent retries.", "errors.handling", "Check errors are returned."} {
 		if !strings.Contains(file.Rules[0].Rule, expected) {

@@ -51,7 +51,7 @@ func (e *recordingExecutor) ReviewWithRule(_ context.Context, _ string, _ string
 }
 
 func TestReviewWithSnapshotPassesTrustedOCRRuleFile(t *testing.T) {
-	canonical, err := json.Marshal(rules.Snapshot{Engine: "ocr", MergeSystemRule: true, Rules: []rules.EffectiveRule{{
+	canonical, err := json.Marshal(rules.Snapshot{Engine: "ocr", MergeSystemRule: true, Include: []string{"services/payments/**"}, Exclude: []string{"**/fixtures/**"}, Rules: []rules.EffectiveRule{{
 		Key: "payments.idempotency", SourceVersion: "version-1", Enforcement: rules.Mandatory, Severity: "critical", Content: json.RawMessage(`{"prompt":"Require idempotent payment retries."}`),
 	}}})
 	if err != nil {
@@ -71,6 +71,9 @@ func TestReviewWithSnapshotPassesTrustedOCRRuleFile(t *testing.T) {
 	}
 	if len(file.Rules) != 1 || file.Rules[0].Path != "**/*" || !file.Rules[0].MergeSystemRule {
 		t.Fatalf("unexpected OCR file: %#v", file)
+	}
+	if len(file.Include) != 1 || file.Include[0] != "services/payments/**" || len(file.Exclude) != 1 || file.Exclude[0] != "**/fixtures/**" {
+		t.Fatalf("OCR file lost immutable path filters: %#v", file)
 	}
 }
 
