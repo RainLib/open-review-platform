@@ -2,18 +2,24 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/publisher"
+	"github.com/RainLib/open-review-platform/internal/rules"
 	"github.com/RainLib/open-review-platform/internal/store"
 	"github.com/google/uuid"
 )
 
 type ReviewExecutor interface {
 	Review(context.Context, string, string, string) ([]domain.Finding, error)
+}
+
+type RuleAwareReviewExecutor interface {
+	ReviewWithRule(context.Context, string, string, string, []byte) ([]domain.Finding, error)
 }
 
 type Processor struct {
@@ -128,7 +134,7 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {
 	if run.State.Terminal() {
 		return errTerminalRun
 	}
-	findings, err := p.Executor.Review(ctx, workspace.Path, workspace.BaseSHA, job.HeadSHA)
+	findings, err := p.reviewWithSnapshot(ctx, job, workspace.Path, workspace.BaseSHA)
 	if err != nil {
 		return err
 	}
@@ -160,6 +166,36 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {
 		return errTerminalRun
 	}
 	return nil
+}
+
+func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob, directory, base string) ([]domain.Finding, error) {
+	snapshot, err := p.Store.RuleSnapshotForJob(ctx, job.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return p.Executor.Review(ctx, directory, base, job.HeadSHA)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load rule snapshot for review: %w", err)
+	}
+	var compiled rules.Snapshot
+	if err := json.Unmarshal(snapshot.CanonicalPayload, &compiled); err != nil {
+		return nil, fmt.Errorf("decode rule snapshot %s: %w", snapshot.ID, err)
+	}
+	ruleFile, err := rules.OCRRuleFileForSnapshot(compiled)
+	if err != nil {
+		return nil, fmt.Errorf("compile OCR rule file from snapshot %s: %w", snapshot.ID, err)
+	}
+	if len(ruleFile.Rules) == 0 {
+		return p.Executor.Review(ctx, directory, base, job.HeadSHA)
+	}
+	encoded, err := json.Marshal(ruleFile)
+	if err != nil {
+		return nil, fmt.Errorf("encode OCR rule file from snapshot %s: %w", snapshot.ID, err)
+	}
+	executor, ok := p.Executor.(RuleAwareReviewExecutor)
+	if !ok {
+		return nil, fmt.Errorf("review executor does not support enterprise rule snapshots")
+	}
+	return executor.ReviewWithRule(ctx, directory, base, job.HeadSHA, encoded)
 }
 
 func (p Processor) advance(ctx context.Context, jobID uuid.UUID, state domain.RunState) (domain.ReviewRun, error) {

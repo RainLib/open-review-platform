@@ -29,10 +29,43 @@ func (e Executor) VerifyVersion(ctx context.Context) error {
 }
 
 func (e Executor) Review(ctx context.Context, directory, base, head string) ([]domain.Finding, error) {
+	return e.review(ctx, directory, base, head, "")
+}
+
+// ReviewWithRule executes OCR with a runner-owned rule file. The caller passes
+// canonical JSON already resolved by the control plane; this method never
+// reads a rule file from the untrusted pull-request head.
+func (e Executor) ReviewWithRule(ctx context.Context, directory, base, head string, ruleFileJSON []byte) ([]domain.Finding, error) {
+	if !json.Valid(ruleFileJSON) {
+		return nil, fmt.Errorf("OCR rule file is not valid JSON")
+	}
+	ruleFile, err := os.CreateTemp(directory, ".open-review-platform-rule-*.json")
+	if err != nil {
+		return nil, fmt.Errorf("create trusted OCR rule file: %w", err)
+	}
+	rulePath := ruleFile.Name()
+	defer os.Remove(rulePath)
+	if err := ruleFile.Chmod(0o600); err != nil {
+		_ = ruleFile.Close()
+		return nil, fmt.Errorf("secure trusted OCR rule file: %w", err)
+	}
+	if _, err := ruleFile.Write(ruleFileJSON); err != nil {
+		_ = ruleFile.Close()
+		return nil, fmt.Errorf("write trusted OCR rule file: %w", err)
+	}
+	if err := ruleFile.Close(); err != nil {
+		return nil, fmt.Errorf("close trusted OCR rule file: %w", err)
+	}
+	return e.review(ctx, directory, base, head, rulePath)
+}
+
+func (e Executor) review(ctx context.Context, directory, base, head, rulePath string) ([]domain.Finding, error) {
 	output := filepath.Join(directory, "open-review-result.json")
-	command := exec.CommandContext(ctx, e.Binary,
-		"review", "--from", base, "--to", head, "--format", "json", "--output", output,
-	)
+	arguments := []string{"review", "--from", base, "--to", head, "--format", "json", "--output", output}
+	if rulePath != "" {
+		arguments = append(arguments, "--rule", rulePath)
+	}
+	command := exec.CommandContext(ctx, e.Binary, arguments...)
 	command.Dir = directory
 	logs, err := command.CombinedOutput()
 	if err != nil {

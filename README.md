@@ -30,6 +30,8 @@ The current implementation includes:
   writes, never in webhook payloads or database rows; and
 - a native GitHub `Open Review / Analysis` Check Run lifecycle, separate from
   future enterprise governance merge gates; and
+- published enterprise rule versions, repository/branch bindings, immutable
+  admission snapshots, and runner-owned OCR `--rule` files; and
 - explicit `@openreview` commands that receive an idempotent GitHub response
   and source-comment acknowledgement reaction before their review runs
   asynchronously.

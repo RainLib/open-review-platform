@@ -28,6 +28,9 @@ func (s *PostgresStore) CreateRuleSet(ctx context.Context, actor, tenantSlug str
 	if err != nil {
 		return domain.RuleSetWithDraft{}, fmt.Errorf("validate rule set: %w", err)
 	}
+	if _, err := rules.OCRRuleFileForSnapshot(compiled.Snapshot); err != nil {
+		return domain.RuleSetWithDraft{}, fmt.Errorf("validate rule set OCR adapter: %w", err)
+	}
 	canonicalRules, err := json.Marshal(parsed)
 	if err != nil {
 		return domain.RuleSetWithDraft{}, fmt.Errorf("encode rule set rules: %w", err)
@@ -235,6 +238,31 @@ func (s *PostgresStore) ListRuleBindings(ctx context.Context, actor, tenantSlug 
 		return nil, fmt.Errorf("iterate rule bindings: %w", err)
 	}
 	return bindings, nil
+}
+
+// RuleSnapshotForJob is used by the isolated runner immediately before OCR
+// execution. The join is by durable job/run IDs only; no mutable bindings are
+// consulted once admission has completed.
+func (s *PostgresStore) RuleSnapshotForJob(ctx context.Context, jobID uuid.UUID) (domain.RuleSnapshot, error) {
+	if jobID == uuid.Nil {
+		return domain.RuleSnapshot{}, ErrNotFound
+	}
+	var snapshot domain.RuleSnapshot
+	var payload []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT s.id, s.sha256, s.compiler_version, s.engine, s.canonical_payload, s.created_at
+		FROM review_runs r
+		JOIN rule_snapshots s ON s.id = r.rule_snapshot_id
+		WHERE r.legacy_job_id = $1`, jobID).
+		Scan(&snapshot.ID, &snapshot.SHA256, &snapshot.CompilerVersion, &snapshot.Engine, &payload, &snapshot.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RuleSnapshot{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.RuleSnapshot{}, fmt.Errorf("load rule snapshot for job: %w", err)
+	}
+	snapshot.CanonicalPayload = append(json.RawMessage(nil), payload...)
+	return snapshot, nil
 }
 
 func validRuleBindingInput(input *domain.RuleBindingInput) bool {

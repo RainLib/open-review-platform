@@ -45,6 +45,7 @@ type Store interface {
 	// ClaimForRun makes a broker message an execution hint for its own run,
 	// rather than allowing a consumer to claim an unrelated tenant job.
 	ClaimForRun(ctx context.Context, workerID string, runID uuid.UUID) (*domain.ReviewJob, error)
+	RuleSnapshotForJob(ctx context.Context, jobID uuid.UUID) (domain.RuleSnapshot, error)
 	SaveFindings(ctx context.Context, jobID uuid.UUID, findings []domain.Finding) error
 	Succeed(ctx context.Context, jobID uuid.UUID, workerID string) error
 	Fail(ctx context.Context, jobID uuid.UUID, workerID, message string) error

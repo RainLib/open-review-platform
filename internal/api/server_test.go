@@ -132,6 +132,10 @@ func (*recordingStore) ClaimForRun(context.Context, string, uuid.UUID) (*domain.
 	return nil, store.ErrNoQueuedJob
 }
 
+func (*recordingStore) RuleSnapshotForJob(context.Context, uuid.UUID) (domain.RuleSnapshot, error) {
+	return domain.RuleSnapshot{}, store.ErrNotFound
+}
+
 func (*recordingStore) SaveFindings(context.Context, uuid.UUID, []domain.Finding) error { return nil }
 func (*recordingStore) Succeed(context.Context, uuid.UUID, string) error                { return nil }
 func (*recordingStore) Fail(context.Context, uuid.UUID, string, string) error           { return nil }

@@ -136,6 +136,17 @@ type RuleBinding struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+// RuleSnapshot is the immutable, canonical rule resolution attached to a
+// review run. It never contains provider credentials or pull-request content.
+type RuleSnapshot struct {
+	ID               uuid.UUID       `json:"id"`
+	SHA256           string          `json:"sha256"`
+	CompilerVersion  string          `json:"compiler_version"`
+	Engine           string          `json:"engine"`
+	CanonicalPayload json.RawMessage `json:"canonical_payload"`
+	CreatedAt        time.Time       `json:"created_at"`
+}
+
 type InboundEvent struct {
 	Provider               Provider
 	APIBaseURL             string
