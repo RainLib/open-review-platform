@@ -1,8 +1,16 @@
 package ocr
 
 import (
+	"context"
+	"errors"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestParseFindingsNormalizesOCRComments(t *testing.T) {
@@ -29,4 +37,47 @@ func TestWithGitBinaryPathPrependsConfiguredDirectory(t *testing.T) {
 	if environment[1] != "OTHER=value" {
 		t.Fatalf("unrelated environment entry changed: %q", environment[1])
 	}
+}
+
+func TestConfigureProcessGroupCancelsWrappedChild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a short-lived child process")
+	}
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	command := exec.CommandContext(ctx, "sh", "-c", "sleep 30 & echo $! > \"$1\"; wait", "sh", pidFile)
+	configureProcessGroup(command)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	childPID := waitForChildPID(t, pidFile)
+	defer func() { _ = syscall.Kill(childPID, syscall.SIGKILL) }()
+	cancel()
+	_ = command.Wait() // SIGTERM is expected for the process-group leader.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(childPID, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("child process %d survived parent cancellation", childPID)
+}
+
+func waitForChildPID(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		contents, err := os.ReadFile(path)
+		if err == nil {
+			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(contents)))
+			if parseErr == nil && pid > 0 {
+				return pid
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("child process did not report its pid")
+	return 0
 }
