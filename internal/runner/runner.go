@@ -1,0 +1,73 @@
+package runner
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/RainLib/open-review-platform/internal/domain"
+	"github.com/RainLib/open-review-platform/internal/publisher"
+	"github.com/RainLib/open-review-platform/internal/store"
+)
+
+type ReviewExecutor interface {
+	Review(context.Context, string, string, string) ([]domain.Finding, error)
+}
+
+type Processor struct {
+	Store     store.Store
+	Checkout  Checkout
+	Executor  ReviewExecutor
+	Publisher publisher.Publisher
+	WorkerID  string
+	Logger    *slog.Logger
+}
+
+// RunOnce is intentionally small: all durable transitions are in Store, while
+// all untrusted repository access is scoped to a temporary Workspace.
+func (p Processor) RunOnce(ctx context.Context) (worked bool, err error) {
+	job, err := p.Store.Claim(ctx, p.WorkerID)
+	if errors.Is(err, store.ErrNoQueuedJob) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	worked = true
+	if err := p.process(ctx, *job); err != nil {
+		if failureErr := p.Store.Fail(ctx, job.ID, p.WorkerID, err.Error()); failureErr != nil && !errors.Is(failureErr, store.ErrJobClaimLost) {
+			return true, fmt.Errorf("process job %s: %w (record failure: %v)", job.ID, err, failureErr)
+		}
+		if p.Logger != nil {
+			p.Logger.Error("review job failed; queued for retry or terminal failure", "job_id", job.ID, "attempt", job.Attempts, "error", err)
+		}
+		return true, nil
+	}
+	if err := p.Store.Succeed(ctx, job.ID, p.WorkerID); err != nil {
+		return true, fmt.Errorf("mark job %s succeeded: %w", job.ID, err)
+	}
+	if p.Logger != nil {
+		p.Logger.Info("review job succeeded", "job_id", job.ID, "attempt", job.Attempts)
+	}
+	return true, nil
+}
+
+func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {
+	workspace, err := p.Checkout.Prepare(ctx, job)
+	if err != nil {
+		return err
+	}
+	defer workspace.Close()
+	findings, err := p.Executor.Review(ctx, workspace.Path, workspace.BaseSHA, job.HeadSHA)
+	if err != nil {
+		return err
+	}
+	if err := p.Store.SaveFindings(ctx, job.ID, findings); err != nil {
+		return err
+	}
+	if err := p.Publisher.Publish(ctx, job, findings); err != nil {
+		return err
+	}
+	return nil
+}

@@ -1,0 +1,151 @@
+package ocr
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/RainLib/open-review-platform/internal/domain"
+)
+
+type Executor struct {
+	Binary  string
+	Version string
+}
+
+func (e Executor) VerifyVersion(ctx context.Context) error {
+	output, err := exec.CommandContext(ctx, e.Binary, "--version").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("execute OCR version check: %w: %s", err, trimmedOutput(output))
+	}
+	if !strings.Contains(string(output), e.Version) {
+		return fmt.Errorf("OCR version must contain %q, got %q", e.Version, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (e Executor) Review(ctx context.Context, directory, base, head string) ([]domain.Finding, error) {
+	output := filepath.Join(directory, "open-review-result.json")
+	command := exec.CommandContext(ctx, e.Binary,
+		"review", "--from", base, "--to", head, "--format", "json", "--output", output,
+	)
+	command.Dir = directory
+	logs, err := command.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("execute OCR review: %w: %s", err, trimmedOutput(logs))
+	}
+	raw, err := os.ReadFile(output)
+	if err != nil {
+		return nil, fmt.Errorf("read OCR result: %w", err)
+	}
+	findings, err := ParseFindings(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse OCR result: %w", err)
+	}
+	return findings, nil
+}
+
+// ParseFindings accepts the current OpenCodeReview JSON envelope and a raw
+// comment array. Keeping the parser at this boundary makes CLI upgrades an
+// explicit, independently testable compatibility decision.
+func ParseFindings(raw []byte) ([]domain.Finding, error) {
+	var envelope struct {
+		Comments []comment `json:"comments"`
+		Findings []comment `json:"findings"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err == nil && (envelope.Comments != nil || envelope.Findings != nil) {
+		if envelope.Comments != nil {
+			return normalize(envelope.Comments), nil
+		}
+		return normalize(envelope.Findings), nil
+	}
+	var comments []comment
+	if err := json.Unmarshal(raw, &comments); err != nil {
+		return nil, err
+	}
+	return normalize(comments), nil
+}
+
+type comment struct {
+	Path           string `json:"path"`
+	Content        string `json:"content"`
+	Body           string `json:"body"`
+	SuggestionCode string `json:"suggestion_code"`
+	Suggestion     string `json:"suggestion"`
+	StartLine      int    `json:"start_line"`
+	EndLine        int    `json:"end_line"`
+	Severity       string `json:"severity"`
+	Category       string `json:"category"`
+}
+
+func normalize(comments []comment) []domain.Finding {
+	findings := make([]domain.Finding, 0, len(comments))
+	for _, item := range comments {
+		body := strings.TrimSpace(item.Content)
+		if body == "" {
+			body = strings.TrimSpace(item.Body)
+		}
+		if body == "" {
+			continue
+		}
+		suggestion := strings.TrimSpace(item.SuggestionCode)
+		if suggestion == "" {
+			suggestion = strings.TrimSpace(item.Suggestion)
+		}
+		findings = append(findings, domain.Finding{
+			Path:       cleanPath(item.Path),
+			StartLine:  max(item.StartLine, 0),
+			EndLine:    max(item.EndLine, 0),
+			Severity:   severity(item.Severity),
+			Category:   category(item.Category),
+			Body:       body,
+			Suggestion: suggestion,
+		})
+	}
+	return findings
+}
+
+func cleanPath(path string) string {
+	cleaned := filepath.ToSlash(filepath.Clean(path))
+	if path == "" || cleaned == "." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
+		return ""
+	}
+	return cleaned
+}
+
+func severity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "critical", "high", "medium", "low":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "medium"
+	}
+}
+
+func category(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "bug", "security", "performance", "maintainability", "test", "style", "documentation", "other":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "other"
+	}
+}
+
+func max(value, floor int) int {
+	if value < floor {
+		return floor
+	}
+	return value
+}
+
+func trimmedOutput(value []byte) string {
+	const maxBytes = 4096
+	if len(value) > maxBytes {
+		return string(value[:maxBytes]) + "…"
+	}
+	return string(value)
+}
