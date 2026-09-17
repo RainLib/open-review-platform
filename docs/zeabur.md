@@ -44,6 +44,6 @@ organization, register the provider installation and test one repository;
 unknown installations deliberately return 404 and are never queued.
 
 For GitHub App installations, set `credential_ref=github-app` and mount the
-same read-only private-key secret to both the API and runner. The resolver
-mints short-lived installation tokens and does not persist them. For a public
-Cloudflare hostname, see [Cloudflare public ingress](cloudflare.md).
+read-only private-key secret to the runner only. The resolver mints short-lived
+installation tokens and does not persist them. For a public Cloudflare
+hostname, see [Cloudflare public ingress](cloudflare.md).

@@ -43,9 +43,10 @@ URL. Enable only **Pull requests** and **Issue comments** events. The App
 requires read access to repository contents and read/write access to pull
 requests and issues so it can publish review findings and command responses.
 
-Set `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, and
-`GITHUB_WEBHOOK_SECRET` on `control-api` and `runner`; use
-`credential_ref=github-app` when registering the provider installation.
+Set `GITHUB_WEBHOOK_SECRET` on `control-api`. Set `GITHUB_APP_ID` and
+`GITHUB_APP_PRIVATE_KEY_PATH` on `runner` only; use `credential_ref=github-app`
+when registering the provider installation. This keeps GitHub write capability
+out of the public webhook process.
 
 ## Acceptance checks
 
