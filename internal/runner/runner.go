@@ -10,6 +10,7 @@ import (
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/publisher"
+	"github.com/RainLib/open-review-platform/internal/risk"
 	"github.com/RainLib/open-review-platform/internal/rules"
 	"github.com/RainLib/open-review-platform/internal/store"
 	"github.com/google/uuid"
@@ -21,6 +22,18 @@ type ReviewExecutor interface {
 
 type RuleAwareReviewExecutor interface {
 	ReviewWithRule(context.Context, string, string, string, []byte) ([]domain.Finding, error)
+}
+
+type ScopedReviewExecutor interface {
+	ReviewWithExclude(context.Context, string, string, string, []string) ([]domain.Finding, error)
+}
+
+type RuleAndScopedReviewExecutor interface {
+	ReviewWithRuleAndExclude(context.Context, string, string, string, []byte, []string) ([]domain.Finding, error)
+}
+
+type RiskPlanner interface {
+	Plan(context.Context, string, string, string) (risk.Plan, error)
 }
 
 type WorkspacePreparer interface {
@@ -47,6 +60,7 @@ type Processor struct {
 	Executor        ReviewExecutor
 	Publisher       publisher.Publisher
 	Checks          publisher.CheckReporter
+	RiskPlanner     RiskPlanner
 	CheckoutTimeout time.Duration
 	WorkerID        string
 	Logger          *slog.Logger
@@ -198,7 +212,11 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	if run.State.Terminal() {
 		return nil, terminalRunError{run: run}
 	}
-	findings, err := p.reviewUntilTerminal(ctx, job, workspace.Path, workspace.BaseSHA)
+	plan, err := p.planRisk(ctx, workspace.Path, workspace.BaseSHA, job.HeadSHA)
+	if err != nil {
+		return nil, err
+	}
+	findings, err := p.reviewUntilTerminal(ctx, job, workspace.Path, workspace.BaseSHA, plan.Exclude)
 	if err != nil {
 		return nil, err
 	}
@@ -236,11 +254,11 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 // watcher observes durable run state. A GitHub push or an explicit cancel can
 // therefore stop an OCR process immediately instead of merely preventing its
 // later findings from being published.
-func (p Processor) reviewUntilTerminal(ctx context.Context, job domain.ReviewJob, directory, base string) ([]domain.Finding, error) {
+func (p Processor) reviewUntilTerminal(ctx context.Context, job domain.ReviewJob, directory, base string, exclude []string) ([]domain.Finding, error) {
 	reviewCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go p.cancelReviewWhenTerminal(ctx, job.ID, cancel, done)
-	findings, reviewErr := p.reviewWithSnapshot(reviewCtx, job, directory, base)
+	findings, reviewErr := p.reviewWithSnapshot(reviewCtx, job, directory, base, exclude)
 	close(done)
 	cancel()
 
@@ -290,10 +308,10 @@ func (p Processor) terminalPollInterval() time.Duration {
 	return time.Second
 }
 
-func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob, directory, base string) ([]domain.Finding, error) {
+func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob, directory, base string, exclude []string) ([]domain.Finding, error) {
 	snapshot, err := p.Store.RuleSnapshotForJob(ctx, job.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		return p.Executor.Review(ctx, directory, base, job.HeadSHA)
+		return p.reviewWithScope(ctx, directory, base, job.HeadSHA, exclude)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load rule snapshot for review: %w", err)
@@ -307,7 +325,7 @@ func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob,
 		return nil, fmt.Errorf("compile OCR rule file from snapshot %s: %w", snapshot.ID, err)
 	}
 	if len(ruleFile.Rules) == 0 {
-		return p.Executor.Review(ctx, directory, base, job.HeadSHA)
+		return p.reviewWithScope(ctx, directory, base, job.HeadSHA, exclude)
 	}
 	if p.Logger != nil {
 		p.Logger.Info("executing review with immutable rule snapshot", "job_id", job.ID, "rule_snapshot_id", snapshot.ID, "rule_snapshot_sha256", snapshot.SHA256, "ocr_rule_entries", len(ruleFile.Rules))
@@ -316,11 +334,40 @@ func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob,
 	if err != nil {
 		return nil, fmt.Errorf("encode OCR rule file from snapshot %s: %w", snapshot.ID, err)
 	}
+	if executor, ok := p.Executor.(RuleAndScopedReviewExecutor); ok {
+		return executor.ReviewWithRuleAndExclude(ctx, directory, base, job.HeadSHA, encoded, exclude)
+	}
 	executor, ok := p.Executor.(RuleAwareReviewExecutor)
 	if !ok {
 		return nil, fmt.Errorf("review executor does not support enterprise rule snapshots")
 	}
 	return executor.ReviewWithRule(ctx, directory, base, job.HeadSHA, encoded)
+}
+
+func (p Processor) planRisk(ctx context.Context, directory, base, head string) (risk.Plan, error) {
+	if p.RiskPlanner == nil {
+		return risk.Plan{}, nil
+	}
+	plan, err := p.RiskPlanner.Plan(ctx, directory, base, head)
+	if err != nil {
+		return risk.Plan{}, fmt.Errorf("plan risk-based review scope: %w", err)
+	}
+	if p.Logger != nil {
+		p.Logger.Info("planned risk-based review scope", "selected_files", len(plan.Selected), "deferred_files", len(plan.Deferred))
+	}
+	return plan, nil
+}
+
+func (p Processor) reviewWithScope(ctx context.Context, directory, base, head string, exclude []string) ([]domain.Finding, error) {
+	if len(exclude) > 0 {
+		if executor, ok := p.Executor.(ScopedReviewExecutor); ok {
+			return executor.ReviewWithExclude(ctx, directory, base, head, exclude)
+		}
+		if p.Logger != nil {
+			p.Logger.Warn("review executor does not support risk scope; reviewing all files")
+		}
+	}
+	return p.Executor.Review(ctx, directory, base, head)
 }
 
 func (p Processor) advance(ctx context.Context, jobID uuid.UUID, state domain.RunState) (domain.ReviewRun, error) {

@@ -48,6 +48,7 @@ type RunnerConfig struct {
 	OCRBinary       string
 	OCRVersion      string
 	OCRConcurrency  int
+	RiskReviewMode  string
 	CheckoutTimeout time.Duration
 	OCRTimeout      time.Duration
 	PollInterval    time.Duration
@@ -64,6 +65,10 @@ func Load() (Config, error) {
 	ocrConcurrency, err := envInt("OCR_CONCURRENCY", 0)
 	if err != nil || ocrConcurrency < 0 {
 		return Config{}, fmt.Errorf("OCR_CONCURRENCY must be a non-negative integer")
+	}
+	riskReviewMode := env("RISK_REVIEW_MODE", "focused")
+	if riskReviewMode != "standard" && riskReviewMode != "focused" && riskReviewMode != "critical" {
+		return Config{}, fmt.Errorf("RISK_REVIEW_MODE must be standard, focused, or critical")
 	}
 	ocrTimeout, err := time.ParseDuration(env("OCR_TIMEOUT", "15m"))
 	if err != nil || ocrTimeout <= 0 {
@@ -100,6 +105,7 @@ func Load() (Config, error) {
 			OCRBinary:       env("OCR_BINARY", "ocr"),
 			OCRVersion:      env("OCR_VERSION", "1.12.4"),
 			OCRConcurrency:  ocrConcurrency,
+			RiskReviewMode:  riskReviewMode,
 			CheckoutTimeout: checkoutTimeout,
 			OCRTimeout:      ocrTimeout,
 			PollInterval:    poll,

@@ -17,6 +17,7 @@ import (
 	"github.com/RainLib/open-review-platform/internal/engine/ocr"
 	"github.com/RainLib/open-review-platform/internal/messaging"
 	"github.com/RainLib/open-review-platform/internal/publisher"
+	"github.com/RainLib/open-review-platform/internal/risk"
 	"github.com/RainLib/open-review-platform/internal/runner"
 	"github.com/RainLib/open-review-platform/internal/store"
 	"github.com/google/uuid"
@@ -52,6 +53,7 @@ func main() {
 		Executor:        executor,
 		Publisher:       reviewPublisher,
 		Checks:          reviewPublisher,
+		RiskPlanner:     risk.Planner{GitBinary: cfg.Runner.GitBinary, Mode: risk.Mode(cfg.Runner.RiskReviewMode)},
 		CheckoutTimeout: cfg.Runner.CheckoutTimeout,
 		WorkerID:        cfg.Runner.ID,
 		Logger:          slog.Default(),

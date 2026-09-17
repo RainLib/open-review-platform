@@ -62,7 +62,7 @@ func TestReviewWithSnapshotPassesTrustedOCRRuleFile(t *testing.T) {
 	}
 	executor := &recordingExecutor{}
 	processor := Processor{Store: snapshotStore{snapshot: domain.RuleSnapshot{ID: uuid.New(), CanonicalPayload: canonical}}, Executor: executor}
-	if _, err := processor.reviewWithSnapshot(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base"); err != nil {
+	if _, err := processor.reviewWithSnapshot(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base", nil); err != nil {
 		t.Fatal(err)
 	}
 	if executor.defaultCalls != 0 || executor.ruleCalls != 1 {
@@ -83,7 +83,7 @@ func TestReviewWithSnapshotPassesTrustedOCRRuleFile(t *testing.T) {
 func TestReviewWithSnapshotFallsBackOnlyWhenNoSnapshotExists(t *testing.T) {
 	executor := &recordingExecutor{}
 	processor := Processor{Store: snapshotStore{err: store.ErrNotFound}, Executor: executor}
-	if _, err := processor.reviewWithSnapshot(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base"); err != nil {
+	if _, err := processor.reviewWithSnapshot(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base", nil); err != nil {
 		t.Fatal(err)
 	}
 	if executor.defaultCalls != 1 || executor.ruleCalls != 0 {
@@ -163,7 +163,7 @@ func TestReviewUntilTerminalCancelsInFlightExecutor(t *testing.T) {
 		Executor:             blockingExecutor{stopped: stopped},
 		TerminalPollInterval: time.Millisecond,
 	}
-	_, err := processor.reviewUntilTerminal(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base")
+	_, err := processor.reviewUntilTerminal(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base", nil)
 	var terminal terminalRunError
 	if !errors.As(err, &terminal) || terminal.run.State != domain.RunSuperseded {
 		t.Fatalf("expected superseded terminal error, got %v", err)

@@ -60,13 +60,26 @@ func (e Executor) VerifyGitVersion(ctx context.Context) error {
 }
 
 func (e Executor) Review(ctx context.Context, directory, base, head string) ([]domain.Finding, error) {
-	return e.review(ctx, directory, base, head, "")
+	return e.review(ctx, directory, base, head, "", nil)
+}
+
+// ReviewWithExclude keeps the platform's risk planner outside the CLI while
+// using OCR's native gitignore-style exclusion support.
+func (e Executor) ReviewWithExclude(ctx context.Context, directory, base, head string, exclude []string) ([]domain.Finding, error) {
+	return e.review(ctx, directory, base, head, "", exclude)
 }
 
 // ReviewWithRule executes OCR with a runner-owned rule file. The caller passes
 // canonical JSON already resolved by the control plane; this method never
 // reads a rule file from the untrusted pull-request head.
 func (e Executor) ReviewWithRule(ctx context.Context, directory, base, head string, ruleFileJSON []byte) ([]domain.Finding, error) {
+	return e.ReviewWithRuleAndExclude(ctx, directory, base, head, ruleFileJSON, nil)
+}
+
+// ReviewWithRuleAndExclude combines immutable enterprise rules with a
+// run-local risk scope. The dynamic paths are derived only from the checked-out
+// diff and are never read from the untrusted PR head as configuration.
+func (e Executor) ReviewWithRuleAndExclude(ctx context.Context, directory, base, head string, ruleFileJSON []byte, exclude []string) ([]domain.Finding, error) {
 	if !json.Valid(ruleFileJSON) {
 		return nil, fmt.Errorf("OCR rule file is not valid JSON")
 	}
@@ -87,10 +100,10 @@ func (e Executor) ReviewWithRule(ctx context.Context, directory, base, head stri
 	if err := ruleFile.Close(); err != nil {
 		return nil, fmt.Errorf("close trusted OCR rule file: %w", err)
 	}
-	return e.review(ctx, directory, base, head, rulePath)
+	return e.review(ctx, directory, base, head, rulePath, exclude)
 }
 
-func (e Executor) review(ctx context.Context, directory, base, head, rulePath string) ([]domain.Finding, error) {
+func (e Executor) review(ctx context.Context, directory, base, head, rulePath string, exclude []string) ([]domain.Finding, error) {
 	if e.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, e.Timeout)
@@ -103,6 +116,9 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 	}
 	if rulePath != "" {
 		arguments = append(arguments, "--rule", rulePath)
+	}
+	if len(exclude) > 0 {
+		arguments = append(arguments, "--exclude", strings.Join(exclude, ","))
 	}
 	command := exec.CommandContext(ctx, e.Binary, arguments...)
 	command.Dir = directory

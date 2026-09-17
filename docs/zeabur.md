@@ -38,6 +38,7 @@ OCR_BINARY=ocr
 OCR_VERSION=1.12.4
 GIT_BINARY=git # Git 2.41+ is required for OCR range reviews
 OCR_CONCURRENCY=2 # reduce to 1 for rate-limited or serial model gateways
+RISK_REVIEW_MODE=focused # standard | focused | critical
 CHECKOUT_TIMEOUT=2m # clone/fetch deadline; prevents stalled Git transports
 OCR_TIMEOUT=15m # whole OCR process deadline; prevents stalled model requests
 RUNNER_ID=zeabur-runner-1
