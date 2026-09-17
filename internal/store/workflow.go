@@ -297,23 +297,16 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 		if current.State.Terminal() || current.CancelRequestedAt != nil {
 			return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "run cannot be cancelled")
 		}
-		current.Revision++
-		if _, err := tx.Exec(ctx, `UPDATE review_runs SET cancel_requested_at = now(), revision = $2 WHERE id = $1`, current.ID, current.Revision); err != nil {
-			return domain.InteractionOutcome{}, fmt.Errorf("request run cancellation: %w", err)
-		}
-		if err := appendRunEvent(ctx, tx, current.ID, current.Revision, "run.cancel_requested", "user", "", map[string]any{"interaction_id": interactionID.String()}); err != nil {
+		if err := cancelRun(ctx, tx, &current, "user", "", map[string]any{"interaction_id": interactionID.String()}); err != nil {
 			return domain.InteractionOutcome{}, err
 		}
-		if err := insertOutbox(ctx, tx, current.ID, "review.run.cancel-requested", "run:"+current.ID.String()+fmt.Sprintf(":%d:cancel-requested", current.Revision), map[string]any{"run_id": current.ID.String(), "revision": current.Revision}); err != nil {
-			return domain.InteractionOutcome{}, err
-		}
-		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &current.ID, false, fmt.Sprintf("Cancellation for review run `%s` has been requested.", current.ID)); err != nil {
+		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &current.ID, false, fmt.Sprintf("Review run `%s` has been cancelled.", current.ID)); err != nil {
 			return domain.InteractionOutcome{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return domain.InteractionOutcome{}, fmt.Errorf("commit cancel interaction: %w", err)
 		}
-		return domain.InteractionOutcome{Accepted: true, RunID: &current.ID, Reason: "cancellation requested"}, nil
+		return domain.InteractionOutcome{Accepted: true, RunID: &current.ID, Reason: "cancelled"}, nil
 	}
 
 	if input.Command == "review" && !current.State.Terminal() {
@@ -388,6 +381,32 @@ func interactionReaction(provider domain.Provider, accepted bool) domain.Interac
 		return domain.InteractionReactionEyes
 	}
 	return domain.InteractionReactionConfused
+}
+
+// cancelRun commits the terminal state before acknowledging the user. A
+// worker already inside a checkout cannot be force-killed from a transaction,
+// but its subsequent stage transition sees this immutable state and cannot
+// publish findings. The legacy job is also terminal so no polling worker can
+// claim it again.
+func cancelRun(ctx context.Context, tx pgx.Tx, run *domain.ReviewRun, actorKind, actorSubject string, payload map[string]any) error {
+	run.Revision++
+	if _, err := tx.Exec(ctx, `UPDATE review_runs SET state = 'cancelled', cancel_requested_at = now(), revision = $2, finished_at = now() WHERE id = $1`, run.ID, run.Revision); err != nil {
+		return fmt.Errorf("cancel review run: %w", err)
+	}
+	if run.LegacyJobID != nil {
+		if _, err := tx.Exec(ctx, `UPDATE review_jobs SET state = 'cancelled', locked_by = NULL, locked_until = NULL, finished_at = now() WHERE id = $1 AND state IN ('queued', 'running')`, *run.LegacyJobID); err != nil {
+			return fmt.Errorf("cancel review job: %w", err)
+		}
+	}
+	if err := appendRunEvent(ctx, tx, run.ID, run.Revision, "run.cancelled", actorKind, actorSubject, payload); err != nil {
+		return err
+	}
+	if err := insertOutbox(ctx, tx, run.ID, "review.run.cancelled", "run:"+run.ID.String()+fmt.Sprintf(":%d:cancelled", run.Revision), map[string]any{"run_id": run.ID.String(), "revision": run.Revision}); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	run.State, run.CancelRequestedAt, run.FinishedAt = domain.RunCancelled, &now, &now
+	return nil
 }
 
 func queueInteractionResponse(ctx context.Context, tx pgx.Tx, installation domain.Installation, event domain.CommentEvent, interactionID uuid.UUID, body string, reaction domain.InteractionReaction, releaseRunID *uuid.UUID) error {
@@ -644,21 +663,12 @@ func (s *PostgresStore) RequestRunCancellation(ctx context.Context, actor, tenan
 	if run.State.Terminal() || run.CancelRequestedAt != nil {
 		return domain.ReviewRun{}, ErrConflict
 	}
-	run.Revision++
-	if _, err := tx.Exec(ctx, `UPDATE review_runs SET cancel_requested_at = now(), revision = $2 WHERE id = $1`, runID, run.Revision); err != nil {
-		return domain.ReviewRun{}, fmt.Errorf("update cancellation request: %w", err)
-	}
-	if err := appendRunEvent(ctx, tx, runID, run.Revision, "run.cancel_requested", "user", actor, map[string]any{"source": "task_api"}); err != nil {
-		return domain.ReviewRun{}, err
-	}
-	if err := insertOutbox(ctx, tx, runID, "review.run.cancel-requested", "run:"+runID.String()+fmt.Sprintf(":%d:cancel-requested", run.Revision), map[string]any{"run_id": runID.String(), "revision": run.Revision}); err != nil {
+	if err := cancelRun(ctx, tx, &run, "user", actor, map[string]any{"source": "task_api"}); err != nil {
 		return domain.ReviewRun{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.ReviewRun{}, fmt.Errorf("commit cancellation request: %w", err)
 	}
-	now := time.Now().UTC()
-	run.CancelRequestedAt = &now
 	return run, nil
 }
 
