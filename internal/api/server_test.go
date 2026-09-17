@@ -34,6 +34,14 @@ func (s *recordingStore) CreateInstallation(context.Context, string, string, dom
 	return domain.Installation{}, nil
 }
 
+func (*recordingStore) CreateRuleSet(context.Context, string, string, domain.RuleSetInput) (domain.RuleSetWithDraft, error) {
+	return domain.RuleSetWithDraft{}, nil
+}
+
+func (*recordingStore) ListRuleSets(context.Context, string, string, int) ([]domain.RuleSet, error) {
+	return nil, nil
+}
+
 func (s *recordingStore) UpsertProviderIdentity(context.Context, string, string, domain.ProviderIdentity) (domain.ProviderIdentity, error) {
 	return domain.ProviderIdentity{}, nil
 }

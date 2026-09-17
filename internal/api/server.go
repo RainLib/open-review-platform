@@ -47,6 +47,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tenants", s.createTenant)
 	mux.HandleFunc("PUT /v1/tenants/{slug}/members/{subject}", s.upsertMembership)
 	mux.HandleFunc("POST /v1/tenants/{slug}/installations", s.createInstallation)
+	mux.HandleFunc("POST /v1/tenants/{slug}/rule-sets", s.createRuleSet)
+	mux.HandleFunc("GET /v1/tenants/{slug}/rule-sets", s.listRuleSets)
 	mux.HandleFunc("PUT /v1/tenants/{slug}/provider-identities/{provider}/{externalID}", s.upsertProviderIdentity)
 	mux.HandleFunc("GET /v1/tenants/{slug}/runs", s.listRuns)
 	mux.HandleFunc("GET /v1/tenants/{slug}/runs/{runID}", s.getRun)
@@ -134,6 +136,59 @@ func (s *Server) createInstallation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, installation)
+}
+
+func (s *Server) createRuleSet(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var input domain.RuleSetInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	result, err := s.store.CreateRuleSet(r.Context(), principal.Subject, r.PathValue("slug"), input)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "tenant administrator role is required"})
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "rule set name already exists"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule set is invalid"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (s *Server) listRuleSets(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	limit := 25
+	if value := r.URL.Query().Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be from 1 to 100"})
+			return
+		}
+		limit = parsed
+	}
+	sets, err := s.store.ListRuleSets(r.Context(), principal.Subject, r.PathValue("slug"), limit)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list rule sets"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rule_sets": sets})
 }
 
 func (s *Server) upsertMembership(w http.ResponseWriter, r *http.Request) {

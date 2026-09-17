@@ -25,6 +25,8 @@ type Store interface {
 	CreateTenant(ctx context.Context, actor, slug, name string) (domain.Tenant, error)
 	UpsertMembership(ctx context.Context, actor, tenantSlug, subject, role string) (domain.Membership, error)
 	CreateInstallation(ctx context.Context, actor, tenantSlug string, input domain.InstallationInput) (domain.Installation, error)
+	CreateRuleSet(ctx context.Context, actor, tenantSlug string, input domain.RuleSetInput) (domain.RuleSetWithDraft, error)
+	ListRuleSets(ctx context.Context, actor, tenantSlug string, limit int) ([]domain.RuleSet, error)
 	UpsertProviderIdentity(ctx context.Context, actor, tenantSlug string, input domain.ProviderIdentity) (domain.ProviderIdentity, error)
 	ProcessInteraction(ctx context.Context, input domain.InteractionCommand) (domain.InteractionOutcome, error)
 	ListReviewRuns(ctx context.Context, actor, tenantSlug string, limit int) ([]domain.ReviewRunSummary, error)

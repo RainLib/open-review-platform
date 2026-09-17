@@ -69,6 +69,43 @@ type InstallationInput struct {
 	CredentialRef   string   `json:"credential_ref"`
 }
 
+// RuleSetInput creates a rule set together with its first mutable draft
+// version. Rules are kept as JSON at this boundary so provider-neutral API
+// contracts do not leak a particular OCR SDK type.
+type RuleSetInput struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Rules       json.RawMessage `json:"rules"`
+}
+
+type RuleSet struct {
+	ID          uuid.UUID `json:"id"`
+	TenantID    uuid.UUID `json:"tenant_id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedBy   string    `json:"created_by"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type RuleVersion struct {
+	ID            uuid.UUID       `json:"id"`
+	RuleSetID     uuid.UUID       `json:"rule_set_id"`
+	Version       int             `json:"version"`
+	Revision      int             `json:"revision"`
+	State         string          `json:"state"`
+	Rules         json.RawMessage `json:"rules"`
+	ContentSHA256 string          `json:"content_sha256"`
+	CreatedBy     string          `json:"created_by"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+}
+
+type RuleSetWithDraft struct {
+	RuleSet RuleSet     `json:"rule_set"`
+	Draft   RuleVersion `json:"draft"`
+}
+
 type InboundEvent struct {
 	Provider               Provider
 	APIBaseURL             string
