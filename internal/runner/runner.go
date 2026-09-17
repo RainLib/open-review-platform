@@ -23,6 +23,10 @@ type RuleAwareReviewExecutor interface {
 	ReviewWithRule(context.Context, string, string, string, []byte) ([]domain.Finding, error)
 }
 
+type WorkspacePreparer interface {
+	Prepare(context.Context, domain.ReviewJob) (*Workspace, error)
+}
+
 // RunnerStore is intentionally narrower than the control-plane Store. It
 // documents exactly which durable operations a worker may perform and makes
 // execution behavior testable without a live PostgreSQL instance.
@@ -39,7 +43,7 @@ type RunnerStore interface {
 
 type Processor struct {
 	Store     RunnerStore
-	Checkout  Checkout
+	Checkout  WorkspacePreparer
 	Executor  ReviewExecutor
 	Publisher publisher.Publisher
 	Checks    publisher.CheckReporter
@@ -111,7 +115,7 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 	if stopped, stopErr := p.stopTerminalRun(ctx, *job, run); stopErr != nil || stopped {
 		return true, stopErr
 	}
-	if err := p.process(ctx, *job); err != nil {
+	if err := p.processUntilTerminal(ctx, *job); err != nil {
 		var terminal terminalRunError
 		if errors.As(err, &terminal) {
 			_, stopErr := p.stopTerminalRun(ctx, *job, terminal.run)
@@ -147,6 +151,27 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 		p.Logger.Info("review job succeeded", "job_id", job.ID, "attempt", job.Attempts)
 	}
 	return true, nil
+}
+
+// processUntilTerminal covers preparation as well as OCR execution. Provider
+// commands can arrive while a clone is still waiting on the network; those
+// commands must cancel the checkout instead of waiting for it to complete.
+func (p Processor) processUntilTerminal(ctx context.Context, job domain.ReviewJob) error {
+	executionCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go p.cancelReviewWhenTerminal(ctx, job.ID, cancel, done)
+	err := p.process(executionCtx, job)
+	close(done)
+	cancel()
+
+	run, observeErr := p.advance(ctx, job.ID, domain.RunPreparing)
+	if observeErr != nil {
+		return err
+	}
+	if run.State.Terminal() {
+		return terminalRunError{run: run}
+	}
+	return err
 }
 
 func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {

@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/RainLib/open-review-platform/internal/credentials"
 	"github.com/RainLib/open-review-platform/internal/domain"
@@ -116,6 +118,7 @@ func (c Checkout) git(ctx context.Context, directory, token string, args ...stri
 
 func (c Checkout) gitOutput(ctx context.Context, directory, token string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, c.gitBinary(), args...)
+	configureGitProcessGroup(command)
 	if directory != "" {
 		command.Dir = directory
 	}
@@ -131,6 +134,22 @@ func (c Checkout) gitOutput(ctx context.Context, directory, token string, args .
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args[:min(len(args), 2)], " "), err, trim(output))
 	}
 	return string(output), nil
+}
+
+// Git can spawn SSH transport children. Keep the command in its own process
+// group so a review cancellation stops both the Git client and that transport.
+func configureGitProcessGroup(command *exec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return os.ErrProcessDone
+		}
+		if err := syscall.Kill(-command.Process.Pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+			return err
+		}
+		return nil
+	}
+	command.WaitDelay = 5 * time.Second
 }
 
 func (c Checkout) gitBinary() string {

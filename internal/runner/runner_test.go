@@ -103,10 +103,39 @@ type blockingExecutor struct {
 	stopped chan struct{}
 }
 
+type blockingCheckout struct {
+	stopped chan struct{}
+}
+
+func (c blockingCheckout) Prepare(ctx context.Context, _ domain.ReviewJob) (*Workspace, error) {
+	<-ctx.Done()
+	close(c.stopped)
+	return nil, ctx.Err()
+}
+
 func (e blockingExecutor) Review(ctx context.Context, _, _, _ string) ([]domain.Finding, error) {
 	<-ctx.Done()
 	close(e.stopped)
 	return nil, ctx.Err()
+}
+
+func TestProcessUntilTerminalCancelsCheckout(t *testing.T) {
+	stopped := make(chan struct{})
+	processor := Processor{
+		Store:                terminalStore{run: domain.ReviewRun{State: domain.RunCancelled}},
+		Checkout:             blockingCheckout{stopped: stopped},
+		TerminalPollInterval: time.Millisecond,
+	}
+	err := processor.processUntilTerminal(context.Background(), domain.ReviewJob{ID: uuid.New()})
+	var terminal terminalRunError
+	if !errors.As(err, &terminal) || terminal.run.State != domain.RunCancelled {
+		t.Fatalf("expected cancelled terminal error, got %v", err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("checkout did not receive cancellation")
+	}
 }
 
 func TestReviewUntilTerminalCancelsInFlightExecutor(t *testing.T) {
