@@ -47,13 +47,14 @@ func main() {
 	}
 	reviewPublisher := publisher.NewHTTPWithResolver(resolver)
 	processor := runner.Processor{
-		Store:     database,
-		Checkout:  runner.Checkout{Resolver: resolver, GitBinary: cfg.Runner.GitBinary},
-		Executor:  executor,
-		Publisher: reviewPublisher,
-		Checks:    reviewPublisher,
-		WorkerID:  cfg.Runner.ID,
-		Logger:    slog.Default(),
+		Store:           database,
+		Checkout:        runner.Checkout{Resolver: resolver, GitBinary: cfg.Runner.GitBinary},
+		Executor:        executor,
+		Publisher:       reviewPublisher,
+		Checks:          reviewPublisher,
+		CheckoutTimeout: cfg.Runner.CheckoutTimeout,
+		WorkerID:        cfg.Runner.ID,
+		Logger:          slog.Default(),
 	}
 	consumer, err := messaging.OpenAMQPConsumer(cfg.Broker.URL, cfg.Broker.Exchange)
 	if err != nil {

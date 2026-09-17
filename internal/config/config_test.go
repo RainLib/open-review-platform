@@ -42,3 +42,13 @@ func TestOCRTimeoutMustBePositiveDuration(t *testing.T) {
 		t.Fatal("OCR_TIMEOUT must reject a non-positive duration")
 	}
 }
+
+func TestCheckoutTimeoutMustBePositiveDuration(t *testing.T) {
+	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("AUTH_MODE", "development")
+	t.Setenv("CHECKOUT_TIMEOUT", "0s")
+	if _, err := Load(); err == nil {
+		t.Fatal("CHECKOUT_TIMEOUT must reject a non-positive duration")
+	}
+}

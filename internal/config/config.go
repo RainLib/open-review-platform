@@ -43,15 +43,16 @@ type BrokerConfig struct {
 }
 
 type RunnerConfig struct {
-	ID             string
-	GitBinary      string
-	OCRBinary      string
-	OCRVersion     string
-	OCRConcurrency int
-	OCRTimeout     time.Duration
-	PollInterval   time.Duration
-	GitHubToken    string
-	GitLabToken    string
+	ID              string
+	GitBinary       string
+	OCRBinary       string
+	OCRVersion      string
+	OCRConcurrency  int
+	CheckoutTimeout time.Duration
+	OCRTimeout      time.Duration
+	PollInterval    time.Duration
+	GitHubToken     string
+	GitLabToken     string
 }
 
 func Load() (Config, error) {
@@ -67,6 +68,10 @@ func Load() (Config, error) {
 	ocrTimeout, err := time.ParseDuration(env("OCR_TIMEOUT", "15m"))
 	if err != nil || ocrTimeout <= 0 {
 		return Config{}, fmt.Errorf("OCR_TIMEOUT must be a positive duration")
+	}
+	checkoutTimeout, err := time.ParseDuration(env("CHECKOUT_TIMEOUT", "2m"))
+	if err != nil || checkoutTimeout <= 0 {
+		return Config{}, fmt.Errorf("CHECKOUT_TIMEOUT must be a positive duration")
 	}
 	c := Config{
 		DatabaseURL: os.Getenv("CONTROL_DATABASE_URL"),
@@ -90,15 +95,16 @@ func Load() (Config, error) {
 			RelayID:  env("OUTBOX_RELAY_ID", "relay-1"),
 		},
 		Runner: RunnerConfig{
-			ID:             env("RUNNER_ID", "runner-1"),
-			GitBinary:      env("GIT_BINARY", "git"),
-			OCRBinary:      env("OCR_BINARY", "ocr"),
-			OCRVersion:     env("OCR_VERSION", "1.12.4"),
-			OCRConcurrency: ocrConcurrency,
-			OCRTimeout:     ocrTimeout,
-			PollInterval:   poll,
-			GitHubToken:    os.Getenv("GITHUB_TOKEN"),
-			GitLabToken:    os.Getenv("GITLAB_TOKEN"),
+			ID:              env("RUNNER_ID", "runner-1"),
+			GitBinary:       env("GIT_BINARY", "git"),
+			OCRBinary:       env("OCR_BINARY", "ocr"),
+			OCRVersion:      env("OCR_VERSION", "1.12.4"),
+			OCRConcurrency:  ocrConcurrency,
+			CheckoutTimeout: checkoutTimeout,
+			OCRTimeout:      ocrTimeout,
+			PollInterval:    poll,
+			GitHubToken:     os.Getenv("GITHUB_TOKEN"),
+			GitLabToken:     os.Getenv("GITLAB_TOKEN"),
 		},
 	}
 	if c.DatabaseURL == "" {
