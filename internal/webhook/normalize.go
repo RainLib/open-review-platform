@@ -45,7 +45,7 @@ func NormalizeGitHub(deliveryID, eventName string, body []byte, now time.Time) (
 	if err := decoder.Decode(&payload); err != nil {
 		return domain.InboundEvent{}, false, fmt.Errorf("decode GitHub payload: %w", err)
 	}
-	if payload.Action != "opened" && payload.Action != "reopened" && payload.Action != "synchronize" {
+	if payload.Action != "opened" && payload.Action != "reopened" && payload.Action != "synchronize" && payload.Action != "ready_for_review" {
 		return domain.InboundEvent{}, false, nil
 	}
 	if deliveryID == "" || payload.Installation.ID == "" || payload.Repository.FullName == "" || payload.Repository.CloneURL == "" || payload.Number <= 0 || payload.PullRequest.Base.Ref == "" || payload.PullRequest.Head.SHA == "" {
