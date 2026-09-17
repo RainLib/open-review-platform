@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 )
@@ -98,6 +100,7 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 	command := exec.CommandContext(ctx, e.Binary, arguments...)
 	command.Dir = directory
 	command.Env = withGitBinaryPath(os.Environ(), e.gitBinary())
+	configureProcessGroup(command)
 	logs, err := command.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("execute OCR review: %w: %s", err, trimmedOutput(logs))
@@ -111,6 +114,24 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 		return nil, fmt.Errorf("parse OCR result: %w", err)
 	}
 	return findings, nil
+}
+
+// configureProcessGroup prevents a wrapper CLI from leaving its native OCR
+// child running after a review is cancelled. CommandContext otherwise stops
+// only the direct process, while the child can retain its stdout pipe and keep
+// a worker blocked indefinitely.
+func configureProcessGroup(command *exec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return os.ErrProcessDone
+		}
+		if err := syscall.Kill(-command.Process.Pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+			return err
+		}
+		return nil
+	}
+	command.WaitDelay = 5 * time.Second
 }
 
 func (e Executor) gitBinary() string {
