@@ -17,7 +17,14 @@ a provider call; the token never enters PostgreSQL, RabbitMQ, logs, or traces. T
 publisher uses the PR review API; low-confidence/unpositioned findings go to a
 summary, never a guessed line. The interaction responder uses the same
 short-lived installation identity to post a marker-keyed command response
-before the queued review executes.
+before the queued review executes. For a command-triggered run, the response
+consumer is also the execution barrier: it does not release the durable
+acknowledgement event until the provider accepted that response. Once that
+response is durably published, it also adds an idempotent reaction to the
+source command comment: `eyes` for an
+accepted command and `confused` for a rejected command. This acknowledgement
+uses the GitHub issue-comment reactions API and is retried through the same
+inbox fence; it does not alter review authorization or merge policy.
 
 ## GitLab
 

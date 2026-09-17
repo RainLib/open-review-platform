@@ -16,6 +16,7 @@ import (
 	"github.com/RainLib/open-review-platform/internal/messaging"
 	"github.com/RainLib/open-review-platform/internal/publisher"
 	"github.com/RainLib/open-review-platform/internal/store"
+	"github.com/google/uuid"
 )
 
 const (
@@ -58,7 +59,13 @@ func main() {
 			if err != nil {
 				return err
 			}
-			return responses.PublishInteractionResponse(ctx, response)
+			if err := responses.PublishInteractionResponse(ctx, response); err != nil {
+				return err
+			}
+			if response.ReleaseRunID != nil {
+				return database.ReleaseAcknowledgedRun(ctx, *response.ReleaseRunID)
+			}
+			return nil
 		})
 	}); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("interaction responder stopped", "error", err)
@@ -76,12 +83,21 @@ func responseFromPayload(payload map[string]any) (domain.InteractionResponse, er
 		InstallationExternalID: stringValue(payload, "installation_external_id"),
 		CredentialRef:          stringValue(payload, "credential_ref"),
 		Repository:             stringValue(payload, "repository"),
+		CommentExternalID:      stringValue(payload, "comment_external_id"),
+		Reaction:               domain.InteractionReaction(stringValue(payload, "reaction")),
 		Body:                   stringValue(payload, "body"),
 		Marker:                 stringValue(payload, "marker"),
 	}
 	var err error
 	response.ReviewNumber, err = intValue(payload, "review_number")
-	if err != nil || response.APIBaseURL == "" || response.InstallationExternalID == "" || response.CredentialRef == "" || response.Repository == "" || response.Body == "" || response.Marker == "" || response.ReviewNumber < 1 {
+	if releaseRunID := stringValue(payload, "release_run_id"); releaseRunID != "" {
+		parsed, parseErr := uuid.Parse(releaseRunID)
+		if parseErr != nil {
+			return domain.InteractionResponse{}, fmt.Errorf("interaction response release run id is invalid")
+		}
+		response.ReleaseRunID = &parsed
+	}
+	if err != nil || response.APIBaseURL == "" || response.InstallationExternalID == "" || response.CredentialRef == "" || response.Repository == "" || response.Body == "" || response.Marker == "" || response.ReviewNumber < 1 || !response.Reaction.Valid() || (response.Reaction != domain.InteractionReactionNone && response.CommentExternalID == "") {
 		return domain.InteractionResponse{}, fmt.Errorf("interaction response payload is invalid")
 	}
 	return response, nil

@@ -158,6 +158,21 @@ type InteractionOutcome struct {
 	RunID     *uuid.UUID
 }
 
+// InteractionReaction is a provider-neutral intent to acknowledge a command
+// at its source. Providers deliberately map only reactions they can make
+// idempotently; a missing reaction never changes the review command itself.
+type InteractionReaction string
+
+const (
+	InteractionReactionNone     InteractionReaction = ""
+	InteractionReactionEyes     InteractionReaction = "eyes"
+	InteractionReactionConfused InteractionReaction = "confused"
+)
+
+func (r InteractionReaction) Valid() bool {
+	return r == InteractionReactionNone || r == InteractionReactionEyes || r == InteractionReactionConfused
+}
+
 // InteractionResponse is the durable, non-secret payload consumed after an
 // @openreview command has been authorized and committed. Credentials are
 // resolved by the responder only at publication time.
@@ -168,8 +183,13 @@ type InteractionResponse struct {
 	CredentialRef          string
 	Repository             string
 	ReviewNumber           int
-	Body                   string
-	Marker                 string
+	CommentExternalID      string
+	Reaction               InteractionReaction
+	// ReleaseRunID is set only for a newly created command-triggered run. The
+	// interaction responder releases it after the acknowledgement is visible.
+	ReleaseRunID *uuid.UUID
+	Body         string
+	Marker       string
 }
 
 type ReviewJob struct {

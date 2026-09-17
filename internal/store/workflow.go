@@ -136,7 +136,8 @@ func createWorkflowRun(ctx context.Context, tx pgx.Tx, installation domain.Insta
 func insertOutbox(ctx context.Context, tx pgx.Tx, runID uuid.UUID, topic, dedupeKey string, payload map[string]any) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO outbox_messages (aggregate_type, aggregate_id, topic, dedupe_key, payload)
-		VALUES ('review_run', $1, $2, $3, $4::jsonb)`, runID, topic, dedupeKey, jsonPayload(payload))
+		VALUES ('review_run', $1, $2, $3, $4::jsonb)
+		ON CONFLICT (dedupe_key) DO NOTHING`, runID, topic, dedupeKey, jsonPayload(payload))
 	if err != nil {
 		return fmt.Errorf("insert %s outbox message: %w", topic, err)
 	}
@@ -274,7 +275,7 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 			}
 			body = fmt.Sprintf("Review run `%s` is currently **%s**.", currentRunID.String(), state)
 		}
-		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, currentRunID, body); err != nil {
+		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, currentRunID, false, body); err != nil {
 			return domain.InteractionOutcome{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -306,7 +307,7 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 		if err := insertOutbox(ctx, tx, current.ID, "review.run.cancel-requested", "run:"+current.ID.String()+fmt.Sprintf(":%d:cancel-requested", current.Revision), map[string]any{"run_id": current.ID.String(), "revision": current.Revision}); err != nil {
 			return domain.InteractionOutcome{}, err
 		}
-		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &current.ID, fmt.Sprintf("Cancellation for review run `%s` has been requested.", current.ID)); err != nil {
+		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &current.ID, false, fmt.Sprintf("Cancellation for review run `%s` has been requested.", current.ID)); err != nil {
 			return domain.InteractionOutcome{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -316,7 +317,7 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 	}
 
 	if input.Command == "review" && !current.State.Terminal() {
-		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &current.ID, fmt.Sprintf("A review is already running as `%s`; use `@openreview status` for progress.", current.ID)); err != nil {
+		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &current.ID, false, fmt.Sprintf("A review is already running as `%s`; use `@openreview status` for progress.", current.ID)); err != nil {
 			return domain.InteractionOutcome{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -335,7 +336,7 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 	if err != nil {
 		return domain.InteractionOutcome{}, err
 	}
-	if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &run.ID, fmt.Sprintf("Review run `%s` is acknowledged and queued. I will publish the result when it completes.", run.ID)); err != nil {
+	if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &run.ID, true, fmt.Sprintf("Review run `%s` is acknowledged and queued. I will publish the result when it completes.", run.ID)); err != nil {
 		return domain.InteractionOutcome{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -351,18 +352,22 @@ func commandAllowed(role, command string) bool {
 	return role == "owner" || role == "admin" || role == "reviewer"
 }
 
-func acceptInteraction(ctx context.Context, tx pgx.Tx, installation domain.Installation, event domain.CommentEvent, interactionID uuid.UUID, runID *uuid.UUID, body string) error {
+func acceptInteraction(ctx context.Context, tx pgx.Tx, installation domain.Installation, event domain.CommentEvent, interactionID uuid.UUID, runID *uuid.UUID, releaseRun bool, body string) error {
 	if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'accepted', result_run_id = $2 WHERE id = $1`, interactionID, runID); err != nil {
 		return fmt.Errorf("accept interaction: %w", err)
 	}
-	return queueInteractionResponse(ctx, tx, installation, event, interactionID, body)
+	var releaseRunID *uuid.UUID
+	if releaseRun {
+		releaseRunID = runID
+	}
+	return queueInteractionResponse(ctx, tx, installation, event, interactionID, body, interactionReaction(installation.Provider, true), releaseRunID)
 }
 
 func rejectInteraction(ctx context.Context, tx pgx.Tx, installation domain.Installation, event domain.CommentEvent, interactionID uuid.UUID, reason string) (domain.InteractionOutcome, error) {
 	if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'rejected' WHERE id = $1`, interactionID); err != nil {
 		return domain.InteractionOutcome{}, fmt.Errorf("reject interaction: %w", err)
 	}
-	if err := queueInteractionResponse(ctx, tx, installation, event, interactionID, "Unable to run that command: "+reason); err != nil {
+	if err := queueInteractionResponse(ctx, tx, installation, event, interactionID, "Unable to run that command: "+reason, interactionReaction(installation.Provider, false), nil); err != nil {
 		return domain.InteractionOutcome{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -371,7 +376,21 @@ func rejectInteraction(ctx context.Context, tx pgx.Tx, installation domain.Insta
 	return domain.InteractionOutcome{Reason: reason}, nil
 }
 
-func queueInteractionResponse(ctx context.Context, tx pgx.Tx, installation domain.Installation, event domain.CommentEvent, interactionID uuid.UUID, body string) error {
+func interactionReaction(provider domain.Provider, accepted bool) domain.InteractionReaction {
+	// GitHub guarantees a single reaction of a given content from the same app
+	// installation identity. GitLab command replies remain notes until its
+	// award-emoji adapter is introduced, rather than pretending an equivalent
+	// API exists for every self-managed version.
+	if provider != domain.ProviderGitHub {
+		return domain.InteractionReactionNone
+	}
+	if accepted {
+		return domain.InteractionReactionEyes
+	}
+	return domain.InteractionReactionConfused
+}
+
+func queueInteractionResponse(ctx context.Context, tx pgx.Tx, installation domain.Installation, event domain.CommentEvent, interactionID uuid.UUID, body string, reaction domain.InteractionReaction, releaseRunID *uuid.UUID) error {
 	payload := map[string]any{
 		"provider":                 installation.Provider,
 		"api_base_url":             installation.APIBaseURL,
@@ -379,8 +398,13 @@ func queueInteractionResponse(ctx context.Context, tx pgx.Tx, installation domai
 		"credential_ref":           installation.CredentialRef,
 		"repository":               event.Repository,
 		"review_number":            event.ReviewNumber,
+		"comment_external_id":      event.CommentExternalID,
+		"reaction":                 reaction,
 		"body":                     body,
 		"marker":                   "open-review-platform:interaction:" + interactionID.String(),
+	}
+	if releaseRunID != nil {
+		payload["release_run_id"] = releaseRunID.String()
 	}
 	_, err := tx.Exec(ctx, `
 		INSERT INTO outbox_messages (aggregate_type, aggregate_id, topic, dedupe_key, payload)
@@ -446,10 +470,38 @@ func createCommentRun(ctx context.Context, tx pgx.Tx, requestID uuid.UUID, curre
 	if err := appendRunEvent(ctx, tx, run.ID, run.Revision, "run.acknowledged", "user", "", map[string]any{"interaction_id": interactionID.String(), "trigger": triggerKind}); err != nil {
 		return domain.ReviewRun{}, err
 	}
-	if err := insertOutbox(ctx, tx, run.ID, "review.run.acknowledged", "run:"+run.ID.String()+":1:acknowledged", map[string]any{"run_id": run.ID.String(), "revision": run.Revision}); err != nil {
-		return domain.ReviewRun{}, err
-	}
 	return run, nil
+}
+
+// ReleaseAcknowledgedRun is the response-to-execution barrier for a command
+// trigger. The interaction responder calls it only after GitHub has accepted
+// the marker-keyed acknowledgement (and its source-comment reaction). A
+// retry is safe because the durable outbox key is unique.
+func (s *PostgresStore) ReleaseAcknowledgedRun(ctx context.Context, runID uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin interaction run release: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var state domain.RunState
+	var revision int
+	err = tx.QueryRow(ctx, `SELECT state, revision FROM review_runs WHERE id = $1 FOR UPDATE`, runID).Scan(&state, &revision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("load acknowledged run for release: %w", err)
+	}
+	if state != domain.RunAcknowledged {
+		return tx.Commit(ctx)
+	}
+	if err := insertOutbox(ctx, tx, runID, "review.run.acknowledged", "run:"+runID.String()+fmt.Sprintf(":%d:acknowledged", revision), map[string]any{"run_id": runID.String(), "revision": revision}); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit interaction run release: %w", err)
+	}
+	return nil
 }
 
 func appendRunEvent(ctx context.Context, tx pgx.Tx, runID uuid.UUID, revision int, eventType, actorKind, actorSubject string, payload map[string]any) error {

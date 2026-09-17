@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +56,11 @@ func (p *HTTPPublisher) Publish(ctx context.Context, job domain.ReviewJob, findi
 // an @openreview command is committed. The marker makes a redelivered broker
 // message update the original response instead of producing duplicate comments.
 func (p *HTTPPublisher) PublishInteractionResponse(ctx context.Context, response domain.InteractionResponse) error {
+	if response.Provider == domain.ProviderGitHub && response.Reaction != domain.InteractionReactionNone {
+		if _, err := githubInteractionCommentID(response.CommentExternalID); err != nil {
+			return err
+		}
+	}
 	job := domain.ReviewJob{
 		Provider:               response.Provider,
 		APIBaseURL:             response.APIBaseURL,
@@ -71,10 +77,17 @@ func (p *HTTPPublisher) PublishInteractionResponse(ctx context.Context, response
 	if response.Provider != domain.ProviderGitHub {
 		return fmt.Errorf("unsupported interaction provider %q", response.Provider)
 	}
-	base := strings.TrimSuffix(response.APIBaseURL, "/")
-	if base == "" {
-		base = "https://api.github.com"
+	if err := p.publishGitHubInteractionResponse(ctx, response, token); err != nil {
+		return err
 	}
+	if response.Reaction == domain.InteractionReactionNone {
+		return nil
+	}
+	return p.publishGitHubInteractionReaction(ctx, response, token)
+}
+
+func (p *HTTPPublisher) publishGitHubInteractionResponse(ctx context.Context, response domain.InteractionResponse, token string) error {
+	base := githubAPIBase(response.APIBaseURL)
 	body := "## Open Review Platform\n\n" + response.Body + "\n\n<!-- " + response.Marker + " -->"
 	endpoint := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", base, response.Repository, response.ReviewNumber)
 	var comments []struct {
@@ -91,6 +104,37 @@ func (p *HTTPPublisher) PublishInteractionResponse(ctx context.Context, response
 		}
 	}
 	return p.requestJSON(ctx, http.MethodPost, endpoint, token, map[string]string{"body": body}, nil)
+}
+
+// publishGitHubInteractionReaction is intentionally performed after the
+// marker-keyed reply. If a transient reaction write fails, the inbox retries
+// the whole delivery, the reply is updated in place, and GitHub makes the
+// same app/content reaction idempotent (200 rather than a second reaction).
+func (p *HTTPPublisher) publishGitHubInteractionReaction(ctx context.Context, response domain.InteractionResponse, token string) error {
+	commentID, err := githubInteractionCommentID(response.CommentExternalID)
+	if err != nil {
+		return err
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions", githubAPIBase(response.APIBaseURL), response.Repository, commentID)
+	if err := p.requestJSON(ctx, http.MethodPost, endpoint, token, map[string]string{"content": string(response.Reaction)}, nil); err != nil {
+		return fmt.Errorf("publish GitHub interaction reaction: %w", err)
+	}
+	return nil
+}
+
+func githubInteractionCommentID(externalID string) (int64, error) {
+	commentID, err := strconv.ParseInt(externalID, 10, 64)
+	if err != nil || commentID < 1 {
+		return 0, fmt.Errorf("invalid GitHub interaction comment id")
+	}
+	return commentID, nil
+}
+
+func githubAPIBase(apiBaseURL string) string {
+	if base := strings.TrimSuffix(apiBaseURL, "/"); base != "" {
+		return base
+	}
+	return "https://api.github.com"
 }
 
 func (p *HTTPPublisher) publishGitLabInteractionResponse(ctx context.Context, response domain.InteractionResponse, token string) error {

@@ -33,7 +33,7 @@ func TestFindingMarkerIsStableAndRendered(t *testing.T) {
 
 func TestPublishInteractionResponseUpdatesExistingMarker(t *testing.T) {
 	marker := "open-review-platform:interaction:test"
-	var sawPatch bool
+	var sawPatch, sawReaction bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/RainLib/demo/issues/4/comments":
@@ -45,6 +45,13 @@ func TestPublishInteractionResponseUpdatesExistingMarker(t *testing.T) {
 			}
 			sawPatch = true
 			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/RainLib/demo/issues/comments/99/reactions":
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `"content":"eyes"`) {
+				t.Fatalf("unexpected interaction reaction: %s", body)
+			}
+			sawReaction = true
+			w.WriteHeader(http.StatusCreated)
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -53,13 +60,24 @@ func TestPublishInteractionResponseUpdatesExistingMarker(t *testing.T) {
 	publisher := &HTTPPublisher{client: server.Client(), resolver: tokenResolver{}}
 	err := publisher.PublishInteractionResponse(context.Background(), domain.InteractionResponse{
 		Provider: domain.ProviderGitHub, APIBaseURL: server.URL, InstallationExternalID: "42", CredentialRef: "github-app",
-		Repository: "RainLib/demo", ReviewNumber: 4, Body: "Review is queued.", Marker: marker,
+		Repository: "RainLib/demo", ReviewNumber: 4, CommentExternalID: "99", Reaction: domain.InteractionReactionEyes, Body: "Review is queued.", Marker: marker,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sawPatch {
-		t.Fatal("expected existing interaction comment to be updated")
+	if !sawPatch || !sawReaction {
+		t.Fatalf("expected interaction comment and reaction: patch=%v reaction=%v", sawPatch, sawReaction)
+	}
+}
+
+func TestPublishInteractionResponseRejectsInvalidGitHubReactionComment(t *testing.T) {
+	publisher := &HTTPPublisher{client: http.DefaultClient, resolver: tokenResolver{}}
+	err := publisher.PublishInteractionResponse(context.Background(), domain.InteractionResponse{
+		Provider: domain.ProviderGitHub, APIBaseURL: "https://api.github.invalid", InstallationExternalID: "42", CredentialRef: "github-app",
+		Repository: "RainLib/demo", ReviewNumber: 4, CommentExternalID: "not-a-number", Reaction: domain.InteractionReactionEyes, Body: "Review is queued.", Marker: "marker",
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid GitHub interaction comment id") {
+		t.Fatalf("expected invalid comment id error, got %v", err)
 	}
 }
 

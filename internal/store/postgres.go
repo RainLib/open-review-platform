@@ -191,11 +191,15 @@ func (s *PostgresStore) Enqueue(ctx context.Context, event domain.InboundEvent) 
 
 func (s *PostgresStore) Claim(ctx context.Context, workerID string) (*domain.ReviewJob, error) {
 	job, err := scanJob(s.pool.QueryRow(ctx, `
-		WITH candidate AS (
-			SELECT id FROM review_jobs
-			WHERE (state = 'queued' AND available_at <= now()) OR (state = 'running' AND locked_until < now())
-			ORDER BY created_at
-			FOR UPDATE SKIP LOCKED
+	WITH candidate AS (
+		SELECT j.id
+		FROM review_jobs j
+		JOIN review_runs r ON r.legacy_job_id = j.id
+		WHERE (r.state IN ('admitted', 'preparing', 'analyzing', 'normalizing', 'publishing')
+		       OR (r.state = 'acknowledged' AND r.trigger_kind = 'pull_request'))
+		  AND ((j.state = 'queued' AND j.available_at <= now()) OR (j.state = 'running' AND j.locked_until < now()))
+		ORDER BY j.created_at
+		FOR UPDATE OF j SKIP LOCKED
 			LIMIT 1
 		)
 		UPDATE review_jobs AS j
@@ -222,9 +226,10 @@ func (s *PostgresStore) ClaimForRun(ctx context.Context, workerID string, runID 
 	job, err := scanJob(s.pool.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT j.id
-			FROM review_jobs j
+		FROM review_jobs j
 			JOIN review_runs r ON r.legacy_job_id = j.id
 			WHERE r.id = $2
+			  AND r.state IN ('admitted', 'preparing', 'analyzing', 'normalizing', 'publishing')
 			  AND ((j.state = 'queued' AND j.available_at <= now()) OR (j.state = 'running' AND j.locked_until < now()))
 			FOR UPDATE OF j SKIP LOCKED
 		)

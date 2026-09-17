@@ -31,7 +31,8 @@ The current implementation includes:
 - a native GitHub `Open Review / Analysis` Check Run lifecycle, separate from
   future enterprise governance merge gates; and
 - explicit `@openreview` commands that receive an idempotent GitHub response
-  before their review runs asynchronously.
+  and source-comment acknowledgement reaction before their review runs
+  asynchronously.
 
 GitLab OAuth/application-token brokering and dashboard CRUD remain planned
 increments; a static GitLab token is supported only for controlled deployment.
