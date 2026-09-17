@@ -249,26 +249,41 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 		JOIN memberships m ON m.tenant_id = p.tenant_id AND m.subject = p.subject
 		WHERE p.tenant_id = $1 AND p.provider = $2 AND p.external_id = $3`, installation.TenantID, input.Event.Provider, input.Event.ActorExternalID).Scan(&role)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return rejectInteraction(ctx, tx, interactionID, "actor is not mapped to an organization member")
+		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "actor is not mapped to an organization member")
 	}
 	if err != nil {
 		return domain.InteractionOutcome{}, fmt.Errorf("authorize interaction actor: %w", err)
 	}
 	if !commandAllowed(role, input.Command) {
-		return rejectInteraction(ctx, tx, interactionID, "actor role is not allowed to run this command")
+		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "actor role is not allowed to run this command")
 	}
 
 	if input.Command == "invalid" {
-		return rejectInteraction(ctx, tx, interactionID, "invalid command; use @openreview help")
+		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "invalid command; use @openreview help")
 	}
 	if input.Command == "help" || input.Command == "status" {
+		var body string
+		if input.Command == "help" {
+			body = "Available commands: `@openreview review [standard|deep|security]`, `@openreview status`, `@openreview cancel`, and `@openreview retry`."
+		} else if currentRunID == nil {
+			body = "There is no review run for this pull request yet."
+		} else {
+			var state domain.RunState
+			if err := tx.QueryRow(ctx, `SELECT state FROM review_runs WHERE id = $1`, *currentRunID).Scan(&state); err != nil {
+				return domain.InteractionOutcome{}, fmt.Errorf("load review status: %w", err)
+			}
+			body = fmt.Sprintf("Review run `%s` is currently **%s**.", currentRunID.String(), state)
+		}
+		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, currentRunID, body); err != nil {
+			return domain.InteractionOutcome{}, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return domain.InteractionOutcome{}, fmt.Errorf("commit read-only interaction: %w", err)
 		}
-		return domain.InteractionOutcome{Accepted: true, Reason: "command accepted"}, nil
+		return domain.InteractionOutcome{Accepted: true, RunID: currentRunID, Reason: "command accepted"}, nil
 	}
 	if currentRunID == nil {
-		return rejectInteraction(ctx, tx, interactionID, "no review run is available for this pull request")
+		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "no review run is available for this pull request")
 	}
 	current, err := scanReviewRun(tx.QueryRow(ctx, `
 		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, created_at, started_at, finished_at
@@ -279,7 +294,7 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 
 	if input.Command == "cancel" {
 		if current.State.Terminal() || current.CancelRequestedAt != nil {
-			return rejectInteraction(ctx, tx, interactionID, "run cannot be cancelled")
+			return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "run cannot be cancelled")
 		}
 		current.Revision++
 		if _, err := tx.Exec(ctx, `UPDATE review_runs SET cancel_requested_at = now(), revision = $2 WHERE id = $1`, current.ID, current.Revision); err != nil {
@@ -291,8 +306,8 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 		if err := insertOutbox(ctx, tx, current.ID, "review.run.cancel-requested", "run:"+current.ID.String()+fmt.Sprintf(":%d:cancel-requested", current.Revision), map[string]any{"run_id": current.ID.String(), "revision": current.Revision}); err != nil {
 			return domain.InteractionOutcome{}, err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'accepted', result_run_id = $2 WHERE id = $1`, interactionID, current.ID); err != nil {
-			return domain.InteractionOutcome{}, fmt.Errorf("accept cancel interaction: %w", err)
+		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &current.ID, fmt.Sprintf("Cancellation for review run `%s` has been requested.", current.ID)); err != nil {
+			return domain.InteractionOutcome{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return domain.InteractionOutcome{}, fmt.Errorf("commit cancel interaction: %w", err)
@@ -301,8 +316,8 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 	}
 
 	if input.Command == "review" && !current.State.Terminal() {
-		if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'accepted', result_run_id = $2 WHERE id = $1`, interactionID, current.ID); err != nil {
-			return domain.InteractionOutcome{}, fmt.Errorf("accept active review interaction: %w", err)
+		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &current.ID, fmt.Sprintf("A review is already running as `%s`; use `@openreview status` for progress.", current.ID)); err != nil {
+			return domain.InteractionOutcome{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return domain.InteractionOutcome{}, fmt.Errorf("commit active review interaction: %w", err)
@@ -310,18 +325,18 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 		return domain.InteractionOutcome{Accepted: true, RunID: &current.ID, Reason: "review is already active"}, nil
 	}
 	if input.Command == "retry" && !current.State.Terminal() {
-		return rejectInteraction(ctx, tx, interactionID, "retry is only available after a terminal run")
+		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "retry is only available after a terminal run")
 	}
 	if input.Command != "review" && input.Command != "retry" {
-		return rejectInteraction(ctx, tx, interactionID, "unsupported command")
+		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "unsupported command")
 	}
 
 	run, err := createCommentRun(ctx, tx, requestID, current, installation, input.Event, input.Command, interactionID)
 	if err != nil {
 		return domain.InteractionOutcome{}, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'accepted', result_run_id = $2 WHERE id = $1`, interactionID, run.ID); err != nil {
-		return domain.InteractionOutcome{}, fmt.Errorf("accept review interaction: %w", err)
+	if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, &run.ID, fmt.Sprintf("Review run `%s` is acknowledged and queued. I will publish the result when it completes.", run.ID)); err != nil {
+		return domain.InteractionOutcome{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.InteractionOutcome{}, fmt.Errorf("commit review interaction: %w", err)
@@ -336,14 +351,45 @@ func commandAllowed(role, command string) bool {
 	return role == "owner" || role == "admin" || role == "reviewer"
 }
 
-func rejectInteraction(ctx context.Context, tx pgx.Tx, interactionID uuid.UUID, reason string) (domain.InteractionOutcome, error) {
+func acceptInteraction(ctx context.Context, tx pgx.Tx, installation domain.Installation, event domain.CommentEvent, interactionID uuid.UUID, runID *uuid.UUID, body string) error {
+	if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'accepted', result_run_id = $2 WHERE id = $1`, interactionID, runID); err != nil {
+		return fmt.Errorf("accept interaction: %w", err)
+	}
+	return queueInteractionResponse(ctx, tx, installation, event, interactionID, body)
+}
+
+func rejectInteraction(ctx context.Context, tx pgx.Tx, installation domain.Installation, event domain.CommentEvent, interactionID uuid.UUID, reason string) (domain.InteractionOutcome, error) {
 	if _, err := tx.Exec(ctx, `UPDATE review_interactions SET result = 'rejected' WHERE id = $1`, interactionID); err != nil {
 		return domain.InteractionOutcome{}, fmt.Errorf("reject interaction: %w", err)
+	}
+	if err := queueInteractionResponse(ctx, tx, installation, event, interactionID, "Unable to run that command: "+reason); err != nil {
+		return domain.InteractionOutcome{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.InteractionOutcome{}, fmt.Errorf("commit rejected interaction: %w", err)
 	}
 	return domain.InteractionOutcome{Reason: reason}, nil
+}
+
+func queueInteractionResponse(ctx context.Context, tx pgx.Tx, installation domain.Installation, event domain.CommentEvent, interactionID uuid.UUID, body string) error {
+	payload := map[string]any{
+		"provider":                 installation.Provider,
+		"api_base_url":             installation.APIBaseURL,
+		"installation_external_id": installation.ExternalID,
+		"credential_ref":           installation.CredentialRef,
+		"repository":               event.Repository,
+		"review_number":            event.ReviewNumber,
+		"body":                     body,
+		"marker":                   "open-review-platform:interaction:" + interactionID.String(),
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO outbox_messages (aggregate_type, aggregate_id, topic, dedupe_key, payload)
+		VALUES ('review_interaction', $1, 'review.interaction.response', $2, $3::jsonb)`,
+		interactionID, "interaction:"+interactionID.String()+":response", jsonPayload(payload))
+	if err != nil {
+		return fmt.Errorf("queue interaction response: %w", err)
+	}
+	return nil
 }
 
 // createCommentRun deliberately creates a new queueable job.  A command-triggered

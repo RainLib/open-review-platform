@@ -54,6 +54,48 @@ func (p *HTTPPublisher) Publish(ctx context.Context, job domain.ReviewJob, findi
 	return fmt.Errorf("unsupported provider %q", job.Provider)
 }
 
+// PublishInteractionResponse writes a single, marker-keyed issue comment after
+// an @openreview command is committed. The marker makes a redelivered broker
+// message update the original response instead of producing duplicate comments.
+func (p *HTTPPublisher) PublishInteractionResponse(ctx context.Context, response domain.InteractionResponse) error {
+	if p.resolver == nil {
+		return fmt.Errorf("provider credential resolver is required")
+	}
+	job := domain.ReviewJob{
+		Provider:               response.Provider,
+		APIBaseURL:             response.APIBaseURL,
+		InstallationExternalID: response.InstallationExternalID,
+		CredentialRef:          response.CredentialRef,
+	}
+	token, err := p.resolver.Resolve(ctx, job)
+	if err != nil {
+		return err
+	}
+	if response.Provider != domain.ProviderGitHub {
+		return fmt.Errorf("interaction responses are not implemented for provider %q", response.Provider)
+	}
+	base := strings.TrimSuffix(response.APIBaseURL, "/")
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	body := "## Open Review Platform\n\n" + response.Body + "\n\n<!-- " + response.Marker + " -->"
+	endpoint := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", base, response.Repository, response.ReviewNumber)
+	var comments []struct {
+		ID   int64  `json:"id"`
+		Body string `json:"body"`
+	}
+	if err := p.requestJSON(ctx, http.MethodGet, endpoint, token, nil, &comments); err != nil {
+		return fmt.Errorf("list GitHub interaction comments: %w", err)
+	}
+	for _, comment := range comments {
+		if strings.Contains(comment.Body, response.Marker) {
+			endpoint := fmt.Sprintf("%s/repos/%s/issues/comments/%d", base, response.Repository, comment.ID)
+			return p.requestJSON(ctx, http.MethodPatch, endpoint, token, map[string]string{"body": body}, nil)
+		}
+	}
+	return p.requestJSON(ctx, http.MethodPost, endpoint, token, map[string]string{"body": body}, nil)
+}
+
 func (p *HTTPPublisher) publishGitHub(ctx context.Context, job domain.ReviewJob, token string, findings []domain.Finding) error {
 	base := strings.TrimSuffix(job.APIBaseURL, "/")
 	if base == "" {

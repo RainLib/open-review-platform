@@ -17,6 +17,11 @@ type AMQPPublisher struct {
 	exchange   string
 }
 
+type AMQPConsumer struct {
+	connection *amqp.Connection
+	channel    *amqp.Channel
+}
+
 func OpenAMQPPublisher(url, exchange string) (*AMQPPublisher, error) {
 	connection, err := amqp.Dial(url)
 	if err != nil {
@@ -46,9 +51,14 @@ func (p *AMQPPublisher) DeclareTopology() error {
 		{"openreview.review.ack.v1", "review.run.acknowledged"},
 		{"openreview.review.execute.v1", "review.run.admitted"},
 		{"openreview.review.publish.v1", "review.run.publishing"},
+		{"openreview.interaction.response.v1", "review.interaction.response"},
 	}
 	for _, queue := range queues {
-		args := amqp.Table{"x-queue-type": "quorum", "x-dead-letter-exchange": deadLetterExchange}
+		args := amqp.Table{
+			"x-queue-type":           "quorum",
+			"x-dead-letter-exchange": deadLetterExchange,
+			"x-delivery-limit":       int32(5),
+		}
 		if _, err := p.channel.QueueDeclare(queue.name, true, false, false, false, args); err != nil {
 			return fmt.Errorf("declare %s: %w", queue.name, err)
 		}
@@ -81,6 +91,69 @@ func (p *AMQPPublisher) Close() error {
 	}
 	if p.connection != nil {
 		return p.connection.Close()
+	}
+	return nil
+}
+
+func OpenAMQPConsumer(url, exchange string) (*AMQPConsumer, error) {
+	connection, err := amqp.Dial(url)
+	if err != nil {
+		return nil, fmt.Errorf("connect RabbitMQ: %w", err)
+	}
+	channel, err := connection.Channel()
+	if err != nil {
+		_ = connection.Close()
+		return nil, fmt.Errorf("open RabbitMQ channel: %w", err)
+	}
+	consumer := &AMQPConsumer{connection: connection, channel: channel}
+	publisher := &AMQPPublisher{channel: channel, exchange: exchange}
+	if err := publisher.DeclareTopology(); err != nil {
+		_ = consumer.Close()
+		return nil, err
+	}
+	return consumer, nil
+}
+
+// Consume is intentionally a thin transport adapter. Durable deduplication
+// and retry policy belong to HandleExactlyOnce and the database inbox.
+func (c *AMQPConsumer) Consume(ctx context.Context, queue, consumer string, handler func(context.Context, []byte) error) error {
+	if c == nil || c.channel == nil || queue == "" || consumer == "" || handler == nil {
+		return fmt.Errorf("AMQP consumer, queue, consumer id, and handler are required")
+	}
+	deliveries, err := c.channel.Consume(queue, consumer, false, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("consume %s: %w", queue, err)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case delivery, ok := <-deliveries:
+			if !ok {
+				return fmt.Errorf("consumer delivery channel closed")
+			}
+			if err := handler(ctx, delivery.Body); err != nil {
+				if nackErr := delivery.Nack(false, true); nackErr != nil {
+					return fmt.Errorf("handle message: %w (nack: %v)", err, nackErr)
+				}
+				continue
+			}
+			if err := delivery.Ack(false); err != nil {
+				return fmt.Errorf("ack message: %w", err)
+			}
+		}
+	}
+}
+
+func (c *AMQPConsumer) Close() error {
+	if c == nil {
+		return nil
+	}
+	if c.channel != nil {
+		_ = c.channel.Close()
+	}
+	if c.connection != nil {
+		return c.connection.Close()
 	}
 	return nil
 }

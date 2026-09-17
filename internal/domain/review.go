@@ -120,6 +120,20 @@ type InteractionOutcome struct {
 	RunID     *uuid.UUID
 }
 
+// InteractionResponse is the durable, non-secret payload consumed after an
+// @openreview command has been authorized and committed. Credentials are
+// resolved by the responder only at publication time.
+type InteractionResponse struct {
+	Provider               Provider
+	APIBaseURL             string
+	InstallationExternalID string
+	CredentialRef          string
+	Repository             string
+	ReviewNumber           int
+	Body                   string
+	Marker                 string
+}
+
 type ReviewJob struct {
 	ID                     uuid.UUID
 	TenantID               uuid.UUID

@@ -1,12 +1,14 @@
 # Zeabur deployment
 
-Deploy this project as **four services**, not one process:
+Deploy this project as **five services**, not one process:
 
 1. PostgreSQL 16 service (Zeabur managed PostgreSQL is preferred).
 2. `control-api`, built from `Dockerfile`, exposed on port 8080.
 3. `outbox-relay`, built from `Dockerfile` with entrypoint
    `/app/outbox-relay`, with no public port.
-4. `runner`, built from `Dockerfile.runner`, with no public port.
+4. `interaction-responder`, built from `Dockerfile` with entrypoint
+   `/app/interaction-responder`, with no public port.
+5. `runner`, built from `Dockerfile.runner`, with no public port.
 
 Run `/app/migrate` as a release command or one-off job before rolling either
 application workload. Give both workloads the same `CONTROL_DATABASE_URL` from
@@ -25,7 +27,7 @@ GITHUB_WEBHOOK_SECRET=<unique-random-secret>
 GITLAB_WEBHOOK_SECRET=<unique-random-secret>
 ```
 
-Set these on the runner only:
+Set these on both the runner and interaction-responder only:
 
 ```text
 OCR_BINARY=ocr
@@ -44,6 +46,6 @@ organization, register the provider installation and test one repository;
 unknown installations deliberately return 404 and are never queued.
 
 For GitHub App installations, set `credential_ref=github-app` and mount the
-read-only private-key secret to the runner only. The resolver mints short-lived
-installation tokens and does not persist them. For a public Cloudflare
-hostname, see [Cloudflare public ingress](cloudflare.md).
+read-only private-key secret to the runner and interaction-responder only. The
+resolver mints short-lived installation tokens and does not persist them. For a
+public Cloudflare hostname, see [Cloudflare public ingress](cloudflare.md).
