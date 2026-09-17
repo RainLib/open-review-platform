@@ -316,7 +316,7 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 		return rejectInteraction(ctx, tx, interactionID, "unsupported command")
 	}
 
-	run, err := createCommentRun(ctx, tx, requestID, current.HeadSHA, current.BaseSHA, input.Command, interactionID)
+	run, err := createCommentRun(ctx, tx, requestID, current, installation, input.Event, input.Command, interactionID)
 	if err != nil {
 		return domain.InteractionOutcome{}, err
 	}
@@ -346,11 +346,48 @@ func rejectInteraction(ctx context.Context, tx pgx.Tx, interactionID uuid.UUID, 
 	return domain.InteractionOutcome{Reason: reason}, nil
 }
 
-func createCommentRun(ctx context.Context, tx pgx.Tx, requestID uuid.UUID, headSHA, baseSHA, triggerKind string, interactionID uuid.UUID) (domain.ReviewRun, error) {
+// createCommentRun deliberately creates a new queueable job.  A command-triggered
+// review must not merely create an audit run: without its own review_jobs row the
+// runner would never claim it.  The last run's job supplies the immutable clone
+// and ref metadata, while the issue_comment delivery makes the retry auditable.
+func createCommentRun(ctx context.Context, tx pgx.Tx, requestID uuid.UUID, current domain.ReviewRun, installation domain.Installation, event domain.CommentEvent, triggerKind string, interactionID uuid.UUID) (domain.ReviewRun, error) {
+	if current.LegacyJobID == nil {
+		return domain.ReviewRun{}, fmt.Errorf("current review run has no execution job")
+	}
+	var deliveryID uuid.UUID
+	err := tx.QueryRow(ctx, `
+		INSERT INTO webhook_deliveries (provider, delivery_id, event_name, payload)
+		VALUES ($1, $2, 'issue_comment', $3::jsonb)
+		ON CONFLICT (provider, delivery_id) DO UPDATE
+		SET payload = webhook_deliveries.payload
+		RETURNING id`, event.Provider, event.DeliveryID, jsonPayload(map[string]any{
+		"interaction_id": interactionID.String(), "comment_id": event.CommentExternalID,
+	})).Scan(&deliveryID)
+	if err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("record comment delivery: %w", err)
+	}
+
+	job, err := scanJob(tx.QueryRow(ctx, `
+		INSERT INTO review_jobs (
+			tenant_id, installation_id, delivery_id, provider, api_base_url, repository, clone_url,
+			review_number, base_ref, base_sha, head_ref, head_sha, state
+		)
+		SELECT tenant_id, installation_id, $1, provider, api_base_url, repository, clone_url,
+		       review_number, base_ref, $2, head_ref, $3, 'queued'
+		FROM review_jobs
+		WHERE id = $4
+		RETURNING id, tenant_id, installation_id, $5::text, $6::text, delivery_id, provider, api_base_url, repository, clone_url,
+		          review_number, base_ref, base_sha, head_ref, head_sha, state, attempts,
+		          locked_by, locked_until, error_message, created_at, started_at, finished_at`,
+		deliveryID, current.BaseSHA, current.HeadSHA, *current.LegacyJobID, installation.ExternalID, installation.CredentialRef))
+	if err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("queue comment review job: %w", err)
+	}
+
 	run, err := scanReviewRun(tx.QueryRow(ctx, `
-		INSERT INTO review_runs (request_id, state, trigger_kind, head_sha, base_sha)
-		VALUES ($1, 'acknowledged', $2, $3, $4)
-		RETURNING id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, created_at, started_at, finished_at`, requestID, triggerKind, headSHA, baseSHA))
+		INSERT INTO review_runs (request_id, legacy_job_id, state, trigger_kind, head_sha, base_sha)
+		VALUES ($1, $2, 'acknowledged', $3, $4, $5)
+		RETURNING id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, created_at, started_at, finished_at`, requestID, job.ID, triggerKind, current.HeadSHA, current.BaseSHA))
 	if err != nil {
 		return domain.ReviewRun{}, fmt.Errorf("create comment review run: %w", err)
 	}

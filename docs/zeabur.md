@@ -1,10 +1,12 @@
 # Zeabur deployment
 
-Deploy this project as **three services**, not one process:
+Deploy this project as **four services**, not one process:
 
 1. PostgreSQL 16 service (Zeabur managed PostgreSQL is preferred).
 2. `control-api`, built from `Dockerfile`, exposed on port 8080.
-3. `runner`, built from `Dockerfile.runner`, with no public port.
+3. `outbox-relay`, built from `Dockerfile` with entrypoint
+   `/app/outbox-relay`, with no public port.
+4. `runner`, built from `Dockerfile.runner`, with no public port.
 
 Run `/app/migrate` as a release command or one-off job before rolling either
 application workload. Give both workloads the same `CONTROL_DATABASE_URL` from
@@ -30,7 +32,8 @@ OCR_BINARY=ocr
 OCR_VERSION=1.12.4
 RUNNER_ID=zeabur-runner-1
 RUNNER_POLL_INTERVAL=5s
-GITHUB_TOKEN=<development-only; replace with installation-token resolver>
+GITHUB_APP_ID=<GitHub App ID>
+GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app.pem
 GITLAB_TOKEN=<development-only; replace with application-token resolver>
 ```
 
@@ -40,6 +43,7 @@ Zeabur's HTTPS domain or a custom TLS domain. Before enabling a whole
 organization, register the provider installation and test one repository;
 unknown installations deliberately return 404 and are never queued.
 
-The present runner uses environment tokens only for initial controlled testing.
-For a multi-tenant public SaaS deployment, deploy the planned credential
-resolver backed by a KMS/secret manager before granting broad provider access.
+For GitHub App installations, set `credential_ref=github-app` and mount the
+same read-only private-key secret to both the API and runner. The resolver
+mints short-lived installation tokens and does not persist them. For a public
+Cloudflare hostname, see [Cloudflare public ingress](cloudflare.md).

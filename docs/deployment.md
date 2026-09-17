@@ -20,9 +20,10 @@ once for each release. The migration lock prevents concurrent application.
    service's audience; production will not start in development-auth mode.
 4. Run workers without host mounts, privileged mode, Docker sockets, or
    persistent repository workspaces. Each job gets a new temporary checkout.
-5. Replace development `GITHUB_TOKEN`/`GITLAB_TOKEN` with short-lived
-   installation tokens obtained by the provider-credential service. Never put
-   a token in a webhook, job payload, log, review comment, or database column.
+5. Use the built-in GitHub App resolver (`credential_ref=github-app`) to mint
+   short-lived installation tokens. Never put a token in a webhook, job
+   payload, log, review comment, or database column. GitLab remains a
+   separately configured provider credential.
 6. Set a retention policy for raw webhook payloads and audit logs according to
    the tenant's data-residency and privacy requirements.
 
@@ -38,7 +39,11 @@ once for each release. The migration lock prevents concurrent application.
 5. Confirm the runner is consuming jobs and that comments are published using
    an installation identity, not a personal access token.
 
-The first code increment contains the schema, verification, and runner seams.
-The credential vault, GitHub App JWT exchange, GitLab OAuth/application token
-exchange, dashboard CRUD, and encrypted secret reference implementation should
-be completed before a public SaaS launch.
+The GitHub App JWT exchange is implemented. The GitLab OAuth/application-token
+broker, dashboard CRUD, and encrypted secret-reference management remain
+required before a broad multi-tenant public launch.
+
+For a Cloudflare-fronted installation, use the public ingress layout in
+[Cloudflare public ingress](cloudflare.md). Cloudflare terminates HTTPS and
+forwards only to the private `control-api`; it is not a replacement for the
+stateful database, broker, relay, or runner.
