@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
@@ -383,33 +384,37 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 	if input.Command == "invalid" {
 		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "invalid command; use @openreview help")
 	}
+	selectedRunID, err := resolveInteractionRunTarget(ctx, tx, requestID, currentRunID, input.Command, input.Target)
+	if err != nil {
+		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "review run id is invalid or does not belong to this pull request")
+	}
 	if input.Command == "help" || input.Command == "status" {
 		var body string
 		if input.Command == "help" {
-			body = "Available commands: `@openreview review [standard|deep|security]`, `@openreview status`, `@openreview cancel`, and `@openreview retry`."
-		} else if currentRunID == nil {
+			body = "Available commands: `@openreview review [--mode=standard|deep|security]`, `@openreview status [run-id]`, `@openreview cancel [run-id]`, and `@openreview retry [run-id]`."
+		} else if selectedRunID == nil {
 			body = "There is no review run for this pull request yet."
 		} else {
 			var state domain.RunState
-			if err := tx.QueryRow(ctx, `SELECT state FROM review_runs WHERE id = $1`, *currentRunID).Scan(&state); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT state FROM review_runs WHERE id = $1`, *selectedRunID).Scan(&state); err != nil {
 				return domain.InteractionOutcome{}, fmt.Errorf("load review status: %w", err)
 			}
-			body = fmt.Sprintf("Review run `%s` is currently **%s**.", currentRunID.String(), state)
+			body = fmt.Sprintf("Review run `%s` is currently **%s**.", selectedRunID.String(), state)
 		}
-		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, currentRunID, false, body); err != nil {
+		if err := acceptInteraction(ctx, tx, installation, input.Event, interactionID, selectedRunID, false, body); err != nil {
 			return domain.InteractionOutcome{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return domain.InteractionOutcome{}, fmt.Errorf("commit read-only interaction: %w", err)
 		}
-		return domain.InteractionOutcome{Accepted: true, RunID: currentRunID, Reason: "command accepted"}, nil
+		return domain.InteractionOutcome{Accepted: true, RunID: selectedRunID, Reason: "command accepted"}, nil
 	}
-	if currentRunID == nil {
+	if selectedRunID == nil {
 		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "no review run is available for this pull request")
 	}
 	current, err := scanReviewRun(tx.QueryRow(ctx, `
 		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, rule_snapshot_id, created_at, started_at, finished_at
-		FROM review_runs WHERE id = $1 FOR UPDATE`, *currentRunID))
+		FROM review_runs WHERE id = $1 AND request_id = $2 FOR UPDATE`, *selectedRunID, requestID))
 	if err != nil {
 		return domain.InteractionOutcome{}, fmt.Errorf("load current review run: %w", err)
 	}
@@ -464,6 +469,30 @@ func commandAllowed(role, command string) bool {
 		return role == "owner" || role == "admin" || role == "reviewer" || role == "viewer"
 	}
 	return role == "owner" || role == "admin" || role == "reviewer"
+}
+
+// resolveInteractionRunTarget accepts an explicit run id only for commands
+// that operate on task state. The lookup is scoped to the already-locked
+// request, so an otherwise valid UUID from another tenant or pull request is
+// indistinguishable from a missing run to the caller.
+func resolveInteractionRunTarget(ctx context.Context, tx pgx.Tx, requestID uuid.UUID, currentRunID *uuid.UUID, command, target string) (*uuid.UUID, error) {
+	if command != "status" && command != "cancel" && command != "retry" {
+		return currentRunID, nil
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return currentRunID, nil
+	}
+	runID, err := uuid.Parse(target)
+	if err != nil {
+		return nil, err
+	}
+	var resolved uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id FROM review_runs WHERE id = $1 AND request_id = $2`, runID, requestID).Scan(&resolved)
+	if err != nil {
+		return nil, err
+	}
+	return &resolved, nil
 }
 
 func acceptInteraction(ctx context.Context, tx pgx.Tx, installation domain.Installation, event domain.CommentEvent, interactionID uuid.UUID, runID *uuid.UUID, releaseRun bool, body string) error {

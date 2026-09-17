@@ -23,3 +23,16 @@ func TestParseNormalizesAndRejectsAmbiguity(t *testing.T) {
 		t.Fatalf("bare mention should request help: %#v %v %v", command, mentioned, err)
 	}
 }
+
+func TestParseAllowsOneExplicitRunTargetForTaskCommands(t *testing.T) {
+	target := "109870c4-f3e3-4a38-9dcd-0a30c4e72cd9"
+	for _, kind := range []Kind{Status, Cancel, Retry} {
+		command, mentioned, err := Parse("@openreview " + string(kind) + " " + target)
+		if err != nil || !mentioned || command.Kind != kind || command.Target != target || command.Normalized != "@openreview "+string(kind)+" "+target {
+			t.Fatalf("unexpected %s command: %#v mentioned=%v err=%v", kind, command, mentioned, err)
+		}
+	}
+	if _, mentioned, err := Parse("@openreview status one two"); !mentioned || err == nil {
+		t.Fatal("multiple run ids must be rejected")
+	}
+}

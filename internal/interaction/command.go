@@ -16,8 +16,12 @@ const (
 )
 
 type Command struct {
-	Kind       Kind
-	Mode       string
+	Kind Kind
+	Mode string
+	// Target is an optional review-run UUID for status, cancel, and retry.
+	// Parsing leaves UUID validation to the authoritative control-plane store,
+	// which can also verify that the run belongs to this pull request.
+	Target     string
 	Normalized string
 }
 
@@ -38,9 +42,6 @@ func Parse(body string) (Command, bool, error) {
 		return Command{}, true, fmt.Errorf("unknown Open Review command %q", fields[1])
 	}
 	command := Command{Kind: kind, Normalized: "@openreview " + string(kind)}
-	if kind != Review && len(fields) > 2 {
-		return Command{}, true, fmt.Errorf("%s does not accept arguments", kind)
-	}
 	if kind == Review {
 		for _, argument := range fields[2:] {
 			if !strings.HasPrefix(argument, "--mode=") {
@@ -56,6 +57,16 @@ func Parse(body string) (Command, bool, error) {
 			command.Mode = mode
 			command.Normalized += " --mode=" + mode
 		}
+	} else if kind == Status || kind == Cancel || kind == Retry {
+		if len(fields) > 3 {
+			return Command{}, true, fmt.Errorf("%s accepts at most one review run id", kind)
+		}
+		if len(fields) == 3 {
+			command.Target = fields[2]
+			command.Normalized += " " + command.Target
+		}
+	} else if len(fields) > 2 {
+		return Command{}, true, fmt.Errorf("%s does not accept arguments", kind)
 	}
 	return command, true, nil
 }

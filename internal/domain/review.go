@@ -197,6 +197,7 @@ type InteractionCommand struct {
 	Event      CommentEvent
 	Command    string
 	Mode       string
+	Target     string
 	Normalized string
 }
 

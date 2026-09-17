@@ -550,7 +550,7 @@ func (s *Server) providerComment(ctx context.Context, w http.ResponseWriter, nor
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	input := domain.InteractionCommand{Event: event, Command: string(parsed.Kind), Mode: parsed.Mode, Normalized: parsed.Normalized}
+	input := domain.InteractionCommand{Event: event, Command: string(parsed.Kind), Mode: parsed.Mode, Target: parsed.Target, Normalized: parsed.Normalized}
 	if parseErr != nil {
 		input.Command, input.Normalized = "invalid", strings.TrimSpace(event.Body)
 	}
