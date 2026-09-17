@@ -62,3 +62,35 @@ func TestPublishInteractionResponseUpdatesExistingMarker(t *testing.T) {
 		t.Fatal("expected existing interaction comment to be updated")
 	}
 }
+
+func TestPublishGitLabInteractionResponseCreatesNote(t *testing.T) {
+	marker := "open-review-platform:interaction:gitlab"
+	var sawPost bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/projects/acme/demo/merge_requests/4/notes":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/projects/acme/demo/merge_requests/4/notes":
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "queued") || !strings.Contains(string(body), marker) {
+				t.Fatalf("unexpected interaction body: %s", body)
+			}
+			sawPost = true
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	publisher := &HTTPPublisher{client: server.Client(), resolver: tokenResolver{}}
+	err := publisher.PublishInteractionResponse(context.Background(), domain.InteractionResponse{
+		Provider: domain.ProviderGitLab, APIBaseURL: server.URL, InstallationExternalID: "42", CredentialRef: "gitlab-token",
+		Repository: "acme/demo", ReviewNumber: 4, Body: "Review is queued.", Marker: marker,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawPost {
+		t.Fatal("expected interaction note to be created")
+	}
+}

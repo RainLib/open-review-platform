@@ -65,7 +65,7 @@ func (*recordingStore) AdvanceLegacyRun(context.Context, uuid.UUID, domain.RunSt
 
 func TestGitHubIssueCommentCommandIsVerifiedAndNormalized(t *testing.T) {
 	secret := "secret"
-	body := []byte(`{"action":"created","installation":{"id":123},"repository":{"full_name":"acme/api"},"issue":{"number":42,"pull_request":{"url":"https://api.github.com/repos/acme/api/pulls/42"}},"comment":{"id":99,"body":"@openreview review --mode=deep","user":{"id":7}}}`)
+	body := []byte(`{"action":"created","installation":{"id":123},"repository":{"full_name":"acme/api","clone_url":"https://github.com/acme/api.git"},"issue":{"number":42,"pull_request":{"url":"https://api.github.com/repos/acme/api/pulls/42"}},"comment":{"id":99,"body":"@openreview review --mode=deep","user":{"id":7}}}`)
 	recording := &recordingStore{}
 	server := New(recording, nil, secret, "")
 	mux := http.NewServeMux()

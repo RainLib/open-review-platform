@@ -71,8 +71,11 @@ func (p *HTTPPublisher) PublishInteractionResponse(ctx context.Context, response
 	if err != nil {
 		return err
 	}
+	if response.Provider == domain.ProviderGitLab {
+		return p.publishGitLabInteractionResponse(ctx, response, token)
+	}
 	if response.Provider != domain.ProviderGitHub {
-		return fmt.Errorf("interaction responses are not implemented for provider %q", response.Provider)
+		return fmt.Errorf("unsupported interaction provider %q", response.Provider)
 	}
 	base := strings.TrimSuffix(response.APIBaseURL, "/")
 	if base == "" {
@@ -91,6 +94,30 @@ func (p *HTTPPublisher) PublishInteractionResponse(ctx context.Context, response
 		if strings.Contains(comment.Body, response.Marker) {
 			endpoint := fmt.Sprintf("%s/repos/%s/issues/comments/%d", base, response.Repository, comment.ID)
 			return p.requestJSON(ctx, http.MethodPatch, endpoint, token, map[string]string{"body": body}, nil)
+		}
+	}
+	return p.requestJSON(ctx, http.MethodPost, endpoint, token, map[string]string{"body": body}, nil)
+}
+
+func (p *HTTPPublisher) publishGitLabInteractionResponse(ctx context.Context, response domain.InteractionResponse, token string) error {
+	base := strings.TrimSuffix(response.APIBaseURL, "/")
+	if base == "" {
+		base = "https://gitlab.com/api/v4"
+	}
+	project := url.PathEscape(response.Repository)
+	body := "## Open Review Platform\n\n" + response.Body + "\n\n<!-- " + response.Marker + " -->"
+	endpoint := fmt.Sprintf("%s/projects/%s/merge_requests/%d/notes?per_page=100", base, project, response.ReviewNumber)
+	var comments []struct {
+		ID   int64  `json:"id"`
+		Body string `json:"body"`
+	}
+	if err := p.requestJSON(ctx, http.MethodGet, endpoint, token, nil, &comments); err != nil {
+		return fmt.Errorf("list GitLab interaction notes: %w", err)
+	}
+	for _, comment := range comments {
+		if strings.Contains(comment.Body, response.Marker) {
+			endpoint := fmt.Sprintf("%s/projects/%s/merge_requests/%d/notes/%d", base, project, response.ReviewNumber, comment.ID)
+			return p.requestJSON(ctx, http.MethodPut, endpoint, token, map[string]string{"body": body}, nil)
 		}
 	}
 	return p.requestJSON(ctx, http.MethodPost, endpoint, token, map[string]string{"body": body}, nil)

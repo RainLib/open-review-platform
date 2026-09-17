@@ -84,6 +84,7 @@ func NormalizeGitHubIssueComment(deliveryID string, body []byte) (domain.Comment
 		} `json:"installation"`
 		Repository struct {
 			FullName string `json:"full_name"`
+			CloneURL string `json:"clone_url"`
 		} `json:"repository"`
 		Issue struct {
 			Number      int       `json:"number"`
@@ -105,10 +106,55 @@ func NormalizeGitHubIssueComment(deliveryID string, body []byte) (domain.Comment
 	if payload.Action != "created" || payload.Issue.PullRequest == nil {
 		return domain.CommentEvent{}, false, nil
 	}
-	if deliveryID == "" || payload.Installation.ID == "" || payload.Repository.FullName == "" || payload.Issue.Number <= 0 || payload.Comment.ID == "" || payload.Comment.User.ID == "" {
+	if deliveryID == "" || payload.Installation.ID == "" || payload.Repository.FullName == "" || payload.Repository.CloneURL == "" || payload.Issue.Number <= 0 || payload.Comment.ID == "" || payload.Comment.User.ID == "" {
 		return domain.CommentEvent{}, false, fmt.Errorf("GitHub issue_comment payload is missing required review fields")
 	}
-	return domain.CommentEvent{Provider: domain.ProviderGitHub, DeliveryID: deliveryID, InstallationExternalID: payload.Installation.ID.String(), Repository: payload.Repository.FullName, ReviewNumber: payload.Issue.Number, CommentExternalID: payload.Comment.ID.String(), ActorExternalID: payload.Comment.User.ID.String(), Body: payload.Comment.Body}, true, nil
+	return domain.CommentEvent{Provider: domain.ProviderGitHub, APIBaseURL: apiBaseURL(domain.ProviderGitHub, payload.Repository.CloneURL), DeliveryID: deliveryID, InstallationExternalID: payload.Installation.ID.String(), Repository: payload.Repository.FullName, ReviewNumber: payload.Issue.Number, CommentExternalID: payload.Comment.ID.String(), ActorExternalID: payload.Comment.User.ID.String(), Body: payload.Comment.Body}, true, nil
+}
+
+// NormalizeGitLabNoteComment accepts notes authored on a merge request. It
+// deliberately excludes issue, commit, and snippet notes so @openreview cannot
+// start work outside a registered code-review target.
+func NormalizeGitLabNoteComment(deliveryID string, body []byte) (domain.CommentEvent, bool, error) {
+	var payload struct {
+		Project struct {
+			ID                json.Number `json:"id"`
+			PathWithNamespace string      `json:"path_with_namespace"`
+			HTTPURL           string      `json:"http_url"`
+		} `json:"project"`
+		MergeRequest struct {
+			IID int `json:"iid"`
+		} `json:"merge_request"`
+		ObjectAttributes struct {
+			Action       string      `json:"action"`
+			ID           json.Number `json:"id"`
+			Note         string      `json:"note"`
+			NoteableType string      `json:"noteable_type"`
+		} `json:"object_attributes"`
+		User struct {
+			ID json.Number `json:"id"`
+		} `json:"user"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return domain.CommentEvent{}, false, fmt.Errorf("decode GitLab note payload: %w", err)
+	}
+	if payload.ObjectAttributes.Action != "create" || payload.ObjectAttributes.NoteableType != "MergeRequest" {
+		return domain.CommentEvent{}, false, nil
+	}
+	if deliveryID == "" {
+		hash := sha256.Sum256(body)
+		deliveryID = "body-sha256:" + hex.EncodeToString(hash[:])
+	}
+	if payload.Project.ID == "" || payload.Project.PathWithNamespace == "" || payload.Project.HTTPURL == "" || payload.MergeRequest.IID <= 0 || payload.ObjectAttributes.ID == "" || payload.User.ID == "" {
+		return domain.CommentEvent{}, false, fmt.Errorf("GitLab note payload is missing required review fields")
+	}
+	return domain.CommentEvent{
+		Provider: domain.ProviderGitLab, APIBaseURL: apiBaseURL(domain.ProviderGitLab, payload.Project.HTTPURL), DeliveryID: deliveryID,
+		InstallationExternalID: payload.Project.ID.String(), Repository: payload.Project.PathWithNamespace, ReviewNumber: payload.MergeRequest.IID,
+		CommentExternalID: payload.ObjectAttributes.ID.String(), ActorExternalID: payload.User.ID.String(), Body: payload.ObjectAttributes.Note,
+	}, true, nil
 }
 
 func NormalizeGitLab(deliveryID, eventName string, body []byte, now time.Time) (domain.InboundEvent, bool, error) {

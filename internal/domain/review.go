@@ -90,6 +90,7 @@ type InboundEvent struct {
 // parse an explicit review command. Provider credentials are never embedded.
 type CommentEvent struct {
 	Provider               Provider
+	APIBaseURL             string
 	DeliveryID             string
 	InstallationExternalID string
 	Repository             string

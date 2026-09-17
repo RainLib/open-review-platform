@@ -207,7 +207,7 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 	err = tx.QueryRow(ctx, `
 		SELECT id, tenant_id, provider, external_id, repository_scope, api_base_url, credential_ref, active
 		FROM provider_installations
-		WHERE provider = $1 AND external_id = $2 AND active = TRUE`, input.Event.Provider, input.Event.InstallationExternalID).
+		WHERE provider = $1 AND api_base_url = $2 AND external_id = $3 AND active = TRUE`, input.Event.Provider, input.Event.APIBaseURL, input.Event.InstallationExternalID).
 		Scan(&installation.ID, &installation.TenantID, &installation.Provider, &installation.ExternalID, &installation.RepositoryScope, &installation.APIBaseURL, &installation.CredentialRef, &installation.Active)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.InteractionOutcome{}, ErrUnknownInstallation

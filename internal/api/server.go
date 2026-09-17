@@ -350,14 +350,16 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		event, accepted, err := webhook.NormalizeGitHub(r.Header.Get("X-GitHub-Delivery"), "pull_request", body, s.now())
 		s.enqueueNormalized(r.Context(), w, event, accepted, err)
 	case "issue_comment":
-		s.githubIssueComment(r.Context(), w, r.Header.Get("X-GitHub-Delivery"), body)
+		s.providerComment(r.Context(), w, webhook.NormalizeGitHubIssueComment, r.Header.Get("X-GitHub-Delivery"), body)
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-func (s *Server) githubIssueComment(ctx context.Context, w http.ResponseWriter, deliveryID string, body []byte) {
-	event, accepted, err := webhook.NormalizeGitHubIssueComment(deliveryID, body)
+type commentNormalizer func(string, []byte) (domain.CommentEvent, bool, error)
+
+func (s *Server) providerComment(ctx context.Context, w http.ResponseWriter, normalize commentNormalizer, deliveryID string, body []byte) {
+	event, accepted, err := normalize(deliveryID, body)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid webhook payload"})
 		return
@@ -400,8 +402,16 @@ func (s *Server) gitlabWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid webhook token"})
 		return
 	}
-	event, accepted, err := webhook.NormalizeGitLab(r.Header.Get("X-Gitlab-Event-UUID"), r.Header.Get("X-Gitlab-Event"), body, s.now())
-	s.enqueueNormalized(r.Context(), w, event, accepted, err)
+	deliveryID := r.Header.Get("X-Gitlab-Event-UUID")
+	switch r.Header.Get("X-Gitlab-Event") {
+	case "Merge Request Hook":
+		event, accepted, err := webhook.NormalizeGitLab(deliveryID, "Merge Request Hook", body, s.now())
+		s.enqueueNormalized(r.Context(), w, event, accepted, err)
+	case "Note Hook":
+		s.providerComment(r.Context(), w, webhook.NormalizeGitLabNoteComment, deliveryID, body)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 func (s *Server) enqueueNormalized(ctx context.Context, w http.ResponseWriter, event domain.InboundEvent, accepted bool, normalizeErr error) {
