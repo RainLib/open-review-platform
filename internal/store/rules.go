@@ -359,6 +359,48 @@ func (s *PostgresStore) CreateRuleBinding(ctx context.Context, actor, tenantSlug
 	return result, nil
 }
 
+// UpdateRuleBinding changes only the lifecycle state of an existing binding.
+// This makes shadow rollout and immediate rollback explicit audit events while
+// preserving the immutable snapshot used by already-admitted review runs.
+func (s *PostgresStore) UpdateRuleBinding(ctx context.Context, actor, tenantSlug string, bindingID uuid.UUID, input domain.RuleBindingUpdateInput) (domain.RuleBinding, error) {
+	input.State = strings.ToLower(strings.TrimSpace(input.State))
+	if bindingID == uuid.Nil || (input.State != "active" && input.State != "shadow" && input.State != "disabled") {
+		return domain.RuleBinding{}, fmt.Errorf("rule binding update is invalid")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.RuleBinding{}, fmt.Errorf("begin rule binding update: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tenantID, role, err := authorizedTenantTx(ctx, tx, actor, tenantSlug)
+	if err != nil {
+		return domain.RuleBinding{}, err
+	}
+	if !canManageRules(role) {
+		return domain.RuleBinding{}, ErrForbidden
+	}
+	result := domain.RuleBinding{}
+	err = tx.QueryRow(ctx, `
+		UPDATE rule_bindings
+		SET state = $3, updated_at = now()
+		WHERE id = $1 AND tenant_id = $2
+		RETURNING id, tenant_id, rule_version_id, scope_kind, scope_ref, precedence, target_branch_glob, path_include_glob, path_exclude_glob, state, created_by, created_at, updated_at`, bindingID, tenantID, input.State).
+		Scan(&result.ID, &result.TenantID, &result.RuleVersionID, &result.ScopeKind, &result.ScopeRef, &result.Precedence, &result.TargetBranchGlob, &result.PathIncludeGlob, &result.PathExcludeGlob, &result.State, &result.CreatedBy, &result.CreatedAt, &result.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RuleBinding{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.RuleBinding{}, fmt.Errorf("update rule binding: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_binding.state_updated', $3, jsonb_build_object('state', $4::text))`, tenantID, actor, result.ID.String(), result.State); err != nil {
+		return domain.RuleBinding{}, fmt.Errorf("audit rule binding update: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.RuleBinding{}, fmt.Errorf("commit rule binding update: %w", err)
+	}
+	return result, nil
+}
+
 func (s *PostgresStore) ListRuleBindings(ctx context.Context, actor, tenantSlug string, limit int) ([]domain.RuleBinding, error) {
 	if limit < 1 || limit > 100 {
 		return nil, fmt.Errorf("rule binding limit must be from 1 to 100")

@@ -160,6 +160,13 @@ type RuleBinding struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+// RuleBindingUpdateInput intentionally exposes only lifecycle state. Changing
+// scope or precedence creates a new auditable binding instead of mutating the
+// meaning of prior governance decisions.
+type RuleBindingUpdateInput struct {
+	State string `json:"state"`
+}
+
 // RuleSnapshot is the immutable, canonical rule resolution attached to a
 // review run. It never contains provider credentials or pull-request content.
 type RuleSnapshot struct {

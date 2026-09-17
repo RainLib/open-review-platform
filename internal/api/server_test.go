@@ -58,6 +58,10 @@ func (*recordingStore) CreateRuleBinding(context.Context, string, string, domain
 	return domain.RuleBinding{}, nil
 }
 
+func (*recordingStore) UpdateRuleBinding(context.Context, string, string, uuid.UUID, domain.RuleBindingUpdateInput) (domain.RuleBinding, error) {
+	return domain.RuleBinding{}, nil
+}
+
 func (*recordingStore) ListRuleBindings(context.Context, string, string, int) ([]domain.RuleBinding, error) {
 	return nil, nil
 }

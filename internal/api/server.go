@@ -54,6 +54,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-approval-requests/{requestID}/decisions", s.decideRuleApproval)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-sets/{ruleSetID}/versions/{version}/publish", s.publishRuleVersion)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-bindings", s.createRuleBinding)
+	mux.HandleFunc("PATCH /v1/tenants/{slug}/rule-bindings/{bindingID}", s.updateRuleBinding)
 	mux.HandleFunc("GET /v1/tenants/{slug}/rule-bindings", s.listRuleBindings)
 	mux.HandleFunc("PUT /v1/tenants/{slug}/provider-identities/{provider}/{externalID}", s.upsertProviderIdentity)
 	mux.HandleFunc("GET /v1/tenants/{slug}/runs", s.listRuns)
@@ -339,6 +340,37 @@ func (s *Server) createRuleBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, binding)
+}
+
+func (s *Server) updateRuleBinding(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	bindingID, err := uuid.Parse(r.PathValue("bindingID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule binding id is invalid"})
+		return
+	}
+	var input domain.RuleBindingUpdateInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	binding, err := s.store.UpdateRuleBinding(r.Context(), principal.Subject, r.PathValue("slug"), bindingID, input)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "rule administrator role is required"})
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "rule binding was not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule binding state is invalid"})
+		return
+	}
+	writeJSON(w, http.StatusOK, binding)
 }
 
 func (s *Server) listRuleBindings(w http.ResponseWriter, r *http.Request) {
