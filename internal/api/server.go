@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -158,6 +159,7 @@ func (s *Server) createRuleSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		slog.Warn("rejecting invalid rule set", "tenant", r.PathValue("slug"), "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule set is invalid"})
 		return
 	}

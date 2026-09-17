@@ -61,16 +61,18 @@ func (s *PostgresStore) CreateRuleSet(ctx context.Context, actor, tenantSlug str
 	if err != nil {
 		return domain.RuleSetWithDraft{}, fmt.Errorf("create rule set: %w", err)
 	}
+	var draftRules []byte
 	err = tx.QueryRow(ctx, `
 		INSERT INTO rule_versions (rule_set_id, version, state, rules, content_sha256, created_by)
 		VALUES ($1, 1, 'draft', $2::jsonb, $3, $4)
 		RETURNING id, rule_set_id, version, revision, state, rules, content_sha256, created_by, created_at, updated_at`,
 		result.RuleSet.ID, string(canonicalRules), compiled.SHA256, actor).
-		Scan(&result.Draft.ID, &result.Draft.RuleSetID, &result.Draft.Version, &result.Draft.Revision, &result.Draft.State, &result.Draft.Rules, &result.Draft.ContentSHA256, &result.Draft.CreatedBy, &result.Draft.CreatedAt, &result.Draft.UpdatedAt)
+		Scan(&result.Draft.ID, &result.Draft.RuleSetID, &result.Draft.Version, &result.Draft.Revision, &result.Draft.State, &draftRules, &result.Draft.ContentSHA256, &result.Draft.CreatedBy, &result.Draft.CreatedAt, &result.Draft.UpdatedAt)
 	if err != nil {
 		return domain.RuleSetWithDraft{}, fmt.Errorf("create draft rule version: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_set.created', $3, jsonb_build_object('rule_version_id', $4, 'content_sha256', $5))`, tenantID, actor, result.RuleSet.ID.String(), result.Draft.ID.String(), result.Draft.ContentSHA256); err != nil {
+	result.Draft.Rules = json.RawMessage(draftRules)
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_set.created', $3, jsonb_build_object('rule_version_id', $4::text, 'content_sha256', $5::text))`, tenantID, actor, result.RuleSet.ID.String(), result.Draft.ID.String(), result.Draft.ContentSHA256); err != nil {
 		return domain.RuleSetWithDraft{}, fmt.Errorf("audit rule set creation: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
