@@ -59,6 +59,10 @@ func (*recordingStore) RequestRunCancellation(context.Context, string, string, u
 	return domain.ReviewRun{}, nil
 }
 
+func (*recordingStore) AdvanceRun(context.Context, uuid.UUID, domain.RunState) (domain.ReviewRun, error) {
+	return domain.ReviewRun{}, nil
+}
+
 func (*recordingStore) AdvanceLegacyRun(context.Context, uuid.UUID, domain.RunState) (domain.ReviewRun, error) {
 	return domain.ReviewRun{}, nil
 }
@@ -101,6 +105,10 @@ func (s *recordingStore) Enqueue(_ context.Context, event domain.InboundEvent) (
 }
 
 func (*recordingStore) Claim(context.Context, string) (*domain.ReviewJob, error) {
+	return nil, store.ErrNoQueuedJob
+}
+
+func (*recordingStore) ClaimForRun(context.Context, string, uuid.UUID) (*domain.ReviewJob, error) {
 	return nil, store.ErrNoQueuedJob
 }
 

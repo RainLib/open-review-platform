@@ -23,7 +23,7 @@ The current implementation includes:
   deliveries, durable review jobs, findings, and audit events;
 - delivery-level idempotency, a transactional outbox, and a consumer inbox;
 - revisioned review runs with durable stage events and SSE task updates;
-- separate relay, interaction-responder, and runner processes;
+- separate relay, acknowledger, interaction-responder, and runner processes;
 - an OCR adapter that executes `ocr review --from … --to … --format json` in a
   temporary repository checkout; and
 - GitHub App installation-token exchange immediately before GitHub reads or
@@ -63,6 +63,7 @@ npm install --global @alibaba-group/open-code-review@1.12.4
 go run ./cmd/migrate
 go run ./cmd/control-api
 go run ./cmd/outbox-relay
+go run ./cmd/acknowledger
 go run ./cmd/interaction-responder
 go run ./cmd/runner
 ```

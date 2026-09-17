@@ -1,6 +1,6 @@
 # Zeabur deployment
 
-Deploy this project as **six services**, not one process:
+Deploy this project as **seven services**, not one process:
 
 1. PostgreSQL 16 service (Zeabur managed PostgreSQL is preferred).
 2. RabbitMQ 4.1 with the management image and quorum-queue support; keep it
@@ -10,7 +10,9 @@ Deploy this project as **six services**, not one process:
    `/app/outbox-relay`, with no public port.
 5. `interaction-responder`, built from `Dockerfile` with entrypoint
    `/app/interaction-responder`, with no public port.
-6. `runner`, built from `Dockerfile.runner`, with no public port.
+6. `acknowledger`, built from `Dockerfile` with entrypoint `/app/acknowledger`,
+   with no public port.
+7. `runner`, built from `Dockerfile.runner`, with no public port.
 
 Run `/app/migrate` as a release command or one-off job before rolling either
 application workload. Give both workloads the same `CONTROL_DATABASE_URL` from
@@ -40,6 +42,11 @@ GITHUB_APP_ID=<GitHub App ID>
 GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app.pem
 GITLAB_TOKEN=<development-only; replace with application-token resolver>
 ```
+
+The runner also needs one OpenCodeReview model route. Set either the native OCR
+configuration (`OCR_LLM_URL`, `OCR_LLM_TOKEN`, `OCR_LLM_MODEL`) or the
+equivalent provider variables supported by the pinned OCR release. Do not set
+model tokens on `control-api`, `outbox-relay`, or `acknowledger`.
 
 Create provider webhooks with `https://<control-api-domain>/v1/webhooks/github`
 and `https://<control-api-domain>/v1/webhooks/gitlab`. Keep the API behind

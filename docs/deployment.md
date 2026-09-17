@@ -2,8 +2,9 @@
 
 ## Services
 
-Run `control-api` and `runner` as separate workloads with distinct service
-accounts. Both need PostgreSQL access. Only `control-api` receives public
+Run `control-api`, `outbox-relay`, `acknowledger`, `interaction-responder`, and
+`runner` as separate workloads with distinct service accounts. All need the
+private PostgreSQL/RabbitMQ network. Only `control-api` receives public
 webhooks; only `runner` needs Git and the OCR executable.
 
 Use managed PostgreSQL or a PostgreSQL 16 StatefulSet with backups, point both
@@ -36,8 +37,10 @@ once for each release. The migration lock prevents concurrent application.
 4. Send a provider test delivery. It must return `202` only for a known active
    installation; repeats return `202` with `duplicate: true` and create no
    second job.
-5. Confirm the runner is consuming jobs and that comments are published using
-   an installation identity, not a personal access token.
+5. Confirm the acknowledger is consuming `review.run.acknowledged`, the runner
+   is consuming `review.run.admitted`, and comments are published using an
+   installation identity, not a personal access token. The runner's database
+   poller is only the recovery path for a lost broker notification.
 
 The GitHub App JWT exchange is implemented. The GitLab OAuth/application-token
 broker, dashboard CRUD, and encrypted secret-reference management remain

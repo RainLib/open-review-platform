@@ -104,6 +104,24 @@ services:
     tmpfs:
       - /tmp
 
+  acknowledger:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/app/acknowledger"]
+    env_file: .env
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+
   runner:
     build:
       context: .
@@ -111,6 +129,7 @@ services:
     env_file: .env
     environment:
       CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
     depends_on:
       migrate:
         condition: service_completed_successfully

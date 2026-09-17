@@ -2,8 +2,8 @@
 
 The control plane stays a normal stateful Go deployment. Cloudflare provides
 the public HTTPS edge for Git provider webhooks; PostgreSQL, RabbitMQ, the
-outbox relay, interaction responder, and OCR runner stay on the private
-application network.
+outbox relay, acknowledger, interaction responder, and OCR runner stay on the
+private application network.
 
 ## Provisioned verification endpoint
 
@@ -47,7 +47,8 @@ requests and issues so it can publish review findings and command responses.
 Set `GITHUB_WEBHOOK_SECRET` on `control-api`. Set `GITHUB_APP_ID` and
 `GITHUB_APP_PRIVATE_KEY_PATH` on `runner` and `interaction-responder` only; use
 `credential_ref=github-app` when registering the provider installation. This
-keeps GitHub write capability out of the public webhook process.
+keeps GitHub write capability out of the public webhook process. The
+`acknowledger` needs only PostgreSQL and RabbitMQ credentials.
 
 ## Acceptance checks
 

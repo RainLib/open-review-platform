@@ -35,6 +35,23 @@ func (p Processor) RunOnce(ctx context.Context) (worked bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	return p.runClaimed(ctx, job)
+}
+
+// RunForRun is called by the RabbitMQ execution consumer. The broker payload
+// names one run, so this method cannot accidentally claim another queued job.
+func (p Processor) RunForRun(ctx context.Context, runID uuid.UUID) (worked bool, err error) {
+	job, err := p.Store.ClaimForRun(ctx, p.WorkerID, runID)
+	if errors.Is(err, store.ErrNoQueuedJob) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return p.runClaimed(ctx, job)
+}
+
+func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worked bool, err error) {
 	worked = true
 	if err := p.advance(ctx, job.ID, domain.RunAdmitted); err != nil {
 		return true, err

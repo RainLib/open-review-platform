@@ -31,9 +31,15 @@ type Store interface {
 	GetReviewRun(ctx context.Context, actor, tenantSlug string, runID uuid.UUID) (domain.ReviewRunSummary, error)
 	ListRunEvents(ctx context.Context, actor, tenantSlug string, runID uuid.UUID, afterRevision int) ([]domain.RunEvent, error)
 	RequestRunCancellation(ctx context.Context, actor, tenantSlug string, runID uuid.UUID, expectedRevision int) (domain.ReviewRun, error)
+	// AdvanceRun is used by durable stage consumers that receive a review-run
+	// message before a runner has claimed its backing job.
+	AdvanceRun(ctx context.Context, runID uuid.UUID, next domain.RunState) (domain.ReviewRun, error)
 	AdvanceLegacyRun(ctx context.Context, jobID uuid.UUID, next domain.RunState) (domain.ReviewRun, error)
 	Enqueue(ctx context.Context, event domain.InboundEvent) (job domain.ReviewJob, duplicate bool, err error)
 	Claim(ctx context.Context, workerID string) (*domain.ReviewJob, error)
+	// ClaimForRun makes a broker message an execution hint for its own run,
+	// rather than allowing a consumer to claim an unrelated tenant job.
+	ClaimForRun(ctx context.Context, workerID string, runID uuid.UUID) (*domain.ReviewJob, error)
 	SaveFindings(ctx context.Context, jobID uuid.UUID, findings []domain.Finding) error
 	Succeed(ctx context.Context, jobID uuid.UUID, workerID string) error
 	Fail(ctx context.Context, jobID uuid.UUID, workerID, message string) error

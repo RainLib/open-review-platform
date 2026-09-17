@@ -215,6 +215,36 @@ func (s *PostgresStore) Claim(ctx context.Context, workerID string) (*domain.Rev
 	return &job, nil
 }
 
+// ClaimForRun is the queue-driven counterpart of Claim. It uses the immutable
+// review-run identifier carried by the outbox payload, so a busy tenant cannot
+// cause a consumer to work an unrelated queued job.
+func (s *PostgresStore) ClaimForRun(ctx context.Context, workerID string, runID uuid.UUID) (*domain.ReviewJob, error) {
+	job, err := scanJob(s.pool.QueryRow(ctx, `
+		WITH candidate AS (
+			SELECT j.id
+			FROM review_jobs j
+			JOIN review_runs r ON r.legacy_job_id = j.id
+			WHERE r.id = $2
+			  AND ((j.state = 'queued' AND j.available_at <= now()) OR (j.state = 'running' AND j.locked_until < now()))
+			FOR UPDATE OF j SKIP LOCKED
+		)
+		UPDATE review_jobs AS j
+		SET state = 'running', attempts = attempts + 1, locked_by = $1,
+			locked_until = now() + interval '30 minutes', started_at = now()
+		FROM candidate, provider_installations AS i
+		WHERE j.id = candidate.id AND i.id = j.installation_id
+		RETURNING j.id, j.tenant_id, j.installation_id, i.external_id, i.credential_ref, j.delivery_id, j.provider, j.api_base_url, j.repository, j.clone_url,
+			j.review_number, j.base_ref, j.base_sha, j.head_ref, j.head_sha, j.state, j.attempts,
+			j.locked_by, j.locked_until, j.error_message, j.created_at, j.started_at, j.finished_at`, workerID, runID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNoQueuedJob
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claim review job for run: %w", err)
+	}
+	return &job, nil
+}
+
 func (s *PostgresStore) SaveFindings(ctx context.Context, jobID uuid.UUID, findings []domain.Finding) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

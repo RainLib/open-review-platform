@@ -612,6 +612,21 @@ func (s *PostgresStore) RequestRunCancellation(ctx context.Context, actor, tenan
 
 // AdvanceLegacyRun lets the existing polling worker publish durable stage
 // transitions while the RabbitMQ execution workers are introduced gradually.
+func (s *PostgresStore) AdvanceRun(ctx context.Context, runID uuid.UUID, next domain.RunState) (domain.ReviewRun, error) {
+	var jobID *uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT legacy_job_id FROM review_runs WHERE id = $1`, runID).Scan(&jobID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ReviewRun{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("load review run for transition: %w", err)
+	}
+	if jobID == nil {
+		return domain.ReviewRun{}, ErrNotFound
+	}
+	return s.AdvanceLegacyRun(ctx, *jobID, next)
+}
+
 func (s *PostgresStore) AdvanceLegacyRun(ctx context.Context, jobID uuid.UUID, next domain.RunState) (domain.ReviewRun, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
