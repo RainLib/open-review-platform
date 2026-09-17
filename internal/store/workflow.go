@@ -527,6 +527,57 @@ func (s *PostgresStore) RequestRunCancellation(ctx context.Context, actor, tenan
 	return run, nil
 }
 
+// AdvanceLegacyRun lets the existing polling worker publish durable stage
+// transitions while the RabbitMQ execution workers are introduced gradually.
+func (s *PostgresStore) AdvanceLegacyRun(ctx context.Context, jobID uuid.UUID, next domain.RunState) (domain.ReviewRun, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("begin legacy run transition: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	run, err := scanReviewRun(tx.QueryRow(ctx, `
+		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, created_at, started_at, finished_at
+		FROM review_runs WHERE legacy_job_id = $1 FOR UPDATE`, jobID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ReviewRun{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("load legacy review run: %w", err)
+	}
+	if run.CancelRequestedAt != nil && !run.State.Terminal() {
+		next = domain.RunCancelled
+	}
+	if run.State == next {
+		return run, tx.Commit(ctx)
+	}
+	if err := domain.ValidateRunTransition(run.State, next); err != nil {
+		return domain.ReviewRun{}, err
+	}
+	run.Revision++
+	var started, finished string
+	if next == domain.RunPreparing {
+		started = ", started_at = COALESCE(started_at, now())"
+	}
+	if next.Terminal() {
+		finished = ", finished_at = now()"
+	}
+	query := `UPDATE review_runs SET state = $2, revision = $3` + started + finished + ` WHERE id = $1`
+	if _, err := tx.Exec(ctx, query, run.ID, next, run.Revision); err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("advance legacy review run: %w", err)
+	}
+	if err := appendRunEvent(ctx, tx, run.ID, run.Revision, "run."+string(next), "worker", "legacy-runner", map[string]any{"legacy_job_id": jobID.String()}); err != nil {
+		return domain.ReviewRun{}, err
+	}
+	if err := insertOutbox(ctx, tx, run.ID, "review.run."+string(next), "run:"+run.ID.String()+fmt.Sprintf(":%d:%s", run.Revision, next), map[string]any{"run_id": run.ID.String(), "revision": run.Revision}); err != nil {
+		return domain.ReviewRun{}, err
+	}
+	run.State = next
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("commit legacy run transition: %w", err)
+	}
+	return run, nil
+}
+
 func (s *PostgresStore) authorizedTenant(ctx context.Context, actor, tenantSlug string) (uuid.UUID, string, error) {
 	var tenantID uuid.UUID
 	var role string

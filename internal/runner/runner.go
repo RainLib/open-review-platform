@@ -9,6 +9,7 @@ import (
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/publisher"
 	"github.com/RainLib/open-review-platform/internal/store"
+	"github.com/google/uuid"
 )
 
 type ReviewExecutor interface {
@@ -35,6 +36,12 @@ func (p Processor) RunOnce(ctx context.Context) (worked bool, err error) {
 		return false, err
 	}
 	worked = true
+	if err := p.advance(ctx, job.ID, domain.RunAdmitted); err != nil {
+		return true, err
+	}
+	if err := p.advance(ctx, job.ID, domain.RunPreparing); err != nil {
+		return true, err
+	}
 	if err := p.process(ctx, *job); err != nil {
 		if failureErr := p.Store.Fail(ctx, job.ID, p.WorkerID, err.Error()); failureErr != nil && !errors.Is(failureErr, store.ErrJobClaimLost) {
 			return true, fmt.Errorf("process job %s: %w (record failure: %v)", job.ID, err, failureErr)
@@ -59,6 +66,9 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {
 		return err
 	}
 	defer workspace.Close()
+	if err := p.advance(ctx, job.ID, domain.RunAnalyzing); err != nil {
+		return err
+	}
 	findings, err := p.Executor.Review(ctx, workspace.Path, workspace.BaseSHA, job.HeadSHA)
 	if err != nil {
 		return err
@@ -66,8 +76,25 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {
 	if err := p.Store.SaveFindings(ctx, job.ID, findings); err != nil {
 		return err
 	}
+	if err := p.advance(ctx, job.ID, domain.RunNormalizing); err != nil {
+		return err
+	}
+	if err := p.advance(ctx, job.ID, domain.RunPublishing); err != nil {
+		return err
+	}
 	if err := p.Publisher.Publish(ctx, job, findings); err != nil {
 		return err
 	}
+	if err := p.advance(ctx, job.ID, domain.RunCompleted); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (p Processor) advance(ctx context.Context, jobID uuid.UUID, state domain.RunState) error {
+	_, err := p.Store.AdvanceLegacyRun(ctx, jobID, state)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	return err
 }

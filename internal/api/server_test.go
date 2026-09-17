@@ -59,6 +59,10 @@ func (*recordingStore) RequestRunCancellation(context.Context, string, string, u
 	return domain.ReviewRun{}, nil
 }
 
+func (*recordingStore) AdvanceLegacyRun(context.Context, uuid.UUID, domain.RunState) (domain.ReviewRun, error) {
+	return domain.ReviewRun{}, nil
+}
+
 func TestGitHubIssueCommentCommandIsVerifiedAndNormalized(t *testing.T) {
 	secret := "secret"
 	body := []byte(`{"action":"created","installation":{"id":123},"repository":{"full_name":"acme/api"},"issue":{"number":42,"pull_request":{"url":"https://api.github.com/repos/acme/api/pulls/42"}},"comment":{"id":99,"body":"@openreview review --mode=deep","user":{"id":7}}}`)
