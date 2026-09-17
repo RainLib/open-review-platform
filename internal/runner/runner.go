@@ -187,6 +187,9 @@ func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob,
 	if len(ruleFile.Rules) == 0 {
 		return p.Executor.Review(ctx, directory, base, job.HeadSHA)
 	}
+	if p.Logger != nil {
+		p.Logger.Info("executing review with immutable rule snapshot", "job_id", job.ID, "rule_snapshot_id", snapshot.ID, "rule_snapshot_sha256", snapshot.SHA256, "ocr_rule_entries", len(ruleFile.Rules))
+	}
 	encoded, err := json.Marshal(ruleFile)
 	if err != nil {
 		return nil, fmt.Errorf("encode OCR rule file from snapshot %s: %w", snapshot.ID, err)
