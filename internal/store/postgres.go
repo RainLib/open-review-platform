@@ -180,6 +180,9 @@ func (s *PostgresStore) Enqueue(ctx context.Context, event domain.InboundEvent) 
 	if err != nil {
 		return domain.ReviewJob{}, false, fmt.Errorf("create review job: %w", err)
 	}
+	if err := createWorkflowRun(ctx, tx, installation, job, event); err != nil {
+		return domain.ReviewJob{}, false, fmt.Errorf("create reliable workflow state: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.ReviewJob{}, false, fmt.Errorf("commit review job: %w", err)
 	}

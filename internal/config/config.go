@@ -14,6 +14,7 @@ type Config struct {
 	Auth        AuthConfig
 	GitHub      WebhookConfig
 	GitLab      WebhookConfig
+	Broker      BrokerConfig
 	Runner      RunnerConfig
 }
 
@@ -25,6 +26,12 @@ type AuthConfig struct {
 
 type WebhookConfig struct {
 	Secret string
+}
+
+type BrokerConfig struct {
+	URL      string
+	Exchange string
+	RelayID  string
 }
 
 type RunnerConfig struct {
@@ -53,6 +60,11 @@ func Load() (Config, error) {
 		},
 		GitHub: WebhookConfig{Secret: os.Getenv("GITHUB_WEBHOOK_SECRET")},
 		GitLab: WebhookConfig{Secret: os.Getenv("GITLAB_WEBHOOK_SECRET")},
+		Broker: BrokerConfig{
+			URL:      env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
+			Exchange: env("RABBITMQ_EXCHANGE", "openreview.events"),
+			RelayID:  env("OUTBOX_RELAY_ID", "relay-1"),
+		},
 		Runner: RunnerConfig{
 			ID:           env("RUNNER_ID", "runner-1"),
 			OCRBinary:    env("OCR_BINARY", "ocr"),
