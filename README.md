@@ -28,6 +28,8 @@ The current implementation includes:
   temporary repository checkout; and
 - GitHub App installation-token exchange immediately before GitHub reads or
   writes, never in webhook payloads or database rows; and
+- a native GitHub `Open Review / Analysis` Check Run lifecycle, separate from
+  future enterprise governance merge gates; and
 - explicit `@openreview` commands that receive an idempotent GitHub response
   before their review runs asynchronously.
 

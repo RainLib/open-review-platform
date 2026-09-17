@@ -58,3 +58,8 @@ For GitHub App installations, set `credential_ref=github-app` and mount the
 read-only private-key secret to the runner and interaction-responder only. The
 resolver mints short-lived installation tokens and does not persist them. For a
 public Cloudflare hostname, see [Cloudflare public ingress](cloudflare.md).
+
+Grant the GitHub App **Checks: Read and write** in addition to Contents,
+Issues, Pull requests, and required Metadata access. The runner creates the
+native `Open Review / Analysis` Check Run directly through the GitHub API; no
+GitHub Actions workflow is needed.

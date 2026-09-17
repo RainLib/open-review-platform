@@ -42,7 +42,12 @@ PostgreSQL, and RabbitMQ must not receive public ports.
 Use `https://review.rainlib.com/v1/webhooks/github` as the GitHub App webhook
 URL. Enable only **Pull requests** and **Issue comments** events. The App
 requires read access to repository contents and read/write access to pull
-requests and issues so it can publish review findings and command responses.
+requests, issues, and checks so it can publish review findings, command
+responses, and the native `Open Review / Analysis` Check Run.
+
+GitHub Actions is not required. Branch Rules may mark a future
+`Open Review / Governance` check as required; do not make the analysis-health
+check required unless the tenant deliberately chooses fail-closed AI review.
 
 Set `GITHUB_WEBHOOK_SECRET` on `control-api`. Set `GITHUB_APP_ID` and
 `GITHUB_APP_PRIVATE_KEY_PATH` on `runner` and `interaction-responder` only; use

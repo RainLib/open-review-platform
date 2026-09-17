@@ -38,10 +38,7 @@ func NewHTTPWithResolver(resolver credentials.Resolver) *HTTPPublisher {
 }
 
 func (p *HTTPPublisher) Publish(ctx context.Context, job domain.ReviewJob, findings []domain.Finding) error {
-	if p.resolver == nil {
-		return fmt.Errorf("provider credential resolver is required")
-	}
-	token, err := p.resolver.Resolve(ctx, job)
+	token, err := p.resolve(ctx, job)
 	if err != nil {
 		return err
 	}
@@ -58,16 +55,13 @@ func (p *HTTPPublisher) Publish(ctx context.Context, job domain.ReviewJob, findi
 // an @openreview command is committed. The marker makes a redelivered broker
 // message update the original response instead of producing duplicate comments.
 func (p *HTTPPublisher) PublishInteractionResponse(ctx context.Context, response domain.InteractionResponse) error {
-	if p.resolver == nil {
-		return fmt.Errorf("provider credential resolver is required")
-	}
 	job := domain.ReviewJob{
 		Provider:               response.Provider,
 		APIBaseURL:             response.APIBaseURL,
 		InstallationExternalID: response.InstallationExternalID,
 		CredentialRef:          response.CredentialRef,
 	}
-	token, err := p.resolver.Resolve(ctx, job)
+	token, err := p.resolve(ctx, job)
 	if err != nil {
 		return err
 	}

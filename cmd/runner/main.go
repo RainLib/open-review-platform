@@ -42,11 +42,13 @@ func main() {
 	if err := executor.VerifyVersion(ctx); err != nil {
 		log.Fatal(err)
 	}
+	reviewPublisher := publisher.NewHTTPWithResolver(resolver)
 	processor := runner.Processor{
 		Store:     database,
 		Checkout:  runner.Checkout{Resolver: resolver},
 		Executor:  executor,
-		Publisher: publisher.NewHTTPWithResolver(resolver),
+		Publisher: reviewPublisher,
+		Checks:    reviewPublisher,
 		WorkerID:  cfg.Runner.ID,
 		Logger:    slog.Default(),
 	}

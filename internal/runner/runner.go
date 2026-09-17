@@ -21,6 +21,7 @@ type Processor struct {
 	Checkout  Checkout
 	Executor  ReviewExecutor
 	Publisher publisher.Publisher
+	Checks    publisher.CheckReporter
 	WorkerID  string
 	Logger    *slog.Logger
 }
@@ -53,6 +54,14 @@ func (p Processor) RunForRun(ctx context.Context, runID uuid.UUID) (worked bool,
 
 func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worked bool, err error) {
 	worked = true
+	if p.Checks != nil {
+		if checkErr := p.Checks.StartCheck(ctx, *job); checkErr != nil && p.Logger != nil {
+			// A status surface must not prevent an otherwise valid review from
+			// running. The durable provider publication path still reports the
+			// final result, and governance decides whether a later check blocks.
+			p.Logger.Warn("could not start review check", "job_id", job.ID, "error", checkErr)
+		}
+	}
 	if err := p.advance(ctx, job.ID, domain.RunAdmitted); err != nil {
 		return true, err
 	}
@@ -67,6 +76,11 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 			if transitionErr := p.advance(ctx, job.ID, domain.RunFailed); transitionErr != nil && !errors.Is(transitionErr, store.ErrJobClaimLost) {
 				return true, fmt.Errorf("mark review run %s failed: %w", job.ID, transitionErr)
 			}
+			if p.Checks != nil {
+				if checkErr := p.Checks.CompleteCheck(ctx, *job, publisher.CheckFailure, "The review could not be completed after retrying. See the task detail for the safe error summary."); checkErr != nil && p.Logger != nil {
+					p.Logger.Warn("could not finalize failed review check", "job_id", job.ID, "error", checkErr)
+				}
+			}
 		}
 		if p.Logger != nil {
 			p.Logger.Error("review job failed; queued for retry or terminal failure", "job_id", job.ID, "attempt", job.Attempts, "error", err)
@@ -75,6 +89,11 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 	}
 	if err := p.Store.Succeed(ctx, job.ID, p.WorkerID); err != nil {
 		return true, fmt.Errorf("mark job %s succeeded: %w", job.ID, err)
+	}
+	if p.Checks != nil {
+		if checkErr := p.Checks.CompleteCheck(ctx, *job, publisher.CheckSuccess, "AI analysis completed. Findings, if any, were published to this pull request."); checkErr != nil && p.Logger != nil {
+			p.Logger.Warn("could not finalize successful review check", "job_id", job.ID, "error", checkErr)
+		}
 	}
 	if p.Logger != nil {
 		p.Logger.Info("review job succeeded", "job_id", job.ID, "attempt", job.Attempts)

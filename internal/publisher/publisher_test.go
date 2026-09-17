@@ -94,3 +94,69 @@ func TestPublishGitLabInteractionResponseCreatesNote(t *testing.T) {
 		t.Fatal("expected interaction note to be created")
 	}
 }
+
+func TestGitHubAnalysisCheckCreatesAndFinalizesStableCheck(t *testing.T) {
+	var created, completed bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/RainLib/demo/commits/head/check-runs":
+			if !created {
+				_, _ = w.Write([]byte(`{"check_runs":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"check_runs":[{"id":77,"status":"in_progress"}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/RainLib/demo/check-runs":
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), AnalysisCheckName) || !strings.Contains(string(body), "in_progress") {
+				t.Fatalf("unexpected check create: %s", body)
+			}
+			created = true
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPatch && r.URL.Path == "/repos/RainLib/demo/check-runs/77":
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `"conclusion":"success"`) || !strings.Contains(string(body), `"status":"completed"`) {
+				t.Fatalf("unexpected check completion: %s", body)
+			}
+			completed = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	p := &HTTPPublisher{client: server.Client(), resolver: tokenResolver{}}
+	job := domain.ReviewJob{Provider: domain.ProviderGitHub, APIBaseURL: server.URL, InstallationExternalID: "42", CredentialRef: "github-app", Repository: "RainLib/demo", HeadSHA: "head"}
+	if err := p.StartCheck(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CompleteCheck(context.Background(), job, CheckSuccess, "complete"); err != nil {
+		t.Fatal(err)
+	}
+	if !created || !completed {
+		t.Fatalf("check lifecycle incomplete: created=%v completed=%v", created, completed)
+	}
+}
+
+func TestGitHubAnalysisCheckReusesOnlyInProgressCheck(t *testing.T) {
+	var patched bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"check_runs":[{"id":91,"status":"in_progress"}]}`))
+		case r.Method == http.MethodPatch && r.URL.Path == "/repos/RainLib/demo/check-runs/91":
+			patched = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	p := &HTTPPublisher{client: server.Client(), resolver: tokenResolver{}}
+	job := domain.ReviewJob{Provider: domain.ProviderGitHub, APIBaseURL: server.URL, InstallationExternalID: "42", CredentialRef: "github-app", Repository: "RainLib/demo", HeadSHA: "head"}
+	if err := p.StartCheck(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if !patched {
+		t.Fatal("expected in-progress check to be reused")
+	}
+}
