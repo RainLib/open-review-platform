@@ -121,7 +121,7 @@ func (s *PostgresStore) UpsertMembership(ctx context.Context, actor, tenantSlug,
 		ON CONFLICT (tenant_id, subject) DO UPDATE SET role = EXCLUDED.role`, tenantID, subject, role); err != nil {
 		return domain.Membership{}, fmt.Errorf("upsert membership: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'membership.upserted', $3, jsonb_build_object('role', $4))`, tenantID, actor, subject, role); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'membership.upserted', $3, jsonb_build_object('role', $4::text))`, tenantID, actor, subject, role); err != nil {
 		return domain.Membership{}, fmt.Errorf("audit membership update: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

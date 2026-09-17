@@ -106,6 +106,30 @@ type RuleSetWithDraft struct {
 	Draft   RuleVersion `json:"draft"`
 }
 
+type RuleApprovalRequestInput struct {
+	RequiredApprovals int `json:"required_approvals"`
+}
+
+type RuleApprovalDecisionInput struct {
+	Decision string `json:"decision"`
+	Comment  string `json:"comment,omitempty"`
+}
+
+// RuleApprovalRequest binds reviewer decisions to one exact, immutable rule
+// version payload. A future version is a different approval subject even when
+// its rule-set name stays the same.
+type RuleApprovalRequest struct {
+	ID                uuid.UUID  `json:"id"`
+	TenantID          uuid.UUID  `json:"tenant_id"`
+	RuleVersionID     uuid.UUID  `json:"rule_version_id"`
+	ContentSHA256     string     `json:"content_sha256"`
+	RequestedBy       string     `json:"requested_by"`
+	RequiredApprovals int        `json:"required_approvals"`
+	State             string     `json:"state"`
+	CreatedAt         time.Time  `json:"created_at"`
+	DecidedAt         *time.Time `json:"decided_at,omitempty"`
+}
+
 // RuleBindingInput scopes one immutable published rule version to a tenant or
 // a repository. The control plane resolves these bindings only at admission;
 // they never read mutable provider content from the pull request head.

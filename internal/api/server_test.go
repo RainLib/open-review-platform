@@ -42,6 +42,14 @@ func (*recordingStore) ListRuleSets(context.Context, string, string, int) ([]dom
 	return nil, nil
 }
 
+func (*recordingStore) RequestRuleApproval(context.Context, string, string, uuid.UUID, int, domain.RuleApprovalRequestInput) (domain.RuleApprovalRequest, error) {
+	return domain.RuleApprovalRequest{}, nil
+}
+
+func (*recordingStore) DecideRuleApproval(context.Context, string, string, uuid.UUID, domain.RuleApprovalDecisionInput) (domain.RuleApprovalRequest, error) {
+	return domain.RuleApprovalRequest{}, nil
+}
+
 func (*recordingStore) PublishRuleVersion(context.Context, string, string, uuid.UUID, int) (domain.RuleVersion, error) {
 	return domain.RuleVersion{}, nil
 }

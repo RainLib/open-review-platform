@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/rules"
@@ -114,6 +115,150 @@ func (s *PostgresStore) ListRuleSets(ctx context.Context, actor, tenantSlug stri
 	return sets, nil
 }
 
+// RequestRuleApproval moves an immutable draft into governance review. The
+// request records the version's content SHA so a stale approval can never
+// authorize a changed rule payload.
+func (s *PostgresStore) RequestRuleApproval(ctx context.Context, actor, tenantSlug string, ruleSetID uuid.UUID, version int, input domain.RuleApprovalRequestInput) (domain.RuleApprovalRequest, error) {
+	if ruleSetID == uuid.Nil || version < 1 || input.RequiredApprovals < 0 || input.RequiredApprovals > 5 {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("rule approval request is invalid")
+	}
+	if input.RequiredApprovals == 0 {
+		input.RequiredApprovals = 1
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("begin rule approval request: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tenantID, role, err := authorizedTenantTx(ctx, tx, actor, tenantSlug)
+	if err != nil {
+		return domain.RuleApprovalRequest{}, err
+	}
+	if !canManageRules(role) {
+		return domain.RuleApprovalRequest{}, ErrForbidden
+	}
+	var versionID uuid.UUID
+	var contentSHA256 string
+	err = tx.QueryRow(ctx, `
+		UPDATE rule_versions rule_version
+		SET state = 'in_review', revision = revision + 1, updated_at = now()
+		FROM rule_sets rule_set
+		WHERE rule_version.rule_set_id = rule_set.id
+		  AND rule_set.tenant_id = $1
+		  AND rule_set.id = $2
+		  AND rule_version.version = $3
+		  AND rule_version.state = 'draft'
+		RETURNING rule_version.id, rule_version.content_sha256`, tenantID, ruleSetID, version).Scan(&versionID, &contentSHA256)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RuleApprovalRequest{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("move rule version into review: %w", err)
+	}
+	result := domain.RuleApprovalRequest{}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO rule_approval_requests (tenant_id, rule_version_id, content_sha256, requested_by, required_approvals)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, tenant_id, rule_version_id, content_sha256, requested_by, required_approvals, state, created_at, decided_at`, tenantID, versionID, contentSHA256, actor, input.RequiredApprovals).
+		Scan(&result.ID, &result.TenantID, &result.RuleVersionID, &result.ContentSHA256, &result.RequestedBy, &result.RequiredApprovals, &result.State, &result.CreatedAt, &result.DecidedAt)
+	if isUniqueViolation(err) {
+		return domain.RuleApprovalRequest{}, ErrConflict
+	}
+	if err != nil {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("create rule approval request: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_approval.requested', $3, jsonb_build_object('rule_version_id', $4::text, 'content_sha256', $5::text, 'required_approvals', $6::integer))`, tenantID, actor, result.ID.String(), versionID.String(), contentSHA256, input.RequiredApprovals); err != nil {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("audit rule approval request: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("commit rule approval request: %w", err)
+	}
+	return result, nil
+}
+
+// DecideRuleApproval records one independent reviewer decision. The requester
+// cannot self-approve, and an approved request only unlocks publication after
+// the configured number of matching-content approvals has committed.
+func (s *PostgresStore) DecideRuleApproval(ctx context.Context, actor, tenantSlug string, requestID uuid.UUID, input domain.RuleApprovalDecisionInput) (domain.RuleApprovalRequest, error) {
+	input.Decision = strings.ToLower(strings.TrimSpace(input.Decision))
+	input.Comment = strings.TrimSpace(input.Comment)
+	if requestID == uuid.Nil || (input.Decision != "approved" && input.Decision != "rejected") || len(input.Comment) > 2_000 {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("rule approval decision is invalid")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("begin rule approval decision: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tenantID, role, err := authorizedTenantTx(ctx, tx, actor, tenantSlug)
+	if err != nil {
+		return domain.RuleApprovalRequest{}, err
+	}
+	if !canManageRules(role) {
+		return domain.RuleApprovalRequest{}, ErrForbidden
+	}
+	result := domain.RuleApprovalRequest{}
+	var currentVersionSHA256 string
+	err = tx.QueryRow(ctx, `
+		SELECT request.id, request.tenant_id, request.rule_version_id, request.content_sha256, request.requested_by, request.required_approvals, request.state, request.created_at, request.decided_at, rule_version.content_sha256
+		FROM rule_approval_requests request
+		JOIN rule_versions rule_version ON rule_version.id = request.rule_version_id
+		WHERE request.id = $1 AND request.tenant_id = $2
+		FOR UPDATE OF request, rule_version`, requestID, tenantID).
+		Scan(&result.ID, &result.TenantID, &result.RuleVersionID, &result.ContentSHA256, &result.RequestedBy, &result.RequiredApprovals, &result.State, &result.CreatedAt, &result.DecidedAt, &currentVersionSHA256)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RuleApprovalRequest{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("load rule approval request: %w", err)
+	}
+	if result.State != "pending" || result.ContentSHA256 != currentVersionSHA256 {
+		return domain.RuleApprovalRequest{}, ErrConflict
+	}
+	if result.RequestedBy == actor {
+		return domain.RuleApprovalRequest{}, ErrForbidden
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO rule_approvals (request_id, approver_subject, decision, content_sha256, comment) VALUES ($1, $2, $3, $4, $5)`, result.ID, actor, input.Decision, result.ContentSHA256, input.Comment); isUniqueViolation(err) {
+		return domain.RuleApprovalRequest{}, ErrConflict
+	} else if err != nil {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("record rule approval decision: %w", err)
+	}
+	if input.Decision == "rejected" {
+		if _, err := tx.Exec(ctx, `UPDATE rule_approval_requests SET state = 'rejected', decided_at = now() WHERE id = $1`, result.ID); err != nil {
+			return domain.RuleApprovalRequest{}, fmt.Errorf("reject rule approval request: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE rule_versions SET state = 'draft', revision = revision + 1, updated_at = now() WHERE id = $1 AND state = 'in_review'`, result.RuleVersionID); err != nil {
+			return domain.RuleApprovalRequest{}, fmt.Errorf("return rejected rule version to draft: %w", err)
+		}
+		result.State = "rejected"
+		now := time.Now().UTC()
+		result.DecidedAt = &now
+	} else {
+		var approvals int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM rule_approvals WHERE request_id = $1 AND decision = 'approved' AND content_sha256 = $2`, result.ID, result.ContentSHA256).Scan(&approvals); err != nil {
+			return domain.RuleApprovalRequest{}, fmt.Errorf("count rule approvals: %w", err)
+		}
+		if approvals >= result.RequiredApprovals {
+			if _, err := tx.Exec(ctx, `UPDATE rule_approval_requests SET state = 'approved', decided_at = now() WHERE id = $1`, result.ID); err != nil {
+				return domain.RuleApprovalRequest{}, fmt.Errorf("approve rule approval request: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `UPDATE rule_versions SET state = 'approved', revision = revision + 1, updated_at = now() WHERE id = $1 AND state = 'in_review' AND content_sha256 = $2`, result.RuleVersionID, result.ContentSHA256); err != nil {
+				return domain.RuleApprovalRequest{}, fmt.Errorf("approve rule version: %w", err)
+			}
+			result.State = "approved"
+			now := time.Now().UTC()
+			result.DecidedAt = &now
+		}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_approval.decided', $3, jsonb_build_object('decision', $4::text, 'content_sha256', $5::text))`, tenantID, actor, result.ID.String(), input.Decision, result.ContentSHA256); err != nil {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("audit rule approval decision: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.RuleApprovalRequest{}, fmt.Errorf("commit rule approval decision: %w", err)
+	}
+	return result, nil
+}
+
 // PublishRuleVersion makes an already validated draft immutable. Bindings can
 // only reference published versions, so a review admission never compiles a
 // mutable draft accidentally.
@@ -143,7 +288,13 @@ func (s *PostgresStore) PublishRuleVersion(ctx context.Context, actor, tenantSlu
 		  AND rs.tenant_id = $1
 		  AND rs.id = $2
 		  AND v.version = $3
-		  AND v.state = 'draft'
+		  AND v.state = 'approved'
+		  AND EXISTS (
+		      SELECT 1 FROM rule_approval_requests request
+		      WHERE request.rule_version_id = v.id
+		        AND request.state = 'approved'
+		        AND request.content_sha256 = v.content_sha256
+		  )
 		RETURNING v.id, v.rule_set_id, v.version, v.revision, v.state, v.rules, v.content_sha256, v.created_by, v.created_at, v.updated_at`, tenantID, ruleSetID, version).
 		Scan(&result.ID, &result.RuleSetID, &result.Version, &result.Revision, &result.State, &rawRules, &result.ContentSHA256, &result.CreatedBy, &result.CreatedAt, &result.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {

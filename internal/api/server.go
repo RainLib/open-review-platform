@@ -50,6 +50,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tenants/{slug}/installations", s.createInstallation)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-sets", s.createRuleSet)
 	mux.HandleFunc("GET /v1/tenants/{slug}/rule-sets", s.listRuleSets)
+	mux.HandleFunc("POST /v1/tenants/{slug}/rule-sets/{ruleSetID}/versions/{version}/approval-requests", s.requestRuleApproval)
+	mux.HandleFunc("POST /v1/tenants/{slug}/rule-approval-requests/{requestID}/decisions", s.decideRuleApproval)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-sets/{ruleSetID}/versions/{version}/publish", s.publishRuleVersion)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-bindings", s.createRuleBinding)
 	mux.HandleFunc("GET /v1/tenants/{slug}/rule-bindings", s.listRuleBindings)
@@ -228,6 +230,83 @@ func (s *Server) publishRuleVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, published)
+}
+
+func (s *Server) requestRuleApproval(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	ruleSetID, err := uuid.Parse(r.PathValue("ruleSetID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule set id is invalid"})
+		return
+	}
+	version, err := strconv.Atoi(r.PathValue("version"))
+	if err != nil || version < 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule version is invalid"})
+		return
+	}
+	var input domain.RuleApprovalRequestInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	request, err := s.store.RequestRuleApproval(r.Context(), principal.Subject, r.PathValue("slug"), ruleSetID, version, input)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "rule administrator role is required"})
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "draft rule version was not found"})
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "an approval request already exists for this rule version"})
+		return
+	}
+	if err != nil {
+		slog.Warn("rejecting rule approval request", "tenant", r.PathValue("slug"), "rule_set_id", ruleSetID, "version", version, "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule approval request is invalid"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, request)
+}
+
+func (s *Server) decideRuleApproval(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	requestID, err := uuid.Parse(r.PathValue("requestID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "approval request id is invalid"})
+		return
+	}
+	var input domain.RuleApprovalDecisionInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	request, err := s.store.DecideRuleApproval(r.Context(), principal.Subject, r.PathValue("slug"), requestID, input)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "an independent rule administrator is required"})
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "approval request was not found"})
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "approval request is no longer pending or was already decided"})
+		return
+	}
+	if err != nil {
+		slog.Warn("rejecting rule approval decision", "tenant", r.PathValue("slug"), "request_id", requestID, "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule approval decision is invalid"})
+		return
+	}
+	writeJSON(w, http.StatusOK, request)
 }
 
 func (s *Server) createRuleBinding(w http.ResponseWriter, r *http.Request) {

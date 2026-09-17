@@ -27,6 +27,8 @@ type Store interface {
 	CreateInstallation(ctx context.Context, actor, tenantSlug string, input domain.InstallationInput) (domain.Installation, error)
 	CreateRuleSet(ctx context.Context, actor, tenantSlug string, input domain.RuleSetInput) (domain.RuleSetWithDraft, error)
 	ListRuleSets(ctx context.Context, actor, tenantSlug string, limit int) ([]domain.RuleSet, error)
+	RequestRuleApproval(ctx context.Context, actor, tenantSlug string, ruleSetID uuid.UUID, version int, input domain.RuleApprovalRequestInput) (domain.RuleApprovalRequest, error)
+	DecideRuleApproval(ctx context.Context, actor, tenantSlug string, requestID uuid.UUID, input domain.RuleApprovalDecisionInput) (domain.RuleApprovalRequest, error)
 	PublishRuleVersion(ctx context.Context, actor, tenantSlug string, ruleSetID uuid.UUID, version int) (domain.RuleVersion, error)
 	CreateRuleBinding(ctx context.Context, actor, tenantSlug string, input domain.RuleBindingInput) (domain.RuleBinding, error)
 	ListRuleBindings(ctx context.Context, actor, tenantSlug string, limit int) ([]domain.RuleBinding, error)
