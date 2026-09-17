@@ -54,7 +54,7 @@ type Membership struct {
 
 func ValidRole(role string) bool {
 	switch role {
-	case "owner", "admin", "reviewer", "viewer":
+	case "owner", "admin", "rule_admin", "reviewer", "viewer", "billing_viewer":
 		return true
 	default:
 		return false

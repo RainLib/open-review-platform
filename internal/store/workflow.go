@@ -466,9 +466,9 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 
 func commandAllowed(role, command string) bool {
 	if command == "help" || command == "status" || command == "invalid" {
-		return role == "owner" || role == "admin" || role == "reviewer" || role == "viewer"
+		return role == "owner" || role == "admin" || role == "rule_admin" || role == "reviewer" || role == "viewer"
 	}
-	return role == "owner" || role == "admin" || role == "reviewer"
+	return role == "owner" || role == "admin" || role == "rule_admin" || role == "reviewer"
 }
 
 // resolveInteractionRunTarget accepts an explicit run id only for commands
@@ -883,7 +883,7 @@ func (s *PostgresStore) RequestRunCancellation(ctx context.Context, actor, tenan
 	if err != nil {
 		return domain.ReviewRun{}, err
 	}
-	if role != "owner" && role != "admin" && role != "reviewer" {
+	if role != "owner" && role != "admin" && role != "rule_admin" && role != "reviewer" {
 		return domain.ReviewRun{}, ErrForbidden
 	}
 	run, err := scanReviewRun(tx.QueryRow(ctx, `

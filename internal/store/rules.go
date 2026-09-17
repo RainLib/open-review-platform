@@ -45,7 +45,7 @@ func (s *PostgresStore) CreateRuleSet(ctx context.Context, actor, tenantSlug str
 	err = tx.QueryRow(ctx, `
 		SELECT t.id FROM tenants t
 		JOIN memberships m ON m.tenant_id = t.id
-		WHERE t.slug = $1 AND m.subject = $2 AND m.role IN ('owner', 'admin')`, tenantSlug, actor).Scan(&tenantID)
+		WHERE t.slug = $1 AND m.subject = $2 AND m.role IN ('owner', 'admin', 'rule_admin')`, tenantSlug, actor).Scan(&tenantID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RuleSetWithDraft{}, ErrForbidden
 	}
@@ -130,7 +130,7 @@ func (s *PostgresStore) PublishRuleVersion(ctx context.Context, actor, tenantSlu
 	if err != nil {
 		return domain.RuleVersion{}, err
 	}
-	if role != "owner" && role != "admin" {
+	if !canManageRules(role) {
 		return domain.RuleVersion{}, ErrForbidden
 	}
 	var result domain.RuleVersion
@@ -175,7 +175,7 @@ func (s *PostgresStore) CreateRuleBinding(ctx context.Context, actor, tenantSlug
 	if err != nil {
 		return domain.RuleBinding{}, err
 	}
-	if role != "owner" && role != "admin" {
+	if !canManageRules(role) {
 		return domain.RuleBinding{}, ErrForbidden
 	}
 	var published bool
@@ -347,4 +347,8 @@ func validRuleBindingInput(input *domain.RuleBindingInput) bool {
 		}
 	}
 	return true
+}
+
+func canManageRules(role string) bool {
+	return role == "owner" || role == "admin" || role == "rule_admin"
 }
