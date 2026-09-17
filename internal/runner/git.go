@@ -26,6 +26,7 @@ func (w *Workspace) Close() error {
 
 type Checkout struct {
 	Resolver    credentials.Resolver
+	GitBinary   string
 	GitHubToken string
 	GitLabToken string
 }
@@ -62,7 +63,50 @@ func (c Checkout) Prepare(ctx context.Context, job domain.ReviewJob) (*Workspace
 	if err := c.git(ctx, directory, token, "checkout", "--detach", job.HeadSHA); err != nil {
 		return fail(fmt.Errorf("checkout head SHA: %w", err))
 	}
+	// OCR calculates the diff through git merge-base. Fetching the base and head
+	// as independent depth-one objects makes both commits shallow roots, so Git
+	// cannot prove their ancestry even for an ordinary pull request. Deepen only
+	// when necessary, then fall back to a complete history for long-lived PRs.
+	if err := c.ensureMergeBase(ctx, directory, token, strings.TrimSpace(baseSHA), job.HeadSHA, job.BaseRef); err != nil {
+		return fail(err)
+	}
 	return &Workspace{Path: directory, BaseSHA: strings.TrimSpace(baseSHA), cleanup: func() error { return os.RemoveAll(directory) }}, nil
+}
+
+func (c Checkout) ensureMergeBase(ctx context.Context, directory, token, baseSHA, headSHA, baseRef string) error {
+	if baseSHA == "" || headSHA == "" {
+		return fmt.Errorf("resolve review merge base: base and head SHAs are required")
+	}
+	if _, err := c.gitOutput(ctx, directory, token, "merge-base", baseSHA, headSHA); err == nil {
+		return nil
+	}
+
+	// Most PRs resolve after a small deepening. The bounded sequence prevents a
+	// single retry from unexpectedly downloading a large repository history.
+	for _, depth := range []int{64, 256, 1024, 4096} {
+		if err := c.fetchHistory(ctx, directory, token, "--deepen="+fmt.Sprint(depth), baseRef, headSHA); err != nil {
+			return fmt.Errorf("deepen review history by %d: %w", depth, err)
+		}
+		if _, err := c.gitOutput(ctx, directory, token, "merge-base", baseSHA, headSHA); err == nil {
+			return nil
+		}
+	}
+	if err := c.fetchHistory(ctx, directory, token, "--unshallow", baseRef, headSHA); err != nil {
+		return fmt.Errorf("unshallow review history: %w", err)
+	}
+	if _, err := c.gitOutput(ctx, directory, token, "merge-base", baseSHA, headSHA); err != nil {
+		return fmt.Errorf("resolve merge base between %s and %s after fetching history: %w", baseSHA, headSHA, err)
+	}
+	return nil
+}
+
+func (c Checkout) fetchHistory(ctx context.Context, directory, token, option, baseRef, headSHA string) error {
+	args := []string{"fetch", option, "origin"}
+	if baseRef != "" {
+		args = append(args, baseRef)
+	}
+	args = append(args, headSHA)
+	return c.git(ctx, directory, token, args...)
 }
 
 func (c Checkout) git(ctx context.Context, directory, token string, args ...string) error {
@@ -71,7 +115,7 @@ func (c Checkout) git(ctx context.Context, directory, token string, args ...stri
 }
 
 func (c Checkout) gitOutput(ctx context.Context, directory, token string, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, "git", args...)
+	command := exec.CommandContext(ctx, c.gitBinary(), args...)
 	if directory != "" {
 		command.Dir = directory
 	}
@@ -87,6 +131,13 @@ func (c Checkout) gitOutput(ctx context.Context, directory, token string, args .
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args[:min(len(args), 2)], " "), err, trim(output))
 	}
 	return string(output), nil
+}
+
+func (c Checkout) gitBinary() string {
+	if c.GitBinary != "" {
+		return c.GitBinary
+	}
+	return "git"
 }
 
 func (c Checkout) token(ctx context.Context, job domain.ReviewJob) (string, error) {

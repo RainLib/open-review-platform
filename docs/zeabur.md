@@ -36,6 +36,7 @@ Set these on both the runner and interaction-responder only:
 ```text
 OCR_BINARY=ocr
 OCR_VERSION=1.12.4
+GIT_BINARY=git # Git 2.41+ is required for OCR range reviews
 RUNNER_ID=zeabur-runner-1
 RUNNER_POLL_INTERVAL=5s
 GITHUB_APP_ID=<GitHub App ID>

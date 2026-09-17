@@ -7,15 +7,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 )
 
 type Executor struct {
-	Binary  string
-	Version string
+	Binary    string
+	Version   string
+	GitBinary string
 }
+
+var gitVersionPattern = regexp.MustCompile(`git version (\d+)\.(\d+)`)
 
 func (e Executor) VerifyVersion(ctx context.Context) error {
 	output, err := exec.CommandContext(ctx, e.Binary, "--version").CombinedOutput()
@@ -24,6 +29,27 @@ func (e Executor) VerifyVersion(ctx context.Context) error {
 	}
 	if !strings.Contains(string(output), e.Version) {
 		return fmt.Errorf("OCR version must contain %q, got %q", e.Version, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// VerifyGitVersion fails fast because OCR's range-review mode requires Git
+// 2.41 or later. Older versions can report a false missing merge-base for a
+// valid PR range, which otherwise looks like a transient review failure.
+func (e Executor) VerifyGitVersion(ctx context.Context) error {
+	gitBinary := e.gitBinary()
+	output, err := exec.CommandContext(ctx, gitBinary, "--version").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("execute Git version check (%s): %w: %s", gitBinary, err, trimmedOutput(output))
+	}
+	match := gitVersionPattern.FindStringSubmatch(string(output))
+	if len(match) != 3 {
+		return fmt.Errorf("parse Git version for OCR: %q", strings.TrimSpace(string(output)))
+	}
+	major, _ := strconv.Atoi(match[1])
+	minor, _ := strconv.Atoi(match[2])
+	if major < 2 || (major == 2 && minor < 41) {
+		return fmt.Errorf("OCR range reviews require Git 2.41 or newer, got %q; set GIT_BINARY to a supported binary", strings.TrimSpace(string(output)))
 	}
 	return nil
 }
@@ -67,6 +93,7 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 	}
 	command := exec.CommandContext(ctx, e.Binary, arguments...)
 	command.Dir = directory
+	command.Env = withGitBinaryPath(os.Environ(), e.gitBinary())
 	logs, err := command.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("execute OCR review: %w: %s", err, trimmedOutput(logs))
@@ -80,6 +107,27 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 		return nil, fmt.Errorf("parse OCR result: %w", err)
 	}
 	return findings, nil
+}
+
+func (e Executor) gitBinary() string {
+	if e.GitBinary != "" {
+		return e.GitBinary
+	}
+	return "git"
+}
+
+func withGitBinaryPath(environment []string, gitBinary string) []string {
+	if directory := filepath.Dir(gitBinary); directory != "." {
+		for index, entry := range environment {
+			if strings.HasPrefix(entry, "PATH=") {
+				copy := append([]string(nil), environment...)
+				copy[index] = "PATH=" + directory + string(os.PathListSeparator) + strings.TrimPrefix(entry, "PATH=")
+				return copy
+			}
+		}
+		return append(append([]string(nil), environment...), "PATH="+directory)
+	}
+	return environment
 }
 
 // ParseFindings accepts the current OpenCodeReview JSON envelope and a raw

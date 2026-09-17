@@ -43,6 +43,7 @@ type BrokerConfig struct {
 
 type RunnerConfig struct {
 	ID           string
+	GitBinary    string
 	OCRBinary    string
 	OCRVersion   string
 	PollInterval time.Duration
@@ -79,6 +80,7 @@ func Load() (Config, error) {
 		},
 		Runner: RunnerConfig{
 			ID:           env("RUNNER_ID", "runner-1"),
+			GitBinary:    env("GIT_BINARY", "git"),
 			OCRBinary:    env("OCR_BINARY", "ocr"),
 			OCRVersion:   env("OCR_VERSION", "1.12.4"),
 			PollInterval: poll,

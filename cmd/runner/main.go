@@ -38,14 +38,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	executor := ocr.Executor{Binary: cfg.Runner.OCRBinary, Version: cfg.Runner.OCRVersion}
+	executor := ocr.Executor{Binary: cfg.Runner.OCRBinary, Version: cfg.Runner.OCRVersion, GitBinary: cfg.Runner.GitBinary}
 	if err := executor.VerifyVersion(ctx); err != nil {
+		log.Fatal(err)
+	}
+	if err := executor.VerifyGitVersion(ctx); err != nil {
 		log.Fatal(err)
 	}
 	reviewPublisher := publisher.NewHTTPWithResolver(resolver)
 	processor := runner.Processor{
 		Store:     database,
-		Checkout:  runner.Checkout{Resolver: resolver},
+		Checkout:  runner.Checkout{Resolver: resolver, GitBinary: cfg.Runner.GitBinary},
 		Executor:  executor,
 		Publisher: reviewPublisher,
 		Checks:    reviewPublisher,
