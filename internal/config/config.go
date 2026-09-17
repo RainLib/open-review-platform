@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,13 +43,14 @@ type BrokerConfig struct {
 }
 
 type RunnerConfig struct {
-	ID           string
-	GitBinary    string
-	OCRBinary    string
-	OCRVersion   string
-	PollInterval time.Duration
-	GitHubToken  string
-	GitLabToken  string
+	ID             string
+	GitBinary      string
+	OCRBinary      string
+	OCRVersion     string
+	OCRConcurrency int
+	PollInterval   time.Duration
+	GitHubToken    string
+	GitLabToken    string
 }
 
 func Load() (Config, error) {
@@ -56,6 +58,10 @@ func Load() (Config, error) {
 	poll, err := time.ParseDuration(pollInterval)
 	if err != nil || poll <= 0 {
 		return Config{}, fmt.Errorf("RUNNER_POLL_INTERVAL must be a positive duration")
+	}
+	ocrConcurrency, err := envInt("OCR_CONCURRENCY", 0)
+	if err != nil || ocrConcurrency < 0 {
+		return Config{}, fmt.Errorf("OCR_CONCURRENCY must be a non-negative integer")
 	}
 	c := Config{
 		DatabaseURL: os.Getenv("CONTROL_DATABASE_URL"),
@@ -79,13 +85,14 @@ func Load() (Config, error) {
 			RelayID:  env("OUTBOX_RELAY_ID", "relay-1"),
 		},
 		Runner: RunnerConfig{
-			ID:           env("RUNNER_ID", "runner-1"),
-			GitBinary:    env("GIT_BINARY", "git"),
-			OCRBinary:    env("OCR_BINARY", "ocr"),
-			OCRVersion:   env("OCR_VERSION", "1.12.4"),
-			PollInterval: poll,
-			GitHubToken:  os.Getenv("GITHUB_TOKEN"),
-			GitLabToken:  os.Getenv("GITLAB_TOKEN"),
+			ID:             env("RUNNER_ID", "runner-1"),
+			GitBinary:      env("GIT_BINARY", "git"),
+			OCRBinary:      env("OCR_BINARY", "ocr"),
+			OCRVersion:     env("OCR_VERSION", "1.12.4"),
+			OCRConcurrency: ocrConcurrency,
+			PollInterval:   poll,
+			GitHubToken:    os.Getenv("GITHUB_TOKEN"),
+			GitLabToken:    os.Getenv("GITLAB_TOKEN"),
 		},
 	}
 	if c.DatabaseURL == "" {
@@ -111,4 +118,16 @@ func env(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envInt(name string, fallback int) (int, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, err
+	}
+	return parsed, nil
 }

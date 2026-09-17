@@ -15,9 +15,10 @@ import (
 )
 
 type Executor struct {
-	Binary    string
-	Version   string
-	GitBinary string
+	Binary      string
+	Version     string
+	GitBinary   string
+	Concurrency int
 }
 
 var gitVersionPattern = regexp.MustCompile(`git version (\d+)\.(\d+)`)
@@ -88,6 +89,9 @@ func (e Executor) ReviewWithRule(ctx context.Context, directory, base, head stri
 func (e Executor) review(ctx context.Context, directory, base, head, rulePath string) ([]domain.Finding, error) {
 	output := filepath.Join(directory, "open-review-result.json")
 	arguments := []string{"review", "--from", base, "--to", head, "--format", "json", "--output", output}
+	if e.Concurrency > 0 {
+		arguments = append(arguments, "--concurrency", strconv.Itoa(e.Concurrency))
+	}
 	if rulePath != "" {
 		arguments = append(arguments, "--rule", rulePath)
 	}

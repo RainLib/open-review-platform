@@ -38,7 +38,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	executor := ocr.Executor{Binary: cfg.Runner.OCRBinary, Version: cfg.Runner.OCRVersion, GitBinary: cfg.Runner.GitBinary}
+	executor := ocr.Executor{Binary: cfg.Runner.OCRBinary, Version: cfg.Runner.OCRVersion, GitBinary: cfg.Runner.GitBinary, Concurrency: cfg.Runner.OCRConcurrency}
 	if err := executor.VerifyVersion(ctx); err != nil {
 		log.Fatal(err)
 	}
