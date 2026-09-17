@@ -98,6 +98,9 @@ func Load() (Config, error) {
 	if c.Auth.Mode == "oidc" && (c.Auth.Issuer == "" || c.Auth.Audience == "") {
 		return Config{}, fmt.Errorf("CASDOOR_ISSUER and CASDOOR_AUDIENCE are required for OIDC")
 	}
+	if c.Environment != "development" && c.GitHub.Secret == "" {
+		return Config{}, fmt.Errorf("GITHUB_WEBHOOK_SECRET is required outside development")
+	}
 	return c, nil
 }
 
