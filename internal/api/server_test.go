@@ -123,6 +123,7 @@ func (*recordingStore) ClaimForRun(context.Context, string, uuid.UUID) (*domain.
 func (*recordingStore) SaveFindings(context.Context, uuid.UUID, []domain.Finding) error { return nil }
 func (*recordingStore) Succeed(context.Context, uuid.UUID, string) error                { return nil }
 func (*recordingStore) Fail(context.Context, uuid.UUID, string, string) error           { return nil }
+func (*recordingStore) Cancel(context.Context, uuid.UUID, string) error                 { return nil }
 func (*recordingStore) Close()                                                          {}
 
 func TestGitHubWebhookVerifiesBeforeQueueing(t *testing.T) {

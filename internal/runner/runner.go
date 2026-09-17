@@ -26,6 +26,8 @@ type Processor struct {
 	Logger    *slog.Logger
 }
 
+var errTerminalRun = errors.New("review run became terminal")
+
 // RunOnce is intentionally small: all durable transitions are in Store, while
 // all untrusted repository access is scoped to a temporary Workspace.
 func (p Processor) RunOnce(ctx context.Context) (worked bool, err error) {
@@ -54,6 +56,13 @@ func (p Processor) RunForRun(ctx context.Context, runID uuid.UUID) (worked bool,
 
 func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worked bool, err error) {
 	worked = true
+	run, err := p.advance(ctx, job.ID, domain.RunAdmitted)
+	if err != nil {
+		return true, err
+	}
+	if stopped, stopErr := p.stopTerminalRun(ctx, *job, run); stopErr != nil || stopped {
+		return true, stopErr
+	}
 	if p.Checks != nil {
 		if checkErr := p.Checks.StartCheck(ctx, *job); checkErr != nil && p.Logger != nil {
 			// A status surface must not prevent an otherwise valid review from
@@ -62,18 +71,23 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 			p.Logger.Warn("could not start review check", "job_id", job.ID, "error", checkErr)
 		}
 	}
-	if err := p.advance(ctx, job.ID, domain.RunAdmitted); err != nil {
+	run, err = p.advance(ctx, job.ID, domain.RunPreparing)
+	if err != nil {
 		return true, err
 	}
-	if err := p.advance(ctx, job.ID, domain.RunPreparing); err != nil {
-		return true, err
+	if stopped, stopErr := p.stopTerminalRun(ctx, *job, run); stopErr != nil || stopped {
+		return true, stopErr
 	}
 	if err := p.process(ctx, *job); err != nil {
+		if errors.Is(err, errTerminalRun) {
+			_, stopErr := p.stopTerminalRun(ctx, *job, domain.ReviewRun{State: domain.RunCancelled})
+			return true, stopErr
+		}
 		if failureErr := p.Store.Fail(ctx, job.ID, p.WorkerID, err.Error()); failureErr != nil && !errors.Is(failureErr, store.ErrJobClaimLost) {
 			return true, fmt.Errorf("process job %s: %w (record failure: %v)", job.ID, err, failureErr)
 		}
 		if job.Attempts >= 5 {
-			if transitionErr := p.advance(ctx, job.ID, domain.RunFailed); transitionErr != nil && !errors.Is(transitionErr, store.ErrJobClaimLost) {
+			if _, transitionErr := p.advance(ctx, job.ID, domain.RunFailed); transitionErr != nil && !errors.Is(transitionErr, store.ErrJobClaimLost) {
 				return true, fmt.Errorf("mark review run %s failed: %w", job.ID, transitionErr)
 			}
 			if p.Checks != nil {
@@ -107,8 +121,12 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {
 		return err
 	}
 	defer workspace.Close()
-	if err := p.advance(ctx, job.ID, domain.RunAnalyzing); err != nil {
+	run, err := p.advance(ctx, job.ID, domain.RunAnalyzing)
+	if err != nil {
 		return err
+	}
+	if run.State.Terminal() {
+		return errTerminalRun
 	}
 	findings, err := p.Executor.Review(ctx, workspace.Path, workspace.BaseSHA, job.HeadSHA)
 	if err != nil {
@@ -117,25 +135,60 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) error {
 	if err := p.Store.SaveFindings(ctx, job.ID, findings); err != nil {
 		return err
 	}
-	if err := p.advance(ctx, job.ID, domain.RunNormalizing); err != nil {
+	run, err = p.advance(ctx, job.ID, domain.RunNormalizing)
+	if err != nil {
 		return err
 	}
-	if err := p.advance(ctx, job.ID, domain.RunPublishing); err != nil {
+	if run.State.Terminal() {
+		return errTerminalRun
+	}
+	run, err = p.advance(ctx, job.ID, domain.RunPublishing)
+	if err != nil {
 		return err
+	}
+	if run.State.Terminal() {
+		return errTerminalRun
 	}
 	if err := p.Publisher.Publish(ctx, job, findings); err != nil {
 		return err
 	}
-	if err := p.advance(ctx, job.ID, domain.RunCompleted); err != nil {
+	run, err = p.advance(ctx, job.ID, domain.RunCompleted)
+	if err != nil {
 		return err
+	}
+	if run.State.Terminal() && run.State != domain.RunCompleted {
+		return errTerminalRun
 	}
 	return nil
 }
 
-func (p Processor) advance(ctx context.Context, jobID uuid.UUID, state domain.RunState) error {
-	_, err := p.Store.AdvanceLegacyRun(ctx, jobID, state)
+func (p Processor) advance(ctx context.Context, jobID uuid.UUID, state domain.RunState) (domain.ReviewRun, error) {
+	run, err := p.Store.AdvanceLegacyRun(ctx, jobID, state)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil
+		return domain.ReviewRun{}, nil
 	}
-	return err
+	return run, err
+}
+
+// stopTerminalRun turns a cancellation/supersession observed at a durable
+// stage boundary into a terminal legacy job. This prevents an already-claimed
+// worker from publishing stale findings after a user cancelled the task or a
+// newer PR head superseded it.
+func (p Processor) stopTerminalRun(ctx context.Context, job domain.ReviewJob, run domain.ReviewRun) (bool, error) {
+	if !run.State.Terminal() {
+		return false, nil
+	}
+	if err := p.Store.Cancel(ctx, job.ID, p.WorkerID); err != nil && !errors.Is(err, store.ErrJobClaimLost) {
+		return true, fmt.Errorf("cancel terminal review job %s: %w", job.ID, err)
+	}
+	if p.Checks != nil {
+		summary := "The review was stopped before findings could be published."
+		if run.State == domain.RunSuperseded {
+			summary = "The review was superseded by a newer pull request revision before findings could be published."
+		}
+		if checkErr := p.Checks.CompleteCheck(ctx, job, publisher.CheckNeutral, summary); checkErr != nil && p.Logger != nil {
+			p.Logger.Warn("could not finalize stopped review check", "job_id", job.ID, "error", checkErr)
+		}
+	}
+	return true, nil
 }

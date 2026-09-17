@@ -296,6 +296,10 @@ func (s *PostgresStore) Fail(ctx context.Context, jobID uuid.UUID, workerID, mes
 	return nil
 }
 
+func (s *PostgresStore) Cancel(ctx context.Context, jobID uuid.UUID, workerID string) error {
+	return s.finish(ctx, jobID, workerID, domain.JobCancelled, "cancelled before provider publication")
+}
+
 func (s *PostgresStore) finish(ctx context.Context, jobID uuid.UUID, workerID string, state domain.JobState, message string) error {
 	command, err := s.pool.Exec(ctx, `
 		UPDATE review_jobs

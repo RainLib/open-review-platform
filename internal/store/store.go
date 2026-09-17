@@ -45,6 +45,7 @@ type Store interface {
 	SaveFindings(ctx context.Context, jobID uuid.UUID, findings []domain.Finding) error
 	Succeed(ctx context.Context, jobID uuid.UUID, workerID string) error
 	Fail(ctx context.Context, jobID uuid.UUID, workerID, message string) error
+	Cancel(ctx context.Context, jobID uuid.UUID, workerID string) error
 	Close()
 }
 
