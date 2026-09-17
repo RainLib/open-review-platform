@@ -50,6 +50,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tenants/{slug}/installations", s.createInstallation)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-sets", s.createRuleSet)
 	mux.HandleFunc("GET /v1/tenants/{slug}/rule-sets", s.listRuleSets)
+	mux.HandleFunc("POST /v1/tenants/{slug}/rule-sets/{ruleSetID}/versions/{version}/publish", s.publishRuleVersion)
+	mux.HandleFunc("POST /v1/tenants/{slug}/rule-bindings", s.createRuleBinding)
+	mux.HandleFunc("GET /v1/tenants/{slug}/rule-bindings", s.listRuleBindings)
 	mux.HandleFunc("PUT /v1/tenants/{slug}/provider-identities/{provider}/{externalID}", s.upsertProviderIdentity)
 	mux.HandleFunc("GET /v1/tenants/{slug}/runs", s.listRuns)
 	mux.HandleFunc("GET /v1/tenants/{slug}/runs/{runID}", s.getRun)
@@ -191,6 +194,92 @@ func (s *Server) listRuleSets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rule_sets": sets})
+}
+
+func (s *Server) publishRuleVersion(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	ruleSetID, err := uuid.Parse(r.PathValue("ruleSetID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule set id is invalid"})
+		return
+	}
+	version, err := strconv.Atoi(r.PathValue("version"))
+	if err != nil || version < 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule version is invalid"})
+		return
+	}
+	published, err := s.store.PublishRuleVersion(r.Context(), principal.Subject, r.PathValue("slug"), ruleSetID, version)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "tenant administrator role is required"})
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "draft rule version was not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not publish rule version"})
+		return
+	}
+	writeJSON(w, http.StatusOK, published)
+}
+
+func (s *Server) createRuleBinding(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var input domain.RuleBindingInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	binding, err := s.store.CreateRuleBinding(r.Context(), principal.Subject, r.PathValue("slug"), input)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "tenant administrator role is required"})
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "published rule version was not found"})
+		return
+	}
+	if err != nil {
+		slog.Warn("rejecting invalid rule binding", "tenant", r.PathValue("slug"), "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule binding is invalid"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, binding)
+}
+
+func (s *Server) listRuleBindings(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	limit := 25
+	if value := r.URL.Query().Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be from 1 to 100"})
+			return
+		}
+		limit = parsed
+	}
+	bindings, err := s.store.ListRuleBindings(r.Context(), principal.Subject, r.PathValue("slug"), limit)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list rule bindings"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rule_bindings": bindings})
 }
 
 func (s *Server) upsertMembership(w http.ResponseWriter, r *http.Request) {

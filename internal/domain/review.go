@@ -106,6 +106,36 @@ type RuleSetWithDraft struct {
 	Draft   RuleVersion `json:"draft"`
 }
 
+// RuleBindingInput scopes one immutable published rule version to a tenant or
+// a repository. The control plane resolves these bindings only at admission;
+// they never read mutable provider content from the pull request head.
+type RuleBindingInput struct {
+	RuleVersionID    uuid.UUID `json:"rule_version_id"`
+	ScopeKind        string    `json:"scope_kind"`
+	ScopeRef         string    `json:"scope_ref"`
+	Precedence       int       `json:"precedence"`
+	TargetBranchGlob string    `json:"target_branch_glob,omitempty"`
+	PathIncludeGlob  string    `json:"path_include_glob,omitempty"`
+	PathExcludeGlob  string    `json:"path_exclude_glob,omitempty"`
+	State            string    `json:"state"`
+}
+
+type RuleBinding struct {
+	ID               uuid.UUID `json:"id"`
+	TenantID         uuid.UUID `json:"tenant_id"`
+	RuleVersionID    uuid.UUID `json:"rule_version_id"`
+	ScopeKind        string    `json:"scope_kind"`
+	ScopeRef         string    `json:"scope_ref"`
+	Precedence       int       `json:"precedence"`
+	TargetBranchGlob string    `json:"target_branch_glob,omitempty"`
+	PathIncludeGlob  string    `json:"path_include_glob,omitempty"`
+	PathExcludeGlob  string    `json:"path_exclude_glob,omitempty"`
+	State            string    `json:"state"`
+	CreatedBy        string    `json:"created_by"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
 type InboundEvent struct {
 	Provider               Provider
 	APIBaseURL             string

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
+	"github.com/RainLib/open-review-platform/internal/rules"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -84,11 +86,15 @@ func createWorkflowRun(ctx context.Context, tx pgx.Tx, installation domain.Insta
 		return fmt.Errorf("find active run for head: %w", err)
 	}
 
+	ruleSnapshotID, err := resolveRuleSnapshot(ctx, tx, installation.TenantID, event.Repository, event.BaseRef)
+	if err != nil {
+		return fmt.Errorf("resolve rule snapshot: %w", err)
+	}
 	var runID uuid.UUID
 	err = tx.QueryRow(ctx, `
-		INSERT INTO review_runs (request_id, legacy_job_id, state, trigger_kind, head_sha, base_sha)
-		VALUES ($1, $2, 'acknowledged', 'pull_request', $3, $4)
-		RETURNING id`, requestID, job.ID, event.HeadSHA, event.BaseSHA).Scan(&runID)
+		INSERT INTO review_runs (request_id, legacy_job_id, state, trigger_kind, head_sha, base_sha, rule_snapshot_id)
+		VALUES ($1, $2, 'acknowledged', 'pull_request', $3, $4, $5)
+		RETURNING id`, requestID, job.ID, event.HeadSHA, event.BaseSHA, ruleSnapshotID).Scan(&runID)
 	if err != nil {
 		return fmt.Errorf("create review run: %w", err)
 	}
@@ -142,6 +148,94 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, runID uuid.UUID, topic, dedupe
 		return fmt.Errorf("insert %s outbox message: %w", topic, err)
 	}
 	return nil
+}
+
+// resolveRuleSnapshot selects only published, active bindings in the trusted
+// control-plane database. It runs inside admission's transaction so the run
+// references exactly the snapshot that was compiled for it, even if an admin
+// changes bindings immediately afterwards.
+func resolveRuleSnapshot(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, repository, targetBranch string) (uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT v.id, b.precedence, v.rules, b.target_branch_glob
+		FROM rule_bindings b
+		JOIN rule_versions v ON v.id = b.rule_version_id
+		JOIN rule_sets rs ON rs.id = v.rule_set_id
+		WHERE b.tenant_id = $1
+		  AND b.state = 'active'
+		  AND v.state = 'published'
+		  AND rs.tenant_id = $1
+		  AND (b.starts_at IS NULL OR b.starts_at <= now())
+		  AND (b.ends_at IS NULL OR b.ends_at > now())
+		  AND (b.scope_kind = 'tenant' OR (b.scope_kind = 'repository' AND b.scope_ref = $2))
+		ORDER BY b.precedence ASC, v.id ASC`, tenantID, repository)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("select active rule bindings: %w", err)
+	}
+	defer rows.Close()
+	sources := make([]rules.Source, 0)
+	seenVersion := make(map[string]int)
+	for rows.Next() {
+		var versionID uuid.UUID
+		var precedence int
+		var rawRules []byte
+		var branchGlob string
+		if err := rows.Scan(&versionID, &precedence, &rawRules, &branchGlob); err != nil {
+			return uuid.Nil, fmt.Errorf("scan active rule binding: %w", err)
+		}
+		if !matchesRuleTargetBranch(branchGlob, targetBranch) {
+			continue
+		}
+		versionKey := versionID.String()
+		if previous, exists := seenVersion[versionKey]; exists {
+			if previous != precedence {
+				return uuid.Nil, fmt.Errorf("published rule version %s is bound at conflicting precedences", versionKey)
+			}
+			continue
+		}
+		var versionRules []rules.Rule
+		if err := json.Unmarshal(rawRules, &versionRules); err != nil {
+			return uuid.Nil, fmt.Errorf("decode published rule version %s: %w", versionKey, err)
+		}
+		seenVersion[versionKey] = precedence
+		sources = append(sources, rules.Source{VersionID: versionKey, Precedence: precedence, Rules: versionRules})
+	}
+	if err := rows.Err(); err != nil {
+		return uuid.Nil, fmt.Errorf("iterate active rule bindings: %w", err)
+	}
+	compiled, err := rules.Compile(sources)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	var snapshotID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO rule_snapshots (tenant_id, sha256, compiler_version, engine, canonical_payload)
+		VALUES ($1, $2, 'rules-v1', 'ocr', $3::jsonb)
+		ON CONFLICT (tenant_id, sha256) DO UPDATE SET sha256 = EXCLUDED.sha256
+		RETURNING id`, tenantID, compiled.SHA256, string(compiled.Canonical)).Scan(&snapshotID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("store rule snapshot: %w", err)
+	}
+	for _, source := range sources {
+		versionID, err := uuid.Parse(source.VersionID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("parse compiled rule version id: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO rule_snapshot_sources (snapshot_id, rule_version_id, precedence)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (snapshot_id, rule_version_id) DO NOTHING`, snapshotID, versionID, source.Precedence); err != nil {
+			return uuid.Nil, fmt.Errorf("store rule snapshot source: %w", err)
+		}
+	}
+	return snapshotID, nil
+}
+
+func matchesRuleTargetBranch(pattern, branch string) bool {
+	if pattern == "" {
+		return true
+	}
+	matched, err := path.Match(pattern, branch)
+	return err == nil && matched
 }
 
 func jsonPayload(value map[string]any) string {
@@ -287,7 +381,7 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "no review run is available for this pull request")
 	}
 	current, err := scanReviewRun(tx.QueryRow(ctx, `
-		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, created_at, started_at, finished_at
+		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, rule_snapshot_id, created_at, started_at, finished_at
 		FROM review_runs WHERE id = $1 FOR UPDATE`, *currentRunID))
 	if err != nil {
 		return domain.InteractionOutcome{}, fmt.Errorf("load current review run: %w", err)
@@ -473,10 +567,14 @@ func createCommentRun(ctx context.Context, tx pgx.Tx, requestID uuid.UUID, curre
 		return domain.ReviewRun{}, fmt.Errorf("queue comment review job: %w", err)
 	}
 
+	ruleSnapshotID, err := resolveRuleSnapshot(ctx, tx, installation.TenantID, job.Repository, job.BaseRef)
+	if err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("resolve comment rule snapshot: %w", err)
+	}
 	run, err := scanReviewRun(tx.QueryRow(ctx, `
-		INSERT INTO review_runs (request_id, legacy_job_id, state, trigger_kind, head_sha, base_sha)
-		VALUES ($1, $2, 'acknowledged', $3, $4, $5)
-		RETURNING id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, created_at, started_at, finished_at`, requestID, job.ID, triggerKind, current.HeadSHA, current.BaseSHA))
+		INSERT INTO review_runs (request_id, legacy_job_id, state, trigger_kind, head_sha, base_sha, rule_snapshot_id)
+		VALUES ($1, $2, 'acknowledged', $3, $4, $5, $6)
+		RETURNING id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, rule_snapshot_id, created_at, started_at, finished_at`, requestID, job.ID, triggerKind, current.HeadSHA, current.BaseSHA, ruleSnapshotID))
 	if err != nil {
 		return domain.ReviewRun{}, fmt.Errorf("create comment review run: %w", err)
 	}
@@ -533,7 +631,7 @@ func appendRunEvent(ctx context.Context, tx pgx.Tx, runID uuid.UUID, revision in
 func scanReviewRun(row rowScanner) (domain.ReviewRun, error) {
 	var run domain.ReviewRun
 	var failureCode, failureMessage *string
-	if err := row.Scan(&run.ID, &run.RequestID, &run.LegacyJobID, &run.Revision, &run.State, &run.TriggerKind, &run.HeadSHA, &run.BaseSHA, &run.CancelRequestedAt, &run.SupersededBy, &failureCode, &failureMessage, &run.CreatedAt, &run.StartedAt, &run.FinishedAt); err != nil {
+	if err := row.Scan(&run.ID, &run.RequestID, &run.LegacyJobID, &run.Revision, &run.State, &run.TriggerKind, &run.HeadSHA, &run.BaseSHA, &run.CancelRequestedAt, &run.SupersededBy, &failureCode, &failureMessage, &run.RuleSnapshotID, &run.CreatedAt, &run.StartedAt, &run.FinishedAt); err != nil {
 		return domain.ReviewRun{}, err
 	}
 	if failureCode != nil {
@@ -554,7 +652,7 @@ func (s *PostgresStore) ListReviewRuns(ctx context.Context, actor, tenantSlug st
 		limit = 25
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.created_at, r.started_at, r.finished_at,
+		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.rule_snapshot_id, r.created_at, r.started_at, r.finished_at,
 		       request.provider, request.repository, request.review_number
 		FROM review_runs r
 		JOIN review_requests request ON request.id = r.request_id
@@ -585,7 +683,7 @@ func (s *PostgresStore) GetReviewRun(ctx context.Context, actor, tenantSlug stri
 		return domain.ReviewRunSummary{}, err
 	}
 	run, err := scanReviewRunSummary(s.pool.QueryRow(ctx, `
-		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.created_at, r.started_at, r.finished_at,
+		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.rule_snapshot_id, r.created_at, r.started_at, r.finished_at,
 		       request.provider, request.repository, request.review_number
 		FROM review_runs r
 		JOIN review_requests request ON request.id = r.request_id
@@ -648,7 +746,7 @@ func (s *PostgresStore) RequestRunCancellation(ctx context.Context, actor, tenan
 		return domain.ReviewRun{}, ErrForbidden
 	}
 	run, err := scanReviewRun(tx.QueryRow(ctx, `
-		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.created_at, r.started_at, r.finished_at
+		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.rule_snapshot_id, r.created_at, r.started_at, r.finished_at
 		FROM review_runs r JOIN review_requests request ON request.id = r.request_id
 		WHERE r.id = $1 AND request.tenant_id = $2 FOR UPDATE`, runID, tenantID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -696,7 +794,7 @@ func (s *PostgresStore) AdvanceLegacyRun(ctx context.Context, jobID uuid.UUID, n
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	run, err := scanReviewRun(tx.QueryRow(ctx, `
-		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, created_at, started_at, finished_at
+		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, rule_snapshot_id, created_at, started_at, finished_at
 		FROM review_runs WHERE legacy_job_id = $1 FOR UPDATE`, jobID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ReviewRun{}, ErrNotFound
@@ -803,7 +901,7 @@ func authorizedTenantTx(ctx context.Context, tx pgx.Tx, actor, tenantSlug string
 func scanReviewRunSummary(row rowScanner) (domain.ReviewRunSummary, error) {
 	var summary domain.ReviewRunSummary
 	var failureCode, failureMessage *string
-	if err := row.Scan(&summary.ID, &summary.RequestID, &summary.LegacyJobID, &summary.Revision, &summary.State, &summary.TriggerKind, &summary.HeadSHA, &summary.BaseSHA, &summary.CancelRequestedAt, &summary.SupersededBy, &failureCode, &failureMessage, &summary.CreatedAt, &summary.StartedAt, &summary.FinishedAt, &summary.Provider, &summary.Repository, &summary.ReviewNumber); err != nil {
+	if err := row.Scan(&summary.ID, &summary.RequestID, &summary.LegacyJobID, &summary.Revision, &summary.State, &summary.TriggerKind, &summary.HeadSHA, &summary.BaseSHA, &summary.CancelRequestedAt, &summary.SupersededBy, &failureCode, &failureMessage, &summary.RuleSnapshotID, &summary.CreatedAt, &summary.StartedAt, &summary.FinishedAt, &summary.Provider, &summary.Repository, &summary.ReviewNumber); err != nil {
 		return domain.ReviewRunSummary{}, err
 	}
 	if failureCode != nil {

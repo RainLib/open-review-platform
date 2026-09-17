@@ -42,6 +42,18 @@ func (*recordingStore) ListRuleSets(context.Context, string, string, int) ([]dom
 	return nil, nil
 }
 
+func (*recordingStore) PublishRuleVersion(context.Context, string, string, uuid.UUID, int) (domain.RuleVersion, error) {
+	return domain.RuleVersion{}, nil
+}
+
+func (*recordingStore) CreateRuleBinding(context.Context, string, string, domain.RuleBindingInput) (domain.RuleBinding, error) {
+	return domain.RuleBinding{}, nil
+}
+
+func (*recordingStore) ListRuleBindings(context.Context, string, string, int) ([]domain.RuleBinding, error) {
+	return nil, nil
+}
+
 func (s *recordingStore) UpsertProviderIdentity(context.Context, string, string, domain.ProviderIdentity) (domain.ProviderIdentity, error) {
 	return domain.ProviderIdentity{}, nil
 }

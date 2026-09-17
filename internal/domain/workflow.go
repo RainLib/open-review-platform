@@ -85,6 +85,7 @@ type ReviewRun struct {
 	SupersededBy      *uuid.UUID `json:"superseded_by,omitempty"`
 	FailureCode       string     `json:"failure_code,omitempty"`
 	FailureMessage    string     `json:"failure_message,omitempty"`
+	RuleSnapshotID    *uuid.UUID `json:"rule_snapshot_id,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
 	StartedAt         *time.Time `json:"started_at,omitempty"`
 	FinishedAt        *time.Time `json:"finished_at,omitempty"`
