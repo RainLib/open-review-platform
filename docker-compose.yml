@@ -1,4 +1,12 @@
 services:
+  rabbitmq-volume-init:
+    image: rabbitmq:4.1-management
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec", "chown -R rabbitmq:rabbitmq /var/lib/rabbitmq"]
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: "no"
+
   rabbitmq:
     image: rabbitmq:4.1-management
     environment:
@@ -9,6 +17,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    depends_on:
+      rabbitmq-volume-init:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:15672:15672"
     volumes:
