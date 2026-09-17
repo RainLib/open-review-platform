@@ -150,7 +150,7 @@ func (s *PostgresStore) PublishRuleVersion(ctx context.Context, actor, tenantSlu
 		return domain.RuleVersion{}, fmt.Errorf("publish rule version: %w", err)
 	}
 	result.Rules = json.RawMessage(rawRules)
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_version.published', $3, jsonb_build_object('version', $4, 'content_sha256', $5::text))`, tenantID, actor, result.ID.String(), result.Version, result.ContentSHA256); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_version.published', $3, jsonb_build_object('version', $4::integer, 'content_sha256', $5::text))`, tenantID, actor, result.ID.String(), result.Version, result.ContentSHA256); err != nil {
 		return domain.RuleVersion{}, fmt.Errorf("audit rule version publication: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -196,7 +196,7 @@ func (s *PostgresStore) CreateRuleBinding(ctx context.Context, actor, tenantSlug
 	if err != nil {
 		return domain.RuleBinding{}, fmt.Errorf("create rule binding: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_binding.created', $3, jsonb_build_object('rule_version_id', $4::text, 'scope_kind', $5, 'scope_ref', $6, 'precedence', $7))`, tenantID, actor, result.ID.String(), result.RuleVersionID.String(), result.ScopeKind, result.ScopeRef, result.Precedence); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_binding.created', $3, jsonb_build_object('rule_version_id', $4::text, 'scope_kind', $5::text, 'scope_ref', $6::text, 'precedence', $7::integer))`, tenantID, actor, result.ID.String(), result.RuleVersionID.String(), result.ScopeKind, result.ScopeRef, result.Precedence); err != nil {
 		return domain.RuleBinding{}, fmt.Errorf("audit rule binding creation: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

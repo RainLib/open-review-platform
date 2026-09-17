@@ -222,6 +222,7 @@ func (s *Server) publishRuleVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		slog.Error("publish rule version failed", "tenant", r.PathValue("slug"), "rule_set_id", ruleSetID, "version", version, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not publish rule version"})
 		return
 	}
@@ -248,8 +249,13 @@ func (s *Server) createRuleBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		slog.Warn("rejecting invalid rule binding", "tenant", r.PathValue("slug"), "error", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule binding is invalid"})
+		if strings.Contains(err.Error(), "rule binding is invalid") {
+			slog.Warn("rejecting invalid rule binding", "tenant", r.PathValue("slug"), "error", err)
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule binding is invalid"})
+			return
+		}
+		slog.Error("create rule binding failed", "tenant", r.PathValue("slug"), "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not create rule binding"})
 		return
 	}
 	writeJSON(w, http.StatusCreated, binding)
