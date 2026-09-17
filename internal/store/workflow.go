@@ -135,6 +135,9 @@ func createWorkflowRun(ctx context.Context, tx pgx.Tx, installation domain.Insta
 		}); err != nil {
 			return err
 		}
+		if err := queueTerminalInteractionResponses(ctx, tx, stale.id, stale.revision, domain.RunSuperseded); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -522,6 +525,9 @@ func cancelRun(ctx context.Context, tx pgx.Tx, run *domain.ReviewRun, actorKind,
 	if err := insertOutbox(ctx, tx, run.ID, "review.run.cancelled", "run:"+run.ID.String()+fmt.Sprintf(":%d:cancelled", run.Revision), map[string]any{"run_id": run.ID.String(), "revision": run.Revision}); err != nil {
 		return err
 	}
+	if err := queueTerminalInteractionResponses(ctx, tx, run.ID, run.Revision, domain.RunCancelled); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	run.State, run.CancelRequestedAt, run.FinishedAt = domain.RunCancelled, &now, &now
 	return nil
@@ -551,6 +557,88 @@ func queueInteractionResponse(ctx context.Context, tx pgx.Tx, installation domai
 		return fmt.Errorf("queue interaction response: %w", err)
 	}
 	return nil
+}
+
+// queueTerminalInteractionResponses updates the original marker-keyed
+// acknowledgement for command-triggered work. It intentionally reuses the
+// interaction responder and its inbox dedupe: the broker can retry the status
+// publication without ever creating a second visible comment.
+func queueTerminalInteractionResponses(ctx context.Context, tx pgx.Tx, runID uuid.UUID, revision int, state domain.RunState) error {
+	if !state.Terminal() {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT i.id, j.provider, j.api_base_url, installation.external_id, installation.credential_ref, j.repository, j.review_number
+		FROM review_interactions i
+		JOIN review_runs r ON r.id = i.result_run_id
+		JOIN review_jobs j ON j.id = r.legacy_job_id
+		JOIN provider_installations installation ON installation.id = j.installation_id
+		WHERE i.result_run_id = $1
+		  AND i.result = 'accepted'
+		  AND i.command IN ('review', 'retry')
+		ORDER BY i.created_at ASC`, runID)
+	if err != nil {
+		return fmt.Errorf("select terminal interaction responses: %w", err)
+	}
+	type terminalInteraction struct {
+		id                     uuid.UUID
+		provider               domain.Provider
+		apiBaseURL             string
+		installationExternalID string
+		credentialRef          string
+		repository             string
+		reviewNumber           int
+	}
+	interactions := make([]terminalInteraction, 0)
+	for rows.Next() {
+		var interaction terminalInteraction
+		if err := rows.Scan(&interaction.id, &interaction.provider, &interaction.apiBaseURL, &interaction.installationExternalID, &interaction.credentialRef, &interaction.repository, &interaction.reviewNumber); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan terminal interaction response: %w", err)
+		}
+		interactions = append(interactions, interaction)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate terminal interaction responses: %w", err)
+	}
+	rows.Close()
+	for _, interaction := range interactions {
+		payload := map[string]any{
+			"provider":                 interaction.provider,
+			"api_base_url":             interaction.apiBaseURL,
+			"installation_external_id": interaction.installationExternalID,
+			"credential_ref":           interaction.credentialRef,
+			"repository":               interaction.repository,
+			"review_number":            interaction.reviewNumber,
+			"reaction":                 domain.InteractionReactionNone,
+			"body":                     terminalInteractionBody(runID, state),
+			"marker":                   "open-review-platform:interaction:" + interaction.id.String(),
+		}
+		_, err := tx.Exec(ctx, `
+			INSERT INTO outbox_messages (aggregate_type, aggregate_id, topic, dedupe_key, payload)
+			VALUES ('review_interaction', $1, 'review.interaction.response', $2, $3::jsonb)
+			ON CONFLICT (dedupe_key) DO NOTHING`, interaction.id, fmt.Sprintf("interaction:%s:status:%d", interaction.id, revision), jsonPayload(payload))
+		if err != nil {
+			return fmt.Errorf("queue terminal interaction response: %w", err)
+		}
+	}
+	return nil
+}
+
+func terminalInteractionBody(runID uuid.UUID, state domain.RunState) string {
+	switch state {
+	case domain.RunCompleted:
+		return fmt.Sprintf("Review run `%s` has completed. Findings, if any, were published to this pull request.", runID)
+	case domain.RunCancelled:
+		return fmt.Sprintf("Review run `%s` was cancelled before publication.", runID)
+	case domain.RunSuperseded:
+		return fmt.Sprintf("Review run `%s` was superseded by a newer pull request revision and will not publish findings.", runID)
+	case domain.RunNeedsAttention:
+		return fmt.Sprintf("Review run `%s` needs attention before its findings can be published. See the task detail for the safe error summary.", runID)
+	default:
+		return fmt.Sprintf("Review run `%s` could not be completed after retrying. See the task detail for the safe error summary.", runID)
+	}
 }
 
 // createCommentRun deliberately creates a new queueable job.  A command-triggered
@@ -865,6 +953,11 @@ func (s *PostgresStore) AdvanceLegacyRun(ctx context.Context, jobID uuid.UUID, n
 	}
 	if err := insertOutbox(ctx, tx, run.ID, "review.run."+string(next), "run:"+run.ID.String()+fmt.Sprintf(":%d:%s", run.Revision, next), map[string]any{"run_id": run.ID.String(), "revision": run.Revision}); err != nil {
 		return domain.ReviewRun{}, err
+	}
+	if next.Terminal() {
+		if err := queueTerminalInteractionResponses(ctx, tx, run.ID, run.Revision, next); err != nil {
+			return domain.ReviewRun{}, err
+		}
 	}
 	run.State = next
 	if err := tx.Commit(ctx); err != nil {
