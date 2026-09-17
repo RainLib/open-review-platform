@@ -648,6 +648,13 @@ func (s *PostgresStore) AdvanceLegacyRun(ctx context.Context, jobID uuid.UUID, n
 	if run.State == next {
 		return run, tx.Commit(ctx)
 	}
+	// Queue delivery is at-least-once and an acknowledgement can arrive after
+	// the user cancelled (or a newer head superseded) the run. Terminal runs
+	// are immutable, so the stale stage signal is safely consumed as a no-op
+	// instead of being retried into the dead-letter queue.
+	if run.State.Terminal() {
+		return run, tx.Commit(ctx)
+	}
 	// A retried legacy job resumes from the furthest durable stage it reached.
 	// Replaying the worker's initial admitted/preparing calls must therefore be
 	// a no-op rather than an invalid backwards transition.
