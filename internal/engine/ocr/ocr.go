@@ -1,6 +1,7 @@
 package ocr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -75,6 +76,14 @@ func (e Executor) ReviewWithExclude(ctx context.Context, directory, base, head s
 	return e.review(ctx, directory, base, head, "", exclude)
 }
 
+// ReviewWithSelectedPaths creates an ephemeral, base-rooted commit containing
+// only the selected diff paths. OCR therefore sees an exact review range
+// instead of receiving a long list of deferred paths that it must parse and
+// skip itself.
+func (e Executor) ReviewWithSelectedPaths(ctx context.Context, directory, base, head string, selected []string) ([]domain.Finding, error) {
+	return e.reviewSelected(ctx, directory, base, head, "", selected)
+}
+
 // ReviewWithRule executes OCR with a runner-owned rule file. The caller passes
 // canonical JSON already resolved by the control plane; this method never
 // reads a rule file from the untrusted pull-request head.
@@ -86,27 +95,51 @@ func (e Executor) ReviewWithRule(ctx context.Context, directory, base, head stri
 // run-local risk scope. The dynamic paths are derived only from the checked-out
 // diff and are never read from the untrusted PR head as configuration.
 func (e Executor) ReviewWithRuleAndExclude(ctx context.Context, directory, base, head string, ruleFileJSON []byte, exclude []string) ([]domain.Finding, error) {
+	return e.reviewWithRule(ctx, directory, base, head, ruleFileJSON, exclude, nil)
+}
+
+// ReviewWithRuleAndSelectedPaths applies immutable rules to the same exact
+// synthetic range used by ReviewWithSelectedPaths.
+func (e Executor) ReviewWithRuleAndSelectedPaths(ctx context.Context, directory, base, head string, ruleFileJSON []byte, selected []string) ([]domain.Finding, error) {
+	return e.reviewWithRule(ctx, directory, base, head, ruleFileJSON, nil, selected)
+}
+
+func (e Executor) reviewWithRule(ctx context.Context, directory, base, head string, ruleFileJSON []byte, exclude, selected []string) ([]domain.Finding, error) {
 	if !json.Valid(ruleFileJSON) {
 		return nil, fmt.Errorf("OCR rule file is not valid JSON")
 	}
+	rulePath, cleanup, err := e.trustedRuleFile(directory, ruleFileJSON)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	if len(selected) > 0 {
+		return e.reviewSelected(ctx, directory, base, head, rulePath, selected)
+	}
+	return e.review(ctx, directory, base, head, rulePath, exclude)
+}
+
+func (e Executor) trustedRuleFile(directory string, ruleFileJSON []byte) (string, func(), error) {
 	ruleFile, err := os.CreateTemp(directory, ".open-review-platform-rule-*.json")
 	if err != nil {
-		return nil, fmt.Errorf("create trusted OCR rule file: %w", err)
+		return "", nil, fmt.Errorf("create trusted OCR rule file: %w", err)
 	}
 	rulePath := ruleFile.Name()
-	defer os.Remove(rulePath)
 	if err := ruleFile.Chmod(0o600); err != nil {
 		_ = ruleFile.Close()
-		return nil, fmt.Errorf("secure trusted OCR rule file: %w", err)
+		_ = os.Remove(rulePath)
+		return "", nil, fmt.Errorf("secure trusted OCR rule file: %w", err)
 	}
 	if _, err := ruleFile.Write(ruleFileJSON); err != nil {
 		_ = ruleFile.Close()
-		return nil, fmt.Errorf("write trusted OCR rule file: %w", err)
+		_ = os.Remove(rulePath)
+		return "", nil, fmt.Errorf("write trusted OCR rule file: %w", err)
 	}
 	if err := ruleFile.Close(); err != nil {
-		return nil, fmt.Errorf("close trusted OCR rule file: %w", err)
+		_ = os.Remove(rulePath)
+		return "", nil, fmt.Errorf("close trusted OCR rule file: %w", err)
 	}
-	return e.review(ctx, directory, base, head, rulePath, exclude)
+	return rulePath, func() { _ = os.Remove(rulePath) }, nil
 }
 
 func (e Executor) review(ctx context.Context, directory, base, head, rulePath string, exclude []string) ([]domain.Finding, error) {
@@ -126,6 +159,9 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return nil, fmt.Errorf("%w after %s", domain.ErrReviewTimedOut, e.Timeout)
 		}
+		if contextExhausted(logs) {
+			return nil, fmt.Errorf("%w: reduce the selected scope or increase the model context", domain.ErrReviewContextExhausted)
+		}
 		return nil, fmt.Errorf("execute OCR review: %w: %s", err, trimmedOutput(logs))
 	}
 	raw, err := os.ReadFile(output)
@@ -137,6 +173,94 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 		return nil, fmt.Errorf("parse OCR result: %w", err)
 	}
 	return findings, nil
+}
+
+func (e Executor) reviewSelected(ctx context.Context, directory, base, head, rulePath string, selected []string) ([]domain.Finding, error) {
+	scopedHead, cleanup, err := e.scopedHead(ctx, directory, base, head, selected)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	return e.review(ctx, directory, base, scopedHead, rulePath, nil)
+}
+
+// scopedHead keeps the original checkout read-only. It creates an unreferenced
+// temporary commit in an attached temporary worktree, so OCR's normal
+// --from/--to range machinery still works while the diff contains only paths
+// admitted by the risk planner.
+func (e Executor) scopedHead(ctx context.Context, directory, base, head string, selected []string) (string, func(), error) {
+	if len(selected) == 0 {
+		return "", nil, fmt.Errorf("selected review paths are required")
+	}
+	diffArguments := append([]string{"diff", "--binary", "--no-ext-diff", base, head, "--"}, selected...)
+	patch, err := e.gitOutput(ctx, directory, diffArguments...)
+	if err != nil {
+		return "", nil, fmt.Errorf("build selected review patch: %w", err)
+	}
+	if len(patch) == 0 {
+		return "", nil, fmt.Errorf("selected review paths contain no diff")
+	}
+	parent, err := os.MkdirTemp("", "open-review-scope-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create selected review workspace: %w", err)
+	}
+	scopedDirectory := filepath.Join(parent, "worktree")
+	cleanup := func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = e.gitRun(cleanupCtx, directory, nil, "worktree", "remove", "--force", scopedDirectory)
+		_ = os.RemoveAll(parent)
+	}
+	if err := e.gitRun(ctx, directory, nil, "worktree", "add", "--detach", scopedDirectory, base); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("create selected review worktree: %w", err)
+	}
+	if err := e.gitRun(ctx, scopedDirectory, patch, "apply", "--index", "--binary", "-"); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("apply selected review patch: %w", err)
+	}
+	tree, err := e.gitOutput(ctx, scopedDirectory, "write-tree")
+	if err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("write selected review tree: %w", err)
+	}
+	commit, err := e.gitOutput(ctx, scopedDirectory, "-c", "user.name=Open Review", "-c", "user.email=open-review@local.invalid", "commit-tree", strings.TrimSpace(string(tree)), "-p", base)
+	if err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("commit selected review tree: %w", err)
+	}
+	scopedHead := strings.TrimSpace(string(commit))
+	if scopedHead == "" {
+		cleanup()
+		return "", nil, fmt.Errorf("commit selected review tree returned no revision")
+	}
+	return scopedHead, cleanup, nil
+}
+
+func (e Executor) gitOutput(ctx context.Context, directory string, arguments ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, e.gitBinary(), append([]string{"-C", directory}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, trimmedOutput(output))
+	}
+	return output, nil
+}
+
+func (e Executor) gitRun(ctx context.Context, directory string, input []byte, arguments ...string) error {
+	command := exec.CommandContext(ctx, e.gitBinary(), append([]string{"-C", directory}, arguments...)...)
+	command.Stdin = bytes.NewReader(input)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, trimmedOutput(output))
+	}
+	return nil
+}
+
+func contextExhausted(logs []byte) bool {
+	message := strings.ToLower(string(logs))
+	return strings.Contains(message, "context compression exceeded") ||
+		strings.Contains(message, "context length exceeded") ||
+		strings.Contains(message, "maximum context length")
 }
 
 func (e Executor) reviewArguments(base, head, output, rulePath string, exclude []string) []string {

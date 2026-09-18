@@ -8,10 +8,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// ErrReviewTimedOut marks an execution budget being exhausted. It is distinct
-// from transport failures: retrying the identical request simply recreates the
-// same wait and delays a visible, actionable result.
-var ErrReviewTimedOut = errors.New("review execution timed out")
+var (
+	// ErrReviewTimedOut marks an execution budget being exhausted. It is
+	// distinct from transport failures: retrying the identical request simply
+	// recreates the same wait and delays a visible, actionable result.
+	ErrReviewTimedOut = errors.New("review execution timed out")
+	// ErrReviewContextExhausted marks deterministic model-context exhaustion.
+	// Replaying the same commit, rule snapshot, and selected scope would
+	// consume the same context again, so it must converge as a terminal run.
+	ErrReviewContextExhausted = errors.New("review model context exhausted")
+)
 
 type Provider string
 

@@ -113,6 +113,67 @@ func TestReviewReportsWholeProcessTimeout(t *testing.T) {
 	}
 }
 
+func TestReviewClassifiesModelContextExhaustion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("executes a short-lived shell process")
+	}
+	directory := t.TempDir()
+	script := filepath.Join(directory, "context-exhausted-ocr")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'Context compression exceeded threshold' >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (Executor{Binary: script}).Review(context.Background(), directory, "base", "head")
+	if err == nil || !errors.Is(err, domain.ErrReviewContextExhausted) {
+		t.Fatalf("expected terminal model context error, got %v", err)
+	}
+}
+
+func TestReviewWithSelectedPathsUsesExactSyntheticRange(t *testing.T) {
+	if testing.Short() {
+		t.Skip("creates a temporary Git worktree")
+	}
+	directory := t.TempDir()
+	runGit(t, directory, "init", "-q")
+	runGit(t, directory, "config", "user.name", "Open Review Test")
+	runGit(t, directory, "config", "user.email", "open-review-test@local.invalid")
+	if err := os.WriteFile(filepath.Join(directory, "selected.go"), []byte("package scoped\n\nconst Selected = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "deferred.go"), []byte("package scoped\n\nconst Deferred = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, directory, "add", ".")
+	runGit(t, directory, "commit", "-qm", "base")
+	base := strings.TrimSpace(runGit(t, directory, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(directory, "selected.go"), []byte("package scoped\n\nconst Selected = 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "deferred.go"), []byte("package scoped\n\nconst Deferred = 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, directory, "add", ".")
+	runGit(t, directory, "commit", "-qm", "head")
+	head := strings.TrimSpace(runGit(t, directory, "rev-parse", "HEAD"))
+
+	captured := filepath.Join(directory, "reviewed-paths.txt")
+	t.Setenv("OCR_CAPTURED_PATHS", captured)
+	script := filepath.Join(directory, "recording-ocr")
+	source := "#!/bin/sh\nset -eu\nfrom=''\nto=''\noutput=''\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --from) from=\"$2\"; shift 2 ;;\n    --to) to=\"$2\"; shift 2 ;;\n    --output) output=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ngit diff --name-only \"$from\" \"$to\" > \"$OCR_CAPTURED_PATHS\"\nprintf '{\\\"comments\\\":[]}' > \"$output\"\n"
+	if err := os.WriteFile(script, []byte(source), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (Executor{Binary: script, GitBinary: "git"}).ReviewWithSelectedPaths(context.Background(), directory, base, head, []string{"selected.go"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value := strings.TrimSpace(string(got)); value != "selected.go" {
+		t.Fatalf("OCR received unexpected synthetic diff paths: %q", value)
+	}
+}
+
 func TestTrimmedOutputPreservesFailureTail(t *testing.T) {
 	value := []byte(strings.Repeat("skip\n", 2000) + "provider returned 429")
 	trimmed := trimmedOutput(value)
@@ -136,4 +197,14 @@ func waitForChildPID(t *testing.T, path string) int {
 	}
 	t.Fatal("child process did not report its pid")
 	return 0
+}
+
+func runGit(t *testing.T, directory string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(arguments, " "), err, output)
+	}
+	return string(output)
 }

@@ -45,6 +45,14 @@ once for each release. The migration lock prevents concurrent application.
    installation identity, not a personal access token. The runner's database
    poller is only the recovery path for a lost broker notification.
 
+Focused and critical review modes materialize a temporary commit rooted at the
+trusted base SHA with only risk-selected paths applied. The OCR process reviews
+that exact range, while the original checkout stays read-only. A deterministic
+model-context exhaustion is terminal rather than retried with the same input;
+operators must narrow the scope or select a model with a larger context.
+When every changed file is intentionally deferred, the runner publishes an
+empty scoped result without starting OCR.
+
 The GitHub App JWT exchange is implemented. The console can read live state
 and, only through the local-development bridge, create provider installations
 and validated rule drafts. It returns installation summaries without credential

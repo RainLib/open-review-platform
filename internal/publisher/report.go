@@ -61,10 +61,11 @@ type ReviewContext struct {
 type LifecycleState string
 
 const (
-	LifecycleFailed     LifecycleState = "failed"
-	LifecycleTimedOut   LifecycleState = "timed_out"
-	LifecycleCancelled  LifecycleState = "cancelled"
-	LifecycleSuperseded LifecycleState = "superseded"
+	LifecycleFailed           LifecycleState = "failed"
+	LifecycleTimedOut         LifecycleState = "timed_out"
+	LifecycleContextExhausted LifecycleState = "context_exhausted"
+	LifecycleCancelled        LifecycleState = "cancelled"
+	LifecycleSuperseded       LifecycleState = "superseded"
 )
 
 // MarkdownComponent is intentionally small: report builders express semantic
@@ -275,6 +276,8 @@ func TerminalReport(job domain.ReviewJob, state LifecycleState, marker string) s
 	switch state {
 	case LifecycleTimedOut:
 		title, body, badge, color = "⏱️ Review timed out", "The review exceeded its configured execution budget before a trustworthy result could be published. No findings were published; adjust the budget or retry after the model service recovers.", "timed out", "bf8700"
+	case LifecycleContextExhausted:
+		title, body, badge, color = "🧠 Review needs a narrower scope", "The model exhausted its context while reviewing the selected scope. No findings were published; narrow the review scope or choose a model with a larger context before retrying.", "context exhausted", "bf8700"
 	case LifecycleCancelled:
 		title, body, badge, color = "⏹️ Review cancelled", "The review was cancelled before publication. No findings from this run were published.", "cancelled", "6e7781"
 	case LifecycleSuperseded:

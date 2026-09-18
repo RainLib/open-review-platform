@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
+	"github.com/RainLib/open-review-platform/internal/risk"
 	"github.com/RainLib/open-review-platform/internal/rules"
 	"github.com/RainLib/open-review-platform/internal/store"
 	"github.com/google/uuid"
@@ -66,7 +67,7 @@ func TestReviewWithSnapshotPassesTrustedOCRRuleFile(t *testing.T) {
 	}
 	executor := &recordingExecutor{}
 	processor := Processor{Store: snapshotStore{snapshot: domain.RuleSnapshot{ID: uuid.New(), CanonicalPayload: canonical}}, Executor: executor}
-	if _, err := processor.reviewWithSnapshot(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base", nil); err != nil {
+	if _, err := processor.reviewWithSnapshot(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base", risk.Plan{}); err != nil {
 		t.Fatal(err)
 	}
 	if executor.defaultCalls != 0 || executor.ruleCalls != 1 {
@@ -87,7 +88,7 @@ func TestReviewWithSnapshotPassesTrustedOCRRuleFile(t *testing.T) {
 func TestReviewWithSnapshotFallsBackOnlyWhenNoSnapshotExists(t *testing.T) {
 	executor := &recordingExecutor{}
 	processor := Processor{Store: snapshotStore{err: store.ErrNotFound}, Executor: executor}
-	if _, err := processor.reviewWithSnapshot(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base", nil); err != nil {
+	if _, err := processor.reviewWithSnapshot(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base", risk.Plan{}); err != nil {
 		t.Fatal(err)
 	}
 	if executor.defaultCalls != 1 || executor.ruleCalls != 0 {
@@ -120,6 +121,16 @@ func (s renewalStore) RenewClaim(context.Context, uuid.UUID, string, time.Durati
 
 type blockingExecutor struct {
 	stopped chan struct{}
+}
+
+type selectedPathExecutor struct {
+	recordingExecutor
+	selected []string
+}
+
+func (e *selectedPathExecutor) ReviewWithSelectedPaths(_ context.Context, _ string, _ string, _ string, selected []string) ([]domain.Finding, error) {
+	e.selected = append([]string(nil), selected...)
+	return nil, nil
 }
 
 type blockingCheckout struct {
@@ -204,7 +215,7 @@ func TestReviewUntilTerminalCancelsInFlightExecutor(t *testing.T) {
 		Executor:             blockingExecutor{stopped: stopped},
 		TerminalPollInterval: time.Millisecond,
 	}
-	_, err := processor.reviewUntilTerminal(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base", nil)
+	_, err := processor.reviewUntilTerminal(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base", risk.Plan{})
 	var terminal terminalRunError
 	if !errors.As(err, &terminal) || terminal.run.State != domain.RunSuperseded {
 		t.Fatalf("expected superseded terminal error, got %v", err)
@@ -233,5 +244,41 @@ func TestExecutionBudgetTimeoutIsTerminal(t *testing.T) {
 	}
 	if isTerminalExecutionFailure(errors.New("temporary provider unavailable")) {
 		t.Fatal("temporary provider errors must remain retryable")
+	}
+}
+
+func TestModelContextExhaustionIsTerminal(t *testing.T) {
+	if !isTerminalExecutionFailure(domain.ErrReviewContextExhausted) {
+		t.Fatal("expected model context exhaustion to bypass retries")
+	}
+}
+
+func TestDeferredOnlyScopeSkipsModelExecution(t *testing.T) {
+	executor := &recordingExecutor{}
+	processor := Processor{Store: snapshotStore{err: store.ErrNotFound}, Executor: executor}
+	findings, err := processor.reviewWithSnapshot(context.Background(), domain.ReviewJob{ID: uuid.New(), HeadSHA: "head"}, "/workspace", "base", risk.Plan{Deferred: []risk.Item{{Path: "docs/guide.md"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 || executor.defaultCalls != 0 || executor.ruleCalls != 0 {
+		t.Fatalf("deferred-only plan must skip model execution: findings=%d defaults=%d rules=%d", len(findings), executor.defaultCalls, executor.ruleCalls)
+	}
+}
+
+func TestReviewWithScopePrefersSelectedPaths(t *testing.T) {
+	executor := &selectedPathExecutor{}
+	processor := Processor{Executor: executor}
+	plan := risk.Plan{
+		Selected: []risk.Item{{Path: "internal/api/server.go"}, {Path: "apps/web/app/page.tsx"}},
+		Exclude:  []string{"docs/readme.md", "package-lock.json"},
+	}
+	if _, err := processor.reviewWithScope(context.Background(), "/workspace", "base", "head", plan); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(executor.selected, ","), "internal/api/server.go,apps/web/app/page.tsx"; got != want {
+		t.Fatalf("expected exact selected scope, got %q", got)
+	}
+	if executor.defaultCalls != 0 {
+		t.Fatalf("selected-path executor unexpectedly fell back to full review: %d calls", executor.defaultCalls)
 	}
 }

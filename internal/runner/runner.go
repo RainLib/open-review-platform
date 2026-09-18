@@ -32,6 +32,19 @@ type RuleAndScopedReviewExecutor interface {
 	ReviewWithRuleAndExclude(context.Context, string, string, string, []byte, []string) ([]domain.Finding, error)
 }
 
+// SelectedPathReviewExecutor receives the exact risk-admitted paths instead of
+// a potentially large deferred-path list. Implementations can materialize a
+// minimal review range without making the model parse exclusions.
+type SelectedPathReviewExecutor interface {
+	ReviewWithSelectedPaths(context.Context, string, string, string, []string) ([]domain.Finding, error)
+}
+
+// RuleAndSelectedPathReviewExecutor combines the immutable enterprise-rule
+// snapshot with an exact, risk-admitted review range.
+type RuleAndSelectedPathReviewExecutor interface {
+	ReviewWithRuleAndSelectedPaths(context.Context, string, string, string, []byte, []string) ([]domain.Finding, error)
+}
+
 type RiskPlanner interface {
 	Plan(context.Context, string, string, string) (risk.Plan, error)
 }
@@ -170,6 +183,9 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 				summary := "The review could not be completed after retrying. See the task detail for the safe error summary."
 				if terminalFailure {
 					summary = "The review exceeded its execution budget. No findings were published; adjust the execution budget or retry after the model service recovers."
+					if errors.Is(err, domain.ErrReviewContextExhausted) {
+						summary = "The review exhausted the model context for its selected scope. No findings were published; narrow the scope or increase the model context before retrying."
+					}
 				}
 				if checkErr := p.Checks.CompleteCheck(ctx, *job, publisher.CheckFailure, summary); checkErr != nil && p.Logger != nil {
 					p.Logger.Warn("could not finalize failed review check", "job_id", job.ID, "error", checkErr)
@@ -177,8 +193,10 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 			}
 			if p.Lifecycle != nil {
 				state := publisher.LifecycleFailed
-				if terminalFailure {
+				if errors.Is(err, domain.ErrReviewTimedOut) {
 					state = publisher.LifecycleTimedOut
+				} else if errors.Is(err, domain.ErrReviewContextExhausted) {
+					state = publisher.LifecycleContextExhausted
 				}
 				if publishErr := p.Lifecycle.PublishTerminal(ctx, *job, state); publishErr != nil && p.Logger != nil {
 					p.Logger.Warn("could not publish failed review report", "job_id", job.ID, "error", publishErr)
@@ -206,7 +224,7 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 }
 
 func isTerminalExecutionFailure(err error) bool {
-	return errors.Is(err, domain.ErrReviewTimedOut)
+	return errors.Is(err, domain.ErrReviewTimedOut) || errors.Is(err, domain.ErrReviewContextExhausted)
 }
 
 // keepClaimAlive makes the database lease explicit. A restart therefore makes
@@ -309,7 +327,7 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	if err != nil {
 		return nil, err
 	}
-	findings, err := p.reviewUntilTerminal(ctx, job, workspace.Path, workspace.BaseSHA, plan.Exclude)
+	findings, err := p.reviewUntilTerminal(ctx, job, workspace.Path, workspace.BaseSHA, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -374,11 +392,11 @@ func (p Processor) reviewResult(ctx context.Context, job domain.ReviewJob, plan 
 // watcher observes durable run state. A GitHub push or an explicit cancel can
 // therefore stop an OCR process immediately instead of merely preventing its
 // later findings from being published.
-func (p Processor) reviewUntilTerminal(ctx context.Context, job domain.ReviewJob, directory, base string, exclude []string) ([]domain.Finding, error) {
+func (p Processor) reviewUntilTerminal(ctx context.Context, job domain.ReviewJob, directory, base string, plan risk.Plan) ([]domain.Finding, error) {
 	reviewCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go p.cancelReviewWhenTerminal(ctx, job.ID, cancel, done)
-	findings, reviewErr := p.reviewWithSnapshot(reviewCtx, job, directory, base, exclude)
+	findings, reviewErr := p.reviewWithSnapshot(reviewCtx, job, directory, base, plan)
 	close(done)
 	cancel()
 
@@ -428,10 +446,16 @@ func (p Processor) terminalPollInterval() time.Duration {
 	return time.Second
 }
 
-func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob, directory, base string, exclude []string) ([]domain.Finding, error) {
+func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob, directory, base string, plan risk.Plan) ([]domain.Finding, error) {
+	if deferredOnlyScope(plan) {
+		if p.Logger != nil {
+			p.Logger.Info("risk planner deferred every changed path; skipping model review", "deferred_files", len(plan.Deferred))
+		}
+		return []domain.Finding{}, nil
+	}
 	snapshot, err := p.Store.RuleSnapshotForJob(ctx, job.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		return p.reviewWithScope(ctx, directory, base, job.HeadSHA, exclude)
+		return p.reviewWithScope(ctx, directory, base, job.HeadSHA, plan)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load rule snapshot for review: %w", err)
@@ -445,7 +469,7 @@ func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob,
 		return nil, fmt.Errorf("compile OCR rule file from snapshot %s: %w", snapshot.ID, err)
 	}
 	if len(ruleFile.Rules) == 0 {
-		return p.reviewWithScope(ctx, directory, base, job.HeadSHA, exclude)
+		return p.reviewWithScope(ctx, directory, base, job.HeadSHA, plan)
 	}
 	if p.Logger != nil {
 		p.Logger.Info("executing review with immutable rule snapshot", "job_id", job.ID, "rule_snapshot_id", snapshot.ID, "rule_snapshot_sha256", snapshot.SHA256, "ocr_rule_entries", len(ruleFile.Rules))
@@ -454,8 +478,15 @@ func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob,
 	if err != nil {
 		return nil, fmt.Errorf("encode OCR rule file from snapshot %s: %w", snapshot.ID, err)
 	}
-	if executor, ok := p.Executor.(RuleAndScopedReviewExecutor); ok {
-		return executor.ReviewWithRuleAndExclude(ctx, directory, base, job.HeadSHA, encoded, exclude)
+	if selected := selectedPaths(plan); len(selected) > 0 {
+		if executor, ok := p.Executor.(RuleAndSelectedPathReviewExecutor); ok {
+			return executor.ReviewWithRuleAndSelectedPaths(ctx, directory, base, job.HeadSHA, encoded, selected)
+		}
+	}
+	if len(plan.Exclude) > 0 {
+		if executor, ok := p.Executor.(RuleAndScopedReviewExecutor); ok {
+			return executor.ReviewWithRuleAndExclude(ctx, directory, base, job.HeadSHA, encoded, plan.Exclude)
+		}
 	}
 	executor, ok := p.Executor.(RuleAwareReviewExecutor)
 	if !ok {
@@ -478,16 +509,38 @@ func (p Processor) planRisk(ctx context.Context, directory, base, head string) (
 	return plan, nil
 }
 
-func (p Processor) reviewWithScope(ctx context.Context, directory, base, head string, exclude []string) ([]domain.Finding, error) {
-	if len(exclude) > 0 {
+func (p Processor) reviewWithScope(ctx context.Context, directory, base, head string, plan risk.Plan) ([]domain.Finding, error) {
+	if selected := selectedPaths(plan); len(selected) > 0 {
+		if executor, ok := p.Executor.(SelectedPathReviewExecutor); ok {
+			return executor.ReviewWithSelectedPaths(ctx, directory, base, head, selected)
+		}
+	}
+	if len(plan.Exclude) > 0 {
 		if executor, ok := p.Executor.(ScopedReviewExecutor); ok {
-			return executor.ReviewWithExclude(ctx, directory, base, head, exclude)
+			return executor.ReviewWithExclude(ctx, directory, base, head, plan.Exclude)
 		}
 		if p.Logger != nil {
 			p.Logger.Warn("review executor does not support risk scope; reviewing all files")
 		}
 	}
 	return p.Executor.Review(ctx, directory, base, head)
+}
+
+func selectedPaths(plan risk.Plan) []string {
+	paths := make([]string, 0, len(plan.Selected))
+	for _, item := range plan.Selected {
+		if item.Path != "" {
+			paths = append(paths, item.Path)
+		}
+	}
+	return paths
+}
+
+// deferredOnlyScope is an explicit focused/critical decision to skip model
+// execution. An entirely empty plan means no risk planner is configured and
+// preserves the full-review default.
+func deferredOnlyScope(plan risk.Plan) bool {
+	return len(plan.Selected) == 0 && len(plan.Deferred) > 0
 }
 
 func (p Processor) advance(ctx context.Context, jobID uuid.UUID, state domain.RunState) (domain.ReviewRun, error) {

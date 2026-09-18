@@ -25,7 +25,8 @@ The current implementation includes:
 - revisioned review runs with durable stage events and SSE task updates;
 - separate relay, acknowledger, interaction-responder, terminal-reporter, and runner processes;
 - an OCR adapter that executes `ocr review --from … --to … --format json` in a
-  temporary repository checkout; and
+  temporary repository checkout, materializing focused/critical plans as an
+  exact selected-file range rather than a long model-side exclusion list; and
 - GitHub App installation-token exchange immediately before GitHub reads or
   writes, never in webhook payloads or database rows; and
 - a native GitHub `Open Review / Analysis` Check Run lifecycle, separate from
