@@ -80,6 +80,14 @@ func TestReviewReportsWholeProcessTimeout(t *testing.T) {
 	}
 }
 
+func TestTrimmedOutputPreservesFailureTail(t *testing.T) {
+	value := []byte(strings.Repeat("skip\n", 2000) + "provider returned 429")
+	trimmed := trimmedOutput(value)
+	if !strings.Contains(trimmed, "output truncated") || !strings.Contains(trimmed, "provider returned 429") {
+		t.Fatalf("trimmed output lost failure tail: %q", trimmed[len(trimmed)-100:])
+	}
+}
+
 func waitForChildPID(t *testing.T, path string) int {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

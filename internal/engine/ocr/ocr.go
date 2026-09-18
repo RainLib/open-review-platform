@@ -277,7 +277,13 @@ func max(value, floor int) int {
 func trimmedOutput(value []byte) string {
 	const maxBytes = 4096
 	if len(value) > maxBytes {
-		return string(value[:maxBytes]) + "…"
+		// OCR emits one line per deferred path before reporting a provider or
+		// parsing failure. Keeping only the prefix hides the actionable final
+		// error and turns retry diagnostics into noise. Preserve both ends while
+		// retaining the same bounded error payload.
+		head := maxBytes / 2
+		tail := maxBytes - head
+		return string(value[:head]) + "\n… output truncated …\n" + string(value[len(value)-tail:])
 	}
 	return string(value)
 }
