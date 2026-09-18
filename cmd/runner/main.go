@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
@@ -11,10 +12,15 @@ import (
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/config"
+	"github.com/RainLib/open-review-platform/internal/credentials"
+	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/engine/ocr"
+	"github.com/RainLib/open-review-platform/internal/messaging"
 	"github.com/RainLib/open-review-platform/internal/publisher"
+	"github.com/RainLib/open-review-platform/internal/risk"
 	"github.com/RainLib/open-review-platform/internal/runner"
 	"github.com/RainLib/open-review-platform/internal/store"
+	"github.com/google/uuid"
 )
 
 func main() {
@@ -29,18 +35,72 @@ func main() {
 		log.Fatal(err)
 	}
 	defer database.Close()
-	executor := ocr.Executor{Binary: cfg.Runner.OCRBinary, Version: cfg.Runner.OCRVersion}
+	resolver, err := credentials.New(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	executor := ocr.Executor{
+		Binary:         cfg.Runner.OCRBinary,
+		Version:        cfg.Runner.OCRVersion,
+		GitBinary:      cfg.Runner.GitBinary,
+		Concurrency:    cfg.Runner.OCRConcurrency,
+		Effort:         cfg.Runner.OCREffort,
+		MaxTokens:      cfg.Runner.OCRMaxTokens,
+		TokenBudget:    cfg.Runner.OCRTokenBudget,
+		SubtaskTimeout: cfg.Runner.OCRSubtaskTimeout,
+		Timeout:        cfg.Runner.OCRTimeout,
+	}
 	if err := executor.VerifyVersion(ctx); err != nil {
 		log.Fatal(err)
 	}
-	processor := runner.Processor{
-		Store:     database,
-		Checkout:  runner.Checkout{GitHubToken: cfg.Runner.GitHubToken, GitLabToken: cfg.Runner.GitLabToken},
-		Executor:  executor,
-		Publisher: publisher.NewHTTP(cfg.Runner.GitHubToken, cfg.Runner.GitLabToken),
-		WorkerID:  cfg.Runner.ID,
-		Logger:    slog.Default(),
+	if err := executor.VerifyGitVersion(ctx); err != nil {
+		log.Fatal(err)
 	}
+	reviewPublisher := publisher.NewHTTPWithResolver(resolver)
+	processor := runner.Processor{
+		Store:             database,
+		Checkout:          runner.Checkout{Resolver: resolver, GitBinary: cfg.Runner.GitBinary},
+		Executor:          executor,
+		Publisher:         reviewPublisher,
+		Checks:            reviewPublisher,
+		Lifecycle:         reviewPublisher,
+		RiskPlanner:       risk.Planner{GitBinary: cfg.Runner.GitBinary, Mode: risk.Mode(cfg.Runner.RiskReviewMode)},
+		RiskReviewMode:    cfg.Runner.RiskReviewMode,
+		EngineVersion:     cfg.Runner.OCRVersion,
+		CheckoutTimeout:   cfg.Runner.CheckoutTimeout,
+		LeaseDuration:     cfg.Runner.LeaseDuration,
+		LeaseRenewEvery:   cfg.Runner.LeaseRenewEvery,
+		MergeGateSeverity: cfg.Runner.MergeGateSeverity,
+		WorkerID:          cfg.Runner.ID,
+		Logger:            slog.Default(),
+	}
+	consumer, err := messaging.OpenAMQPConsumer(cfg.Broker.URL, cfg.Broker.Exchange)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer consumer.Close()
+	go func() {
+		err := consumer.Consume(ctx, "openreview.review.execute.v1", "review-runner-v1", func(ctx context.Context, body []byte) error {
+			message, err := messaging.DecodeOutboxMessage(body)
+			if err != nil {
+				return err
+			}
+			if message.Topic != "review.run.admitted" {
+				return fmt.Errorf("unexpected execution topic %q", message.Topic)
+			}
+			return messaging.HandleExactlyOnce(ctx, database, "review-runner-v1", message, func(ctx context.Context, message domain.OutboxMessage) error {
+				runID, err := runIDFromPayload(message.Payload)
+				if err != nil {
+					return err
+				}
+				_, err = processor.RunForRun(ctx, runID)
+				return err
+			})
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("queue execution consumer stopped", "error", err)
+		}
+	}()
 	ticker := time.NewTicker(cfg.Runner.PollInterval)
 	defer ticker.Stop()
 	for {
@@ -57,4 +117,16 @@ func main() {
 		case <-ticker.C:
 		}
 	}
+}
+
+func runIDFromPayload(payload map[string]any) (uuid.UUID, error) {
+	raw, ok := payload["run_id"].(string)
+	if !ok {
+		return uuid.Nil, fmt.Errorf("execution payload run_id is invalid")
+	}
+	runID, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("parse execution run id: %w", err)
+	}
+	return runID, nil
 }

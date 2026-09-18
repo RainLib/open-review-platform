@@ -10,3 +10,119 @@ func TestDevelopmentAuthIsRejectedOutsideDevelopment(t *testing.T) {
 		t.Fatal("development authentication must not be accepted in production")
 	}
 }
+
+func TestGitHubWebhookSecretIsRequiredOutsideDevelopment(t *testing.T) {
+	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("AUTH_MODE", "oidc")
+	t.Setenv("CASDOOR_ISSUER", "https://casdoor.example.com")
+	t.Setenv("CASDOOR_AUDIENCE", "open-review-platform")
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("GitHub webhook secret must be required in production")
+	}
+}
+
+func TestGitHubWebhookSecretIsOptionalForLocalDevelopment(t *testing.T) {
+	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("AUTH_MODE", "development")
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "")
+	if _, err := Load(); err != nil {
+		t.Fatalf("development config should be allowed without a GitHub secret: %v", err)
+	}
+}
+
+func TestProviderAPIURLsMustBeTrustedHTTPSDestinations(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "GitHub HTTP", key: "GITHUB_API_URL", value: "http://github.example.com/api/v3"},
+		{name: "GitLab user info", key: "GITLAB_API_URL", value: "https://token@gitlab.example.com/api/v4"},
+		{name: "GitHub query", key: "GITHUB_API_URL", value: "https://github.example.com/api/v3?redirect=https://attacker.invalid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+			t.Setenv("ENVIRONMENT", "development")
+			t.Setenv("AUTH_MODE", "development")
+			t.Setenv(test.key, test.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("%s must be rejected", test.key)
+			}
+		})
+	}
+}
+
+func TestOCRTimeoutMustBePositiveDuration(t *testing.T) {
+	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("AUTH_MODE", "development")
+	t.Setenv("OCR_TIMEOUT", "0s")
+	if _, err := Load(); err == nil {
+		t.Fatal("OCR_TIMEOUT must reject a non-positive duration")
+	}
+}
+
+func TestReviewExecutionPolicyMustBeValid(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "unknown effort", key: "OCR_REVIEW_EFFORT", value: "fast"},
+		{name: "negative prompt tokens", key: "OCR_MAX_PROMPT_TOKENS", value: "-1"},
+		{name: "negative token budget", key: "OCR_MAX_TOKENS_BUDGET", value: "-1"},
+		{name: "negative subtask timeout", key: "OCR_SUBTASK_TIMEOUT_MINUTES", value: "-1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+			t.Setenv("ENVIRONMENT", "development")
+			t.Setenv("AUTH_MODE", "development")
+			t.Setenv(test.key, test.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("%s must be rejected", test.key)
+			}
+		})
+	}
+}
+
+func TestReviewExecutionPolicyUsesBoundedDefaultsForOlderDeployments(t *testing.T) {
+	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("AUTH_MODE", "development")
+	t.Setenv("OCR_CONCURRENCY", "")
+	t.Setenv("OCR_REVIEW_EFFORT", "")
+	t.Setenv("OCR_MAX_PROMPT_TOKENS", "")
+	t.Setenv("OCR_MAX_TOKENS_BUDGET", "")
+	t.Setenv("OCR_SUBTASK_TIMEOUT_MINUTES", "")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.Runner.OCRConcurrency != 2 || configuration.Runner.OCREffort != "low" || configuration.Runner.OCRMaxTokens != 8000 || configuration.Runner.OCRTokenBudget != 128000 || configuration.Runner.OCRSubtaskTimeout != 5 {
+		t.Fatalf("unexpected bounded OCR defaults: %#v", configuration.Runner)
+	}
+}
+
+func TestCheckoutTimeoutMustBePositiveDuration(t *testing.T) {
+	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("AUTH_MODE", "development")
+	t.Setenv("CHECKOUT_TIMEOUT", "0s")
+	if _, err := Load(); err == nil {
+		t.Fatal("CHECKOUT_TIMEOUT must reject a non-positive duration")
+	}
+}
+
+func TestMergeGateSeverityMustBeKnown(t *testing.T) {
+	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("AUTH_MODE", "development")
+	t.Setenv("MERGE_GATE_MIN_SEVERITY", "urgent")
+	if _, err := Load(); err == nil {
+		t.Fatal("MERGE_GATE_MIN_SEVERITY must reject unknown severities")
+	}
+}

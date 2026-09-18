@@ -113,7 +113,7 @@ Open Review Platform 是面向组织和研发团队的 AI 代码审查控制平�
 3. 将 interaction、review request、初始 run 与 outbox 同事务提交。
 4. 提交成功后，回执消费者发布或更新一条“已接收”评论。
 5. 执行过程中最多按阶段或固定时间窗口合并更新，避免刷屏。
-6. 完成后优先更新同一条状态评论，并发布独立 review/inline findings。
+6. 完成、失败、取消或 superseded 后更新同一条状态评论，并发布独立 review/inline findings；失败文案只指向 task detail 的安全摘要，不暴露 provider、token 或原始运行错误。
 
 回执目标：平台接收成功后 P95 5 秒内出现；高峰时回执队列不与审查执行队列竞争。
 

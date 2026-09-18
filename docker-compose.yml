@@ -1,4 +1,30 @@
 services:
+  rabbitmq-volume-init:
+    image: rabbitmq:4.1-management
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec", "chown -R rabbitmq:rabbitmq /var/lib/rabbitmq"]
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: "no"
+
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    environment:
+      RABBITMQ_DEFAULT_USER: openreview
+      RABBITMQ_DEFAULT_PASS: openreview
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      rabbitmq-volume-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+
   postgres:
     image: postgres:16.10-alpine
     environment:
@@ -42,6 +68,95 @@ services:
     tmpfs:
       - /tmp
 
+  console:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    environment:
+      CONTROL_API_URL: http://control-api:8080
+      CONTROL_API_DEVELOPMENT_SUBJECT: ${CONTROL_API_DEVELOPMENT_SUBJECT:-}
+      OPEN_REVIEW_CONSOLE_DEMO: ${OPEN_REVIEW_CONSOLE_DEMO:-false}
+    depends_on:
+      control-api:
+        condition: service_started
+    ports:
+      - "3110:3000"
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  outbox-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/app/outbox-relay"]
+    env_file: .env
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  interaction-responder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/app/interaction-responder"]
+    env_file: .env
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  acknowledger:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/app/acknowledger"]
+    env_file: .env
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  terminal-reporter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/app/terminal-reporter"]
+    env_file: .env
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+
   runner:
     build:
       context: .
@@ -49,6 +164,7 @@ services:
     env_file: .env
     environment:
       CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -58,3 +174,4 @@ services:
 
 volumes:
   postgres-data:
+  rabbitmq-data:

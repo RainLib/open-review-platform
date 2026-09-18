@@ -6,13 +6,17 @@ import (
 )
 
 func TestNormalizeGitHubPullRequest(t *testing.T) {
-	body := []byte(`{"action":"synchronize","number":42,"installation":{"id":123},"repository":{"full_name":"acme/api","clone_url":"https://github.com/acme/api.git"},"pull_request":{"base":{"ref":"main","sha":"base"},"head":{"ref":"feature","sha":"head"}}}`)
-	event, accepted, err := NormalizeGitHub("delivery-1", "pull_request", body, time.Now())
-	if err != nil || !accepted {
-		t.Fatalf("expected accepted event, accepted=%v err=%v", accepted, err)
-	}
-	if event.InstallationExternalID != "123" || event.ReviewNumber != 42 || event.HeadSHA != "head" {
-		t.Fatalf("unexpected normalized event: %#v", event)
+	for _, action := range []string{"opened", "reopened", "synchronize", "ready_for_review"} {
+		t.Run(action, func(t *testing.T) {
+			body := []byte(`{"action":"` + action + `","number":42,"installation":{"id":123},"repository":{"full_name":"acme/api","clone_url":"https://github.com/acme/api.git"},"pull_request":{"base":{"ref":"main","sha":"base"},"head":{"ref":"feature","sha":"head"}}}`)
+			event, accepted, err := NormalizeGitHub("delivery-1", "pull_request", body, time.Now())
+			if err != nil || !accepted {
+				t.Fatalf("expected accepted event, accepted=%v err=%v", accepted, err)
+			}
+			if event.InstallationExternalID != "123" || event.ReviewNumber != 42 || event.HeadSHA != "head" {
+				t.Fatalf("unexpected normalized event: %#v", event)
+			}
+		})
 	}
 }
 

@@ -16,18 +16,35 @@ It intentionally keeps product concerns out of OpenCodeReview itself:
 
 ## Current foundation
 
-The first implementation includes:
+The current implementation includes:
 
 - Kratos control API with health and verified GitHub/GitLab webhook routes;
 - PostgreSQL schema for tenants, memberships, provider installations, webhook
   deliveries, durable review jobs, findings, and audit events;
-- delivery-level idempotency and transactional enqueueing;
-- a separate runner process which claims jobs with `FOR UPDATE SKIP LOCKED`;
+- delivery-level idempotency, a transactional outbox, and a consumer inbox;
+- revisioned review runs with durable stage events and SSE task updates;
+- separate relay, acknowledger, interaction-responder, terminal-reporter, and runner processes;
 - an OCR adapter that executes `ocr review --from … --to … --format json` in a
-  temporary repository checkout; and
-- provider publisher contracts. GitHub/GitLab installation-token exchange and
-  dashboard CRUD are deliberately separate next increments, not credentials
-  hard-coded into webhook payloads.
+  temporary repository checkout, materializing focused/critical plans as an
+  exact selected-file range rather than a long model-side exclusion list; and
+- GitHub App installation-token exchange immediately before GitHub reads or
+  writes, never in webhook payloads or database rows; and
+- a native GitHub `Open Review / Analysis` Check Run lifecycle, separate from
+  future enterprise governance merge gates; and
+- published enterprise rule versions, repository/branch bindings, immutable
+  admission snapshots, and runner-owned OCR `--rule` files; and
+- explicit `@openreview` commands that receive an idempotent GitHub response
+  and source-comment acknowledgement reaction before their review runs
+  asynchronously; and
+- a Next.js management console that reads tenant runs, policies, and
+  credential-safe installation summaries, and can create installations and
+  validated policy drafts through a local-development control-plane bridge.
+
+The browser never receives a provider credential. Production console writes
+remain disabled until a Casdoor session bridge is configured. GitLab
+OAuth/application-token brokering and a general secret-manager resolver remain
+future increments; a deployment-configured GitLab token is supported only for
+controlled deployment.
 
 ## Architecture
 
@@ -35,13 +52,11 @@ The first implementation includes:
 GitHub App / GitLab App
         | verified webhook
         v
-control-api (Kratos) -> PostgreSQL event ledger -> review_jobs
-                                                   |
-                                                   v
-                                   runner -> isolated git checkout -> OCR 1.12.4
-                                                   |
-                                                   v
-                                  GitHub PR review / GitLab MR discussion
+control-api -> PostgreSQL -> outbox-relay -> RabbitMQ quorum queues -> interaction-responder -> GitHub reply
+     |             |
+     |             +--> polling runner -> isolated checkout -> OCR -> provider review
+     v
+Casdoor OIDC + tenant/RBAC + task/SSE API
 
 Dashboard -> Casdoor OIDC -> control-api -> tenancy, roles, policies, audit log
 ```
@@ -59,6 +74,10 @@ cp .env.example .env
 npm install --global @alibaba-group/open-code-review@1.12.4
 go run ./cmd/migrate
 go run ./cmd/control-api
+go run ./cmd/outbox-relay
+go run ./cmd/acknowledger
+go run ./cmd/interaction-responder
+go run ./cmd/terminal-reporter
 go run ./cmd/runner
 ```
 
@@ -66,4 +85,5 @@ go run ./cmd/runner
 exists solely for local bootstrapping. Production requires a Casdoor OIDC
 issuer and audience.
 
-Run the unit suite with `go test ./...`.
+Run the unit suite with `go test ./...`. For the Cloudflare-hosted webhook
+layout, see [Cloudflare public ingress](docs/cloudflare.md).
