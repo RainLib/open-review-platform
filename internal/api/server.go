@@ -749,6 +749,7 @@ func (s *Server) providerComment(ctx context.Context, w http.ResponseWriter, nor
 		return
 	}
 	if err != nil {
+		slog.Error("process provider interaction failed", "provider", event.Provider, "repository", event.Repository, "review_number", event.ReviewNumber, "command", input.Command, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not process interaction"})
 		return
 	}

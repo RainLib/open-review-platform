@@ -8,6 +8,29 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestInteractionTriggerKind(t *testing.T) {
+	tests := []struct {
+		command string
+		want    string
+		wantErr bool
+	}{
+		{command: "review", want: "comment"},
+		{command: "retry", want: "retry"},
+		{command: "cancel", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.command, func(t *testing.T) {
+			got, err := interactionTriggerKind(test.command)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("interactionTriggerKind(%q) error = %v, want error %t", test.command, err, test.wantErr)
+			}
+			if got != test.want {
+				t.Fatalf("interactionTriggerKind(%q) = %q, want %q", test.command, got, test.want)
+			}
+		})
+	}
+}
+
 func TestRunStateRankIsMonotonicForRecoverableStages(t *testing.T) {
 	stages := []domain.RunState{
 		domain.RunAcknowledged,

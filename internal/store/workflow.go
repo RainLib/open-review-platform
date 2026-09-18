@@ -474,7 +474,11 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 	if !mode.Valid() {
 		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "review mode is invalid")
 	}
-	run, err := createCommentRun(ctx, tx, requestID, current, installation, input.Event, input.Command, mode, interactionID)
+	triggerKind, err := interactionTriggerKind(input.Command)
+	if err != nil {
+		return domain.InteractionOutcome{}, err
+	}
+	run, err := createCommentRun(ctx, tx, requestID, current, installation, input.Event, triggerKind, mode, interactionID)
 	if err != nil {
 		return domain.InteractionOutcome{}, err
 	}
@@ -492,6 +496,20 @@ func commandAllowed(role, command string) bool {
 		return role == "owner" || role == "admin" || role == "rule_admin" || role == "reviewer" || role == "viewer"
 	}
 	return role == "owner" || role == "admin" || role == "rule_admin" || role == "reviewer"
+}
+
+// interactionTriggerKind translates a user command into the stable, database
+// constrained provenance kind used by review runs. A new review is a comment
+// trigger; only retry has its own lifecycle trigger kind.
+func interactionTriggerKind(command string) (string, error) {
+	switch command {
+	case "review":
+		return "comment", nil
+	case "retry":
+		return "retry", nil
+	default:
+		return "", fmt.Errorf("unsupported run-creating interaction command %q", command)
+	}
 }
 
 // resolveInteractionRunTarget accepts an explicit run id only for commands
