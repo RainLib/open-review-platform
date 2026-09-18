@@ -69,23 +69,26 @@ func Load() (Config, error) {
 	if err != nil || poll <= 0 {
 		return Config{}, fmt.Errorf("RUNNER_POLL_INTERVAL must be a positive duration")
 	}
-	ocrConcurrency, err := envInt("OCR_CONCURRENCY", 0)
+	// Keep the runtime defaults aligned with .env.example. An older deployment
+	// may not have newly introduced keys; treating absence as unlimited model
+	// work turns a harmless upgrade into an unbounded-cost review.
+	ocrConcurrency, err := envInt("OCR_CONCURRENCY", 2)
 	if err != nil || ocrConcurrency < 0 {
 		return Config{}, fmt.Errorf("OCR_CONCURRENCY must be a non-negative integer")
 	}
-	ocrEffort := env("OCR_REVIEW_EFFORT", "")
+	ocrEffort := env("OCR_REVIEW_EFFORT", "low")
 	if ocrEffort != "" && ocrEffort != "low" && ocrEffort != "medium" && ocrEffort != "high" {
 		return Config{}, fmt.Errorf("OCR_REVIEW_EFFORT must be low, medium, high, or empty")
 	}
-	ocrMaxTokens, err := envInt("OCR_MAX_PROMPT_TOKENS", 0)
+	ocrMaxTokens, err := envInt("OCR_MAX_PROMPT_TOKENS", 8000)
 	if err != nil || ocrMaxTokens < 0 {
 		return Config{}, fmt.Errorf("OCR_MAX_PROMPT_TOKENS must be a non-negative integer")
 	}
-	ocrTokenBudget, err := envInt("OCR_MAX_TOKENS_BUDGET", 0)
+	ocrTokenBudget, err := envInt("OCR_MAX_TOKENS_BUDGET", 128000)
 	if err != nil || ocrTokenBudget < 0 {
 		return Config{}, fmt.Errorf("OCR_MAX_TOKENS_BUDGET must be a non-negative integer")
 	}
-	ocrSubtaskTimeout, err := envInt("OCR_SUBTASK_TIMEOUT_MINUTES", 0)
+	ocrSubtaskTimeout, err := envInt("OCR_SUBTASK_TIMEOUT_MINUTES", 5)
 	if err != nil || ocrSubtaskTimeout < 0 {
 		return Config{}, fmt.Errorf("OCR_SUBTASK_TIMEOUT_MINUTES must be a non-negative integer")
 	}

@@ -67,6 +67,24 @@ func TestReviewExecutionPolicyMustBeValid(t *testing.T) {
 	}
 }
 
+func TestReviewExecutionPolicyUsesBoundedDefaultsForOlderDeployments(t *testing.T) {
+	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("AUTH_MODE", "development")
+	t.Setenv("OCR_CONCURRENCY", "")
+	t.Setenv("OCR_REVIEW_EFFORT", "")
+	t.Setenv("OCR_MAX_PROMPT_TOKENS", "")
+	t.Setenv("OCR_MAX_TOKENS_BUDGET", "")
+	t.Setenv("OCR_SUBTASK_TIMEOUT_MINUTES", "")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.Runner.OCRConcurrency != 2 || configuration.Runner.OCREffort != "low" || configuration.Runner.OCRMaxTokens != 8000 || configuration.Runner.OCRTokenBudget != 128000 || configuration.Runner.OCRSubtaskTimeout != 5 {
+		t.Fatalf("unexpected bounded OCR defaults: %#v", configuration.Runner)
+	}
+}
+
 func TestCheckoutTimeoutMustBePositiveDuration(t *testing.T) {
 	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
 	t.Setenv("ENVIRONMENT", "development")
