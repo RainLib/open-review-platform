@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 
 import { DataSourceNotice } from "@/components/console/data-source-notice";
+import { ConnectionManager } from "@/components/console/connection-manager";
 import {
   ImplementationNotice,
   PageTitle,
@@ -29,7 +30,7 @@ const steps = [
   {
     title: "Source providers",
     detail:
-      "Register GitHub or GitLab installations through the control plane; provider credentials remain server-side references, never browser data.",
+      "Register GitHub or GitLab installations through the control plane. GitHub uses its deployment-mounted App key; GitLab uses its deployment credential.",
     complete: false,
   },
   {
@@ -61,10 +62,16 @@ export default async function ConnectPage({
         </div>
       </div>
       <ImplementationNotice>
-        This page describes the deployable integration sequence. It does not
-        expose provider tokens, GitHub App private keys, or production access
-        controls in the UI.
+        Connection writes are available through the local development bridge.
+        The browser never receives provider tokens or a GitHub App private key;
+        production writes remain disabled until the Casdoor session bridge is
+        configured.
       </ImplementationNotice>
+      <ConnectionManager
+        enabled={live}
+        installations={data.installations}
+        org={org}
+      />
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
         <div className="rounded-2xl border border-white/[0.075] bg-console-surface p-5 sm:p-6">
           <p className="text-sm font-medium text-zinc-100">

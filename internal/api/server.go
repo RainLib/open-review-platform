@@ -48,6 +48,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tenants", s.createTenant)
 	mux.HandleFunc("PUT /v1/tenants/{slug}/members/{subject}", s.upsertMembership)
 	mux.HandleFunc("POST /v1/tenants/{slug}/installations", s.createInstallation)
+	mux.HandleFunc("GET /v1/tenants/{slug}/installations", s.listInstallations)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-sets", s.createRuleSet)
 	mux.HandleFunc("GET /v1/tenants/{slug}/rule-sets", s.listRuleSets)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-sets/{ruleSetID}/versions/{version}/approval-requests", s.requestRuleApproval)
@@ -146,6 +147,34 @@ func (s *Server) createInstallation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, installation)
 }
 
+func (s *Server) listInstallations(w http.ResponseWriter, r *http.Request) {
+	principal, err := s.auth.Authenticate(r.Context(), r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	limit := 25
+	if value := r.URL.Query().Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be from 1 to 100"})
+			return
+		}
+		limit = parsed
+	}
+	installations, err := s.store.ListInstallations(r.Context(), principal.Subject, r.PathValue("slug"), limit)
+	if errors.Is(err, store.ErrForbidden) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+		return
+	}
+	if err != nil {
+		slog.Error("list provider installations failed", "tenant", r.PathValue("slug"), "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list provider installations"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"installations": installations})
+}
+
 func (s *Server) createRuleSet(w http.ResponseWriter, r *http.Request) {
 	principal, err := s.auth.Authenticate(r.Context(), r)
 	if err != nil {
@@ -165,9 +194,14 @@ func (s *Server) createRuleSet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "rule set name already exists"})
 		return
 	}
-	if err != nil {
+	if errors.Is(err, store.ErrInvalidRuleSet) {
 		slog.Warn("rejecting invalid rule set", "tenant", r.PathValue("slug"), "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule set is invalid"})
+		return
+	}
+	if err != nil {
+		slog.Error("create rule set failed", "tenant", r.PathValue("slug"), "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not create rule set"})
 		return
 	}
 	writeJSON(w, http.StatusCreated, result)
@@ -266,9 +300,14 @@ func (s *Server) requestRuleApproval(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "an approval request already exists for this rule version"})
 		return
 	}
-	if err != nil {
+	if errors.Is(err, store.ErrInvalidRuleApproval) {
 		slog.Warn("rejecting rule approval request", "tenant", r.PathValue("slug"), "rule_set_id", ruleSetID, "version", version, "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule approval request is invalid"})
+		return
+	}
+	if err != nil {
+		slog.Error("request rule approval failed", "tenant", r.PathValue("slug"), "rule_set_id", ruleSetID, "version", version, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not request rule approval"})
 		return
 	}
 	writeJSON(w, http.StatusCreated, request)
@@ -302,9 +341,14 @@ func (s *Server) decideRuleApproval(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "approval request is no longer pending or was already decided"})
 		return
 	}
-	if err != nil {
+	if errors.Is(err, store.ErrInvalidRuleApproval) {
 		slog.Warn("rejecting rule approval decision", "tenant", r.PathValue("slug"), "request_id", requestID, "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule approval decision is invalid"})
+		return
+	}
+	if err != nil {
+		slog.Error("decide rule approval failed", "tenant", r.PathValue("slug"), "request_id", requestID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not decide rule approval"})
 		return
 	}
 	writeJSON(w, http.StatusOK, request)
@@ -329,12 +373,12 @@ func (s *Server) createRuleBinding(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "published rule version was not found"})
 		return
 	}
+	if errors.Is(err, store.ErrInvalidRuleBinding) {
+		slog.Warn("rejecting invalid rule binding", "tenant", r.PathValue("slug"), "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule binding is invalid"})
+		return
+	}
 	if err != nil {
-		if strings.Contains(err.Error(), "rule binding is invalid") {
-			slog.Warn("rejecting invalid rule binding", "tenant", r.PathValue("slug"), "error", err)
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule binding is invalid"})
-			return
-		}
 		slog.Error("create rule binding failed", "tenant", r.PathValue("slug"), "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not create rule binding"})
 		return
@@ -366,8 +410,13 @@ func (s *Server) updateRuleBinding(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "rule binding was not found"})
 		return
 	}
-	if err != nil {
+	if errors.Is(err, store.ErrInvalidRuleBinding) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule binding state is invalid"})
+		return
+	}
+	if err != nil {
+		slog.Error("update rule binding failed", "tenant", r.PathValue("slug"), "binding_id", bindingID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not update rule binding"})
 		return
 	}
 	writeJSON(w, http.StatusOK, binding)
@@ -452,8 +501,13 @@ func (s *Server) upsertProviderIdentity(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "provider identity is already mapped"})
 		return
 	}
-	if err != nil {
+	if errors.Is(err, store.ErrInvalidProviderIdentity) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider identity is invalid"})
+		return
+	}
+	if err != nil {
+		slog.Error("upsert provider identity failed", "tenant", r.PathValue("slug"), "provider", r.PathValue("provider"), "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not upsert provider identity"})
 		return
 	}
 	writeJSON(w, http.StatusOK, identity)
@@ -602,9 +656,15 @@ func (s *Server) streamRunEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		events, err := s.store.ListRunEvents(r.Context(), principal.Subject, r.PathValue("slug"), runID, after)
 		if errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNotFound) {
+			slog.Warn("sse stream ended: run not accessible", "tenant", r.PathValue("slug"), "run_id", runID, "error", err)
+			_, _ = fmt.Fprint(w, "event: error\ndata: {\"code\":\"not_found\"}\n\n")
+			flusher.Flush()
 			return
 		}
 		if err != nil {
+			slog.Error("sse stream ended: list events failed", "tenant", r.PathValue("slug"), "run_id", runID, "error", err)
+			_, _ = fmt.Fprint(w, "event: error\ndata: {\"code\":\"unavailable\"}\n\n")
+			flusher.Flush()
 			return
 		}
 		for _, event := range events {

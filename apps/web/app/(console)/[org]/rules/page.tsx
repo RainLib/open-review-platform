@@ -8,6 +8,7 @@ import {
   ImplementationNotice,
   PageTitle,
 } from "@/components/console/console-shell";
+import { RuleSetComposer } from "@/components/console/rule-set-composer";
 import { getConsoleData } from "@/lib/control-api";
 import { formatTime } from "@/lib/format";
 
@@ -31,15 +32,16 @@ export default async function RulesPage({
         </div>
       </div>
       <ImplementationNotice>
-        Read access is available now. Rule creation, approval and publication
-        endpoints exist in the control plane; their mutation UI will be added
-        only with authenticated Casdoor session handling and permission-aware
-        flows.
+        Create validated drafts through the local development bridge. Drafts
+        remain non-executable until they pass independent approval and are
+        published; production writes remain disabled without a Casdoor session
+        bridge.
       </ImplementationNotice>
+      <RuleSetComposer enabled={data.source === "live"} org={org} />
       {data.ruleSets.length === 0 ? (
         <EmptyData
           title="No policy sets found"
-          detail="Create a rule set through the existing control-plane API, or enable demo mode to inspect the console layout."
+          detail="Create a governed draft above, or enable demo mode to inspect the console layout."
         />
       ) : (
         <div className="grid gap-3 lg:grid-cols-2">

@@ -31,8 +31,10 @@ once for each release. The migration lock prevents concurrent application.
 ## Bootstrap order
 
 1. Create a tenant and a least-privilege GitHub App or GitLab application.
-2. Register its external installation ID in `provider_installations` and keep
-   its provider credentials in the chosen secret manager.
+2. Register its external installation ID in `provider_installations`. GitHub
+   App installations use `credential_ref=github-app`; mount the App private
+   key only in the runner-side services. GitLab uses its separately configured
+   deployment token (`credential_ref=gitlab-token`).
 3. Configure the webhook URL and a unique provider secret.
 4. Send a provider test delivery. It must return `202` only for a known active
    installation; repeats return `202` with `duplicate: true` and create no
@@ -43,9 +45,13 @@ once for each release. The migration lock prevents concurrent application.
    installation identity, not a personal access token. The runner's database
    poller is only the recovery path for a lost broker notification.
 
-The GitHub App JWT exchange is implemented. The GitLab OAuth/application-token
-broker, dashboard CRUD, and encrypted secret-reference management remain
-required before a broad multi-tenant public launch.
+The GitHub App JWT exchange is implemented. The console can read live state
+and, only through the local-development bridge, create provider installations
+and validated rule drafts. It returns installation summaries without credential
+references. Production console writes fail closed until a Casdoor browser
+session bridge is configured. GitLab OAuth/application-token brokering and a
+general encrypted secret-manager resolver remain required before a broad
+multi-tenant public launch.
 
 For a Cloudflare-fronted installation, use the public ingress layout in
 [Cloudflare public ingress](cloudflare.md). Cloudflare terminates HTTPS and

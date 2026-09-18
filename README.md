@@ -34,10 +34,16 @@ The current implementation includes:
   admission snapshots, and runner-owned OCR `--rule` files; and
 - explicit `@openreview` commands that receive an idempotent GitHub response
   and source-comment acknowledgement reaction before their review runs
-  asynchronously.
+  asynchronously; and
+- a Next.js management console that reads tenant runs, policies, and
+  credential-safe installation summaries, and can create installations and
+  validated policy drafts through a local-development control-plane bridge.
 
-GitLab OAuth/application-token brokering and dashboard CRUD remain planned
-increments; a static GitLab token is supported only for controlled deployment.
+The browser never receives a provider credential. Production console writes
+remain disabled until a Casdoor session bridge is configured. GitLab
+OAuth/application-token brokering and a general secret-manager resolver remain
+future increments; a deployment-configured GitLab token is supported only for
+controlled deployment.
 
 ## Architecture
 

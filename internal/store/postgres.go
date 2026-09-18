@@ -97,6 +97,46 @@ func (s *PostgresStore) CreateInstallation(ctx context.Context, actor, tenantSlu
 	return installation, nil
 }
 
+func (s *PostgresStore) ListInstallations(ctx context.Context, actor, tenantSlug string, limit int) ([]domain.InstallationSummary, error) {
+	if limit < 1 || limit > 100 {
+		return nil, fmt.Errorf("installation limit must be from 1 to 100")
+	}
+	tenantID, _, err := s.authorizedTenant(ctx, actor, tenantSlug)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, provider, external_id, repository_scope, api_base_url, active
+		FROM provider_installations
+		WHERE tenant_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list provider installations: %w", err)
+	}
+	defer rows.Close()
+
+	installations := make([]domain.InstallationSummary, 0)
+	for rows.Next() {
+		var installation domain.InstallationSummary
+		if err := rows.Scan(
+			&installation.ID,
+			&installation.Provider,
+			&installation.ExternalID,
+			&installation.RepositoryScope,
+			&installation.APIBaseURL,
+			&installation.Active,
+		); err != nil {
+			return nil, fmt.Errorf("scan provider installation: %w", err)
+		}
+		installations = append(installations, installation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate provider installations: %w", err)
+	}
+	return installations, nil
+}
+
 func (s *PostgresStore) UpsertMembership(ctx context.Context, actor, tenantSlug, subject, role string) (domain.Membership, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

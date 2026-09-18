@@ -289,7 +289,7 @@ func jsonPayload(value map[string]any) string {
 
 func (s *PostgresStore) UpsertProviderIdentity(ctx context.Context, actor, tenantSlug string, input domain.ProviderIdentity) (domain.ProviderIdentity, error) {
 	if !input.Provider.Valid() || input.ExternalID == "" || input.Subject == "" {
-		return domain.ProviderIdentity{}, fmt.Errorf("provider identity is invalid")
+		return domain.ProviderIdentity{}, ErrInvalidProviderIdentity
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

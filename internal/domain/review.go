@@ -35,14 +35,25 @@ const (
 )
 
 type Installation struct {
-	ID              uuid.UUID
-	TenantID        uuid.UUID
-	Provider        Provider
-	ExternalID      string
-	RepositoryScope string
-	APIBaseURL      string
-	CredentialRef   string
-	Active          bool
+	ID              uuid.UUID `json:"id"`
+	TenantID        uuid.UUID `json:"tenant_id"`
+	Provider        Provider  `json:"provider"`
+	ExternalID      string    `json:"external_id"`
+	RepositoryScope string    `json:"repository_scope"`
+	APIBaseURL      string    `json:"api_base_url"`
+	CredentialRef   string    `json:"-"`
+	Active          bool      `json:"active"`
+}
+
+// InstallationSummary is safe to return to an authenticated management
+// console. Credential references stay internal to worker-side execution.
+type InstallationSummary struct {
+	ID              uuid.UUID `json:"id"`
+	Provider        Provider  `json:"provider"`
+	ExternalID      string    `json:"external_id"`
+	RepositoryScope string    `json:"repository_scope"`
+	APIBaseURL      string    `json:"api_base_url"`
+	Active          bool      `json:"active"`
 }
 
 type Tenant struct {

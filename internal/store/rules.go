@@ -19,18 +19,18 @@ func (s *PostgresStore) CreateRuleSet(ctx context.Context, actor, tenantSlug str
 	input.Name = strings.TrimSpace(input.Name)
 	input.Description = strings.TrimSpace(input.Description)
 	if input.Name == "" || len(input.Name) > 160 || len(input.Description) > 4_000 || len(input.Rules) == 0 {
-		return domain.RuleSetWithDraft{}, fmt.Errorf("rule set name, description, or rules are invalid")
+		return domain.RuleSetWithDraft{}, fmt.Errorf("%w: name, description, or rules", ErrInvalidRuleSet)
 	}
 	var parsed []rules.Rule
 	if err := json.Unmarshal(input.Rules, &parsed); err != nil || len(parsed) == 0 {
-		return domain.RuleSetWithDraft{}, fmt.Errorf("rule set rules must be a non-empty array")
+		return domain.RuleSetWithDraft{}, fmt.Errorf("%w: rules must be a non-empty array", ErrInvalidRuleSet)
 	}
 	compiled, err := rules.Compile([]rules.Source{{VersionID: "draft", Precedence: 0, Rules: parsed}})
 	if err != nil {
-		return domain.RuleSetWithDraft{}, fmt.Errorf("validate rule set: %w", err)
+		return domain.RuleSetWithDraft{}, fmt.Errorf("%w: validate rules: %v", ErrInvalidRuleSet, err)
 	}
 	if _, err := rules.OCRRuleFileForSnapshot(compiled.Snapshot); err != nil {
-		return domain.RuleSetWithDraft{}, fmt.Errorf("validate rule set OCR adapter: %w", err)
+		return domain.RuleSetWithDraft{}, fmt.Errorf("%w: validate OCR adapter: %v", ErrInvalidRuleSet, err)
 	}
 	canonicalRules, err := json.Marshal(parsed)
 	if err != nil {
@@ -120,7 +120,7 @@ func (s *PostgresStore) ListRuleSets(ctx context.Context, actor, tenantSlug stri
 // authorize a changed rule payload.
 func (s *PostgresStore) RequestRuleApproval(ctx context.Context, actor, tenantSlug string, ruleSetID uuid.UUID, version int, input domain.RuleApprovalRequestInput) (domain.RuleApprovalRequest, error) {
 	if ruleSetID == uuid.Nil || version < 1 || input.RequiredApprovals < 0 || input.RequiredApprovals > 5 {
-		return domain.RuleApprovalRequest{}, fmt.Errorf("rule approval request is invalid")
+		return domain.RuleApprovalRequest{}, ErrInvalidRuleApproval
 	}
 	if input.RequiredApprovals == 0 {
 		input.RequiredApprovals = 1
@@ -183,7 +183,7 @@ func (s *PostgresStore) DecideRuleApproval(ctx context.Context, actor, tenantSlu
 	input.Decision = strings.ToLower(strings.TrimSpace(input.Decision))
 	input.Comment = strings.TrimSpace(input.Comment)
 	if requestID == uuid.Nil || (input.Decision != "approved" && input.Decision != "rejected") || len(input.Comment) > 2_000 {
-		return domain.RuleApprovalRequest{}, fmt.Errorf("rule approval decision is invalid")
+		return domain.RuleApprovalRequest{}, ErrInvalidRuleApproval
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -315,7 +315,7 @@ func (s *PostgresStore) PublishRuleVersion(ctx context.Context, actor, tenantSlu
 
 func (s *PostgresStore) CreateRuleBinding(ctx context.Context, actor, tenantSlug string, input domain.RuleBindingInput) (domain.RuleBinding, error) {
 	if !validRuleBindingInput(&input) {
-		return domain.RuleBinding{}, fmt.Errorf("rule binding is invalid")
+		return domain.RuleBinding{}, ErrInvalidRuleBinding
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -365,7 +365,7 @@ func (s *PostgresStore) CreateRuleBinding(ctx context.Context, actor, tenantSlug
 func (s *PostgresStore) UpdateRuleBinding(ctx context.Context, actor, tenantSlug string, bindingID uuid.UUID, input domain.RuleBindingUpdateInput) (domain.RuleBinding, error) {
 	input.State = strings.ToLower(strings.TrimSpace(input.State))
 	if bindingID == uuid.Nil || (input.State != "active" && input.State != "shadow" && input.State != "disabled") {
-		return domain.RuleBinding{}, fmt.Errorf("rule binding update is invalid")
+		return domain.RuleBinding{}, ErrInvalidRuleBinding
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

@@ -37,6 +37,15 @@ export type RuleSet = {
   updated_at: string;
 };
 
+export type ProviderInstallation = {
+  id: string;
+  provider: "github" | "gitlab";
+  external_id: string;
+  repository_scope: string;
+  api_base_url: string;
+  active: boolean;
+};
+
 export type RuleSnapshot = {
   id: string;
   sha256: string;
@@ -68,6 +77,7 @@ export type ConsoleData = {
   source: DataSource;
   runs: ReviewRun[];
   ruleSets: RuleSet[];
+  installations: ProviderInstallation[];
   detail?: string;
 };
 
@@ -141,6 +151,17 @@ const demoRuleSets: RuleSet[] = [
   },
 ];
 
+const demoInstallations: ProviderInstallation[] = [
+  {
+    id: "installation-demo-1",
+    provider: "github",
+    external_id: "123456",
+    repository_scope: "RainLib/*",
+    api_base_url: "https://api.github.com",
+    active: true,
+  },
+];
+
 const demoEvents: Record<string, RunEvent[]> = {
   "demo-42a1": [
     {
@@ -210,7 +231,12 @@ async function request<T>(path: string): Promise<T> {
 
 export async function getConsoleData(org: string): Promise<ConsoleData> {
   if (process.env.OPEN_REVIEW_CONSOLE_DEMO === "true") {
-    return { source: "demo", runs: demoRuns, ruleSets: demoRuleSets };
+    return {
+      source: "demo",
+      runs: demoRuns,
+      ruleSets: demoRuleSets,
+      installations: demoInstallations,
+    };
   }
 
   if (!configured()) {
@@ -218,27 +244,37 @@ export async function getConsoleData(org: string): Promise<ConsoleData> {
       source: "unconfigured",
       runs: [],
       ruleSets: [],
+      installations: [],
       detail:
         "Set CONTROL_API_URL and CONTROL_API_DEVELOPMENT_SUBJECT for a local development connection.",
     };
   }
 
   try {
-    const [runs, ruleSets] = await Promise.all([
+    const [runs, ruleSets, installations] = await Promise.all([
       request<{ runs: ReviewRun[] }>(
         `/v1/tenants/${encodeURIComponent(org)}/runs?limit=25`,
       ),
       request<{ rule_sets: RuleSet[] }>(
         `/v1/tenants/${encodeURIComponent(org)}/rule-sets?limit=25`,
       ),
+      request<{ installations: ProviderInstallation[] }>(
+        `/v1/tenants/${encodeURIComponent(org)}/installations?limit=25`,
+      ),
     ]);
 
-    return { source: "live", runs: runs.runs, ruleSets: ruleSets.rule_sets };
+    return {
+      source: "live",
+      runs: runs.runs,
+      ruleSets: ruleSets.rule_sets,
+      installations: installations.installations,
+    };
   } catch (error) {
     return {
       source: "unavailable",
       runs: [],
       ruleSets: [],
+      installations: [],
       detail:
         error instanceof Error
           ? error.message
@@ -271,6 +307,7 @@ export async function getRunDetail(
       source: "demo",
       runs: demoRuns,
       ruleSets: demoRuleSets,
+      installations: demoInstallations,
       run,
       ruleSnapshot: run
         ? {
@@ -298,6 +335,7 @@ export async function getRunDetail(
       source: "unconfigured",
       runs: [],
       ruleSets: [],
+      installations: [],
       detail:
         "Set CONTROL_API_URL and CONTROL_API_DEVELOPMENT_SUBJECT for a local development connection.",
     };
@@ -310,12 +348,20 @@ export async function getRunDetail(
     const ruleSnapshot = await optionalRequest<RuleSnapshot>(
       `/v1/tenants/${encodeURIComponent(org)}/runs/${encodeURIComponent(runID)}/rule-snapshot`,
     );
-    return { source: "live", runs: [], ruleSets: [], run, ruleSnapshot };
+    return {
+      source: "live",
+      runs: [],
+      ruleSets: [],
+      installations: [],
+      run,
+      ruleSnapshot,
+    };
   } catch (error) {
     return {
       source: "unavailable",
       runs: [],
       ruleSets: [],
+      installations: [],
       detail:
         error instanceof Error
           ? error.message
