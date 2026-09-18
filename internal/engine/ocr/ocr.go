@@ -127,7 +127,7 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 	logs, err := command.CombinedOutput()
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("OCR review timed out after %s", e.Timeout)
+			return nil, fmt.Errorf("%w after %s", domain.ErrReviewTimedOut, e.Timeout)
 		}
 		return nil, fmt.Errorf("execute OCR review: %w: %s", err, trimmedOutput(logs))
 	}

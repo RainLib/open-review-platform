@@ -2,10 +2,16 @@ package domain
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrReviewTimedOut marks an execution budget being exhausted. It is distinct
+// from transport failures: retrying the identical request simply recreates the
+// same wait and delays a visible, actionable result.
+var ErrReviewTimedOut = errors.New("review execution timed out")
 
 type Provider string
 

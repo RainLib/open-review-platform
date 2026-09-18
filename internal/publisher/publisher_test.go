@@ -144,6 +144,9 @@ func TestReportsDistinguishBlockedFailureAndSupersededStates(t *testing.T) {
 	if terminal := TerminalReport(job, LifecycleFailed, "marker"); !strings.Contains(terminal, "could not complete") || !strings.Contains(terminal, "retry") {
 		t.Fatalf("unexpected failed report: %s", terminal)
 	}
+	if terminal := TerminalReport(job, LifecycleTimedOut, "marker"); !strings.Contains(terminal, "timed out") || !strings.Contains(terminal, "No findings were published") {
+		t.Fatalf("unexpected timeout report: %s", terminal)
+	}
 	if terminal := TerminalReport(job, LifecycleSuperseded, "marker"); !strings.Contains(terminal, "superseded") || !strings.Contains(terminal, "discarded") {
 		t.Fatalf("unexpected superseded report: %s", terminal)
 	}

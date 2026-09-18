@@ -51,6 +51,7 @@ type RunnerStore interface {
 	SaveFindings(context.Context, uuid.UUID, []domain.Finding) error
 	Succeed(context.Context, uuid.UUID, string) error
 	Fail(context.Context, uuid.UUID, string, string) error
+	FailTerminal(context.Context, uuid.UUID, string, string) error
 	Cancel(context.Context, uuid.UUID, string) error
 	RenewClaim(context.Context, uuid.UUID, string, time.Duration) error
 }
@@ -150,20 +151,35 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 			_, stopErr := p.stopTerminalRun(ctx, *job, terminal.run)
 			return true, stopErr
 		}
-		if failureErr := p.Store.Fail(ctx, job.ID, p.WorkerID, err.Error()); failureErr != nil && !errors.Is(failureErr, store.ErrJobClaimLost) {
+		terminalFailure := isTerminalExecutionFailure(err)
+		var failureErr error
+		if terminalFailure {
+			failureErr = p.Store.FailTerminal(ctx, job.ID, p.WorkerID, err.Error())
+		} else {
+			failureErr = p.Store.Fail(ctx, job.ID, p.WorkerID, err.Error())
+		}
+		if failureErr != nil && !errors.Is(failureErr, store.ErrJobClaimLost) {
 			return true, fmt.Errorf("process job %s: %w (record failure: %v)", job.ID, err, failureErr)
 		}
-		if job.Attempts >= 5 {
+		if terminalFailure || job.Attempts >= 5 {
 			if _, transitionErr := p.advance(ctx, job.ID, domain.RunFailed); transitionErr != nil && !errors.Is(transitionErr, store.ErrJobClaimLost) {
 				return true, fmt.Errorf("mark review run %s failed: %w", job.ID, transitionErr)
 			}
 			if p.Checks != nil {
-				if checkErr := p.Checks.CompleteCheck(ctx, *job, publisher.CheckFailure, "The review could not be completed after retrying. See the task detail for the safe error summary."); checkErr != nil && p.Logger != nil {
+				summary := "The review could not be completed after retrying. See the task detail for the safe error summary."
+				if terminalFailure {
+					summary = "The review exceeded its execution budget. No findings were published; adjust the execution budget or retry after the model service recovers."
+				}
+				if checkErr := p.Checks.CompleteCheck(ctx, *job, publisher.CheckFailure, summary); checkErr != nil && p.Logger != nil {
 					p.Logger.Warn("could not finalize failed review check", "job_id", job.ID, "error", checkErr)
 				}
 			}
 			if p.Lifecycle != nil {
-				if publishErr := p.Lifecycle.PublishTerminal(ctx, *job, publisher.LifecycleFailed); publishErr != nil && p.Logger != nil {
+				state := publisher.LifecycleFailed
+				if terminalFailure {
+					state = publisher.LifecycleTimedOut
+				}
+				if publishErr := p.Lifecycle.PublishTerminal(ctx, *job, state); publishErr != nil && p.Logger != nil {
 					p.Logger.Warn("could not publish failed review report", "job_id", job.ID, "error", publishErr)
 				}
 			}
@@ -186,6 +202,10 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 		p.Logger.Info("review job succeeded", "job_id", job.ID, "attempt", job.Attempts)
 	}
 	return true, nil
+}
+
+func isTerminalExecutionFailure(err error) bool {
+	return errors.Is(err, domain.ErrReviewTimedOut)
 }
 
 // keepClaimAlive makes the database lease explicit. A restart therefore makes

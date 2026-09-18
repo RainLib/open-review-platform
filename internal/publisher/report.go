@@ -52,6 +52,7 @@ type LifecycleState string
 
 const (
 	LifecycleFailed     LifecycleState = "failed"
+	LifecycleTimedOut   LifecycleState = "timed_out"
 	LifecycleCancelled  LifecycleState = "cancelled"
 	LifecycleSuperseded LifecycleState = "superseded"
 )
@@ -262,6 +263,8 @@ func TerminalReport(job domain.ReviewJob, state LifecycleState, marker string) s
 	badge := "failed"
 	color := "d1242f"
 	switch state {
+	case LifecycleTimedOut:
+		title, body, badge, color = "⏱️ Review timed out", "The review exceeded its configured execution budget before a trustworthy result could be published. No findings were published; adjust the budget or retry after the model service recovers.", "timed out", "bf8700"
 	case LifecycleCancelled:
 		title, body, badge, color = "⏹️ Review cancelled", "The review was cancelled before publication. No findings from this run were published.", "cancelled", "6e7781"
 	case LifecycleSuperseded:

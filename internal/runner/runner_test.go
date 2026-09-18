@@ -34,6 +34,7 @@ func (s snapshotStore) RuleSnapshotForJob(context.Context, uuid.UUID) (domain.Ru
 func (snapshotStore) SaveFindings(context.Context, uuid.UUID, []domain.Finding) error { return nil }
 func (snapshotStore) Succeed(context.Context, uuid.UUID, string) error                { return nil }
 func (snapshotStore) Fail(context.Context, uuid.UUID, string, string) error           { return nil }
+func (snapshotStore) FailTerminal(context.Context, uuid.UUID, string, string) error   { return nil }
 func (snapshotStore) Cancel(context.Context, uuid.UUID, string) error                 { return nil }
 func (snapshotStore) RenewClaim(context.Context, uuid.UUID, string, time.Duration) error {
 	return nil
@@ -223,5 +224,14 @@ func TestStopTerminalRunDoesNotCancelCompletedReview(t *testing.T) {
 	}
 	if stopped {
 		t.Fatal("completed review must be allowed to mark its job succeeded")
+	}
+}
+
+func TestExecutionBudgetTimeoutIsTerminal(t *testing.T) {
+	if !isTerminalExecutionFailure(domain.ErrReviewTimedOut) {
+		t.Fatal("expected execution budget timeout to bypass retries")
+	}
+	if isTerminalExecutionFailure(errors.New("temporary provider unavailable")) {
+		t.Fatal("temporary provider errors must remain retryable")
 	}
 }

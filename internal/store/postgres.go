@@ -316,6 +316,13 @@ func (s *PostgresStore) Fail(ctx context.Context, jobID uuid.UUID, workerID, mes
 	return nil
 }
 
+// FailTerminal records a non-retryable execution error. Time-budget exhaustion
+// is one such error: a replay against the same commit and model budget only
+// recreates the wait and leaves the provider check misleadingly pending.
+func (s *PostgresStore) FailTerminal(ctx context.Context, jobID uuid.UUID, workerID, message string) error {
+	return s.finish(ctx, jobID, workerID, domain.JobFailed, message)
+}
+
 func (s *PostgresStore) Cancel(ctx context.Context, jobID uuid.UUID, workerID string) error {
 	return s.finish(ctx, jobID, workerID, domain.JobCancelled, "cancelled before provider publication")
 }
