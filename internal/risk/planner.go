@@ -18,6 +18,9 @@ const (
 	ModeStandard Mode = "standard"
 	ModeFocused  Mode = "focused"
 	ModeCritical Mode = "critical"
+
+	criticalFallbackScore = 55
+	criticalFallbackLimit = 2
 )
 
 func (m Mode) Valid() bool {
@@ -71,7 +74,32 @@ func (p Planner) Plan(ctx context.Context, directory, base, head string) (Plan, 
 	}
 	sort.Slice(plan.Selected, func(i, j int) bool { return plan.Selected[i].Score > plan.Selected[j].Score })
 	sort.Slice(plan.Deferred, func(i, j int) bool { return plan.Deferred[i].Score > plan.Deferred[j].Score })
+	if mode == ModeCritical && len(plan.Selected) == 0 {
+		plan = criticalFallback(plan)
+	}
+	plan.Exclude = plan.Exclude[:0]
+	for _, item := range plan.Deferred {
+		plan.Exclude = append(plan.Exclude, item.Path)
+	}
 	return plan, nil
+}
+
+// criticalFallback prevents a high-priority review from becoming an empty
+// review when no path crosses the strict threshold. It keeps the scope small
+// and explainable: at most two public or asynchronous workflow boundaries
+// (score >= 55), never low-value artifacts or ordinary application files.
+func criticalFallback(plan Plan) Plan {
+	remaining := make([]Item, 0, len(plan.Deferred))
+	for _, item := range plan.Deferred {
+		if len(plan.Selected) < criticalFallbackLimit && item.Score >= criticalFallbackScore {
+			item.Reasons = append(item.Reasons, "critical-mode fallback: highest available high-signal boundary")
+			plan.Selected = append(plan.Selected, item)
+			continue
+		}
+		remaining = append(remaining, item)
+	}
+	plan.Deferred = remaining
+	return plan
 }
 
 func include(mode Mode, score int) bool {
