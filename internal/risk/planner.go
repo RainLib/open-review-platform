@@ -20,7 +20,7 @@ const (
 	ModeCritical Mode = "critical"
 
 	criticalFallbackScore = 55
-	criticalFallbackLimit = 2
+	criticalFallbackLimit = 1
 )
 
 func (m Mode) Valid() bool {
@@ -77,8 +77,18 @@ func (p Planner) PlanWithMode(ctx context.Context, directory, base, head string,
 		plan.Deferred = append(plan.Deferred, item)
 		plan.Exclude = append(plan.Exclude, path)
 	}
-	sort.Slice(plan.Selected, func(i, j int) bool { return plan.Selected[i].Score > plan.Selected[j].Score })
-	sort.Slice(plan.Deferred, func(i, j int) bool { return plan.Deferred[i].Score > plan.Deferred[j].Score })
+	sort.Slice(plan.Selected, func(i, j int) bool {
+		if plan.Selected[i].Score == plan.Selected[j].Score {
+			return plan.Selected[i].Path < plan.Selected[j].Path
+		}
+		return plan.Selected[i].Score > plan.Selected[j].Score
+	})
+	sort.Slice(plan.Deferred, func(i, j int) bool {
+		if plan.Deferred[i].Score == plan.Deferred[j].Score {
+			return plan.Deferred[i].Path < plan.Deferred[j].Path
+		}
+		return plan.Deferred[i].Score > plan.Deferred[j].Score
+	})
 	if mode == ModeCritical && len(plan.Selected) == 0 {
 		plan = criticalFallback(plan)
 	}
@@ -91,7 +101,7 @@ func (p Planner) PlanWithMode(ctx context.Context, directory, base, head string,
 
 // criticalFallback prevents a high-priority review from becoming an empty
 // review when no path crosses the strict threshold. It keeps the scope small
-// and explainable: at most two public or asynchronous workflow boundaries
+// and explainable: one public or asynchronous workflow boundary
 // (score >= 55), never low-value artifacts or ordinary application files.
 func criticalFallback(plan Plan) Plan {
 	remaining := make([]Item, 0, len(plan.Deferred))

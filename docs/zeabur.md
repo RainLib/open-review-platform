@@ -69,8 +69,9 @@ tokens on `control-api`, `outbox-relay`, `acknowledger`,
 before each LLM round, so a selected group can finish its current round above
 the cap. Start with at least the CLI's printed estimate for every selected
 group. Use `RISK_REVIEW_MODE=critical` only for incident-style fast paths; it
-reviews the strict high-risk scope and, when no strict path exists, at most two
-highest-signal paths rather than reporting an empty success.
+reviews the strict high-risk scope and, when no strict path exists, the single
+highest-signal path rather than reporting an empty success. This fallback keeps
+Flash-class model requests inside an interactive review budget.
 
 ## Pull-request review commands
 

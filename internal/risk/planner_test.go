@@ -20,7 +20,7 @@ func TestClassifyExcludesGeneratedArtifacts(t *testing.T) {
 	}
 }
 
-func TestCriticalModeFallsBackToTwoHighSignalBoundaries(t *testing.T) {
+func TestCriticalModeFallsBackToOneHighSignalBoundary(t *testing.T) {
 	plan := Plan{
 		Deferred: []Item{
 			{Path: "internal/api/server.go", Score: 70, Reasons: []string{"public boundary"}},
@@ -29,10 +29,10 @@ func TestCriticalModeFallsBackToTwoHighSignalBoundaries(t *testing.T) {
 		},
 	}
 	plan = criticalFallback(plan)
-	if len(plan.Selected) != 2 || plan.Selected[0].Path != "internal/api/server.go" || plan.Selected[1].Path != "internal/webhook/normalize.go" {
+	if len(plan.Selected) != 1 || plan.Selected[0].Path != "internal/api/server.go" {
 		t.Fatalf("unexpected critical fallback scope: %#v", plan.Selected)
 	}
-	if len(plan.Deferred) != 1 || plan.Deferred[0].Path != "internal/store/postgres.go" {
+	if len(plan.Deferred) != 2 || plan.Deferred[0].Path != "internal/webhook/normalize.go" || plan.Deferred[1].Path != "internal/store/postgres.go" {
 		t.Fatalf("unexpected critical fallback deferred scope: %#v", plan.Deferred)
 	}
 	if got := plan.Selected[0].Reasons[len(plan.Selected[0].Reasons)-1]; got != "critical-mode fallback: highest available high-signal boundary" {
