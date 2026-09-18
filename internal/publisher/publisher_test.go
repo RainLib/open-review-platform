@@ -100,12 +100,12 @@ func TestPublishStartedCreatesUpdatableScopeReport(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/RainLib/demo/pulls/8":
 			_, _ = w.Write([]byte(`{"title":"Add review evidence","html_url":"https://example.test/pr/8","changed_files":2,"additions":12,"deletions":4}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/RainLib/demo/pulls/8/files":
-			_, _ = w.Write([]byte(`[{"filename":"api.go","status":"modified","additions":8,"deletions":2},{"filename":"api_test.go","status":"modified","additions":4,"deletions":2}]`))
+			_, _ = w.Write([]byte(`[{"filename":"api.go","blob_url":"https://github.com/RainLib/demo/blob/head/api.go","status":"modified","additions":8,"deletions":2},{"filename":"api_test.go","blob_url":"https://github.com/RainLib/demo/blob/head/api_test.go","status":"modified","additions":4,"deletions":2}]`))
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/RainLib/demo/issues/8/comments":
 			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodPost && r.URL.Path == "/repos/RainLib/demo/issues/8/comments":
 			body, _ := io.ReadAll(r.Body)
-			for _, expected := range []string{"Code review started", "Changed files (2)", "api.go", "Open Review / Analysis", "open-review-platform:summary:"} {
+			for _, expected := range []string{"Code review started", "Changed files (2)", "[`api.go`](https://github.com/RainLib/demo/blob/head/api.go)", "Open Review / Analysis", "open-review-platform:summary:"} {
 				if !strings.Contains(string(body), expected) {
 					t.Fatalf("start report missing %q: %s", expected, body)
 				}
@@ -155,6 +155,17 @@ func TestCountUnifiedDiffExcludesFileHeaders(t *testing.T) {
 	additions, deletions := countUnifiedDiff("--- a/demo.go\n+++ b/demo.go\n@@ -1 +1,2 @@\n-old\n+new\n+more")
 	if additions != 2 || deletions != 1 {
 		t.Fatalf("unexpected diff stats: +%d -%d", additions, deletions)
+	}
+}
+
+func TestChangedFileLinksRejectUntrustedSchemes(t *testing.T) {
+	job := testReportJob()
+	report := StartedReport(job, ReviewContext{
+		TotalFiles:   1,
+		ChangedFiles: []ChangedFile{{Path: "safe.go", URL: "javascript:alert(1)", Status: "modified"}},
+	}, "marker")
+	if strings.Contains(report, "javascript:") || strings.Contains(report, "[`safe.go`](") {
+		t.Fatalf("unsafe file link was rendered: %s", report)
 	}
 }
 

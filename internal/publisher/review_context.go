@@ -47,6 +47,7 @@ func (p *HTTPPublisher) loadGitHubReviewContext(ctx context.Context, job domain.
 	}
 	var files []struct {
 		Filename  string `json:"filename"`
+		BlobURL   string `json:"blob_url"`
 		Status    string `json:"status"`
 		Additions int    `json:"additions"`
 		Deletions int    `json:"deletions"`
@@ -63,7 +64,7 @@ func (p *HTTPPublisher) loadGitHubReviewContext(ctx context.Context, job domain.
 	}
 	for _, file := range files {
 		review.ChangedFiles = append(review.ChangedFiles, ChangedFile{
-			Path: file.Filename, Status: file.Status, Additions: file.Additions,
+			Path: file.Filename, URL: file.BlobURL, Status: file.Status, Additions: file.Additions,
 			Deletions: file.Deletions, Changes: file.Changes,
 		})
 	}
@@ -118,7 +119,7 @@ func (p *HTTPPublisher) loadGitLabReviewContext(ctx context.Context, job domain.
 		review.TotalAdditions += additions
 		review.TotalDeletions += deletions
 		review.ChangedFiles = append(review.ChangedFiles, ChangedFile{
-			Path: path, Status: status, Additions: additions, Deletions: deletions,
+			Path: path, URL: strings.TrimSuffix(mergeRequest.WebURL, "/") + "/diffs", Status: status, Additions: additions, Deletions: deletions,
 			Changes: additions + deletions,
 		})
 		if diff.TooLarge {

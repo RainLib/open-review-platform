@@ -26,6 +26,7 @@ type ReviewResult struct {
 
 type ChangedFile struct {
 	Path      string
+	URL       string
 	Status    string
 	Additions int
 	Deletions int
@@ -345,7 +346,11 @@ func scopeComponents(job domain.ReviewJob, context ReviewContext) []MarkdownComp
 	if len(context.ChangedFiles) > 0 {
 		rows := make([][]string, 0, min(len(context.ChangedFiles), maxRenderedFiles))
 		for _, file := range context.ChangedFiles[:min(len(context.ChangedFiles), maxRenderedFiles)] {
-			rows = append(rows, []string{codeSpan(file.Path), file.Status, fmt.Sprintf("+%d", file.Additions), fmt.Sprintf("-%d", file.Deletions)})
+			path := codeSpan(file.Path)
+			if link := safeProviderLink(file.URL); link != "" {
+				path = fmt.Sprintf("[%s](%s)", path, link)
+			}
+			rows = append(rows, []string{path, file.Status, fmt.Sprintf("+%d", file.Additions), fmt.Sprintf("-%d", file.Deletions)})
 		}
 		note := ""
 		if context.Truncated || context.TotalFiles > len(rows) {
@@ -560,4 +565,12 @@ func codeSpan(value string) string {
 		return "`` " + strings.ReplaceAll(value, "\n", " ") + " ``"
 	}
 	return "`" + strings.ReplaceAll(value, "\n", " ") + "`"
+}
+
+func safeProviderLink(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return ""
+	}
+	return parsed.String()
 }
