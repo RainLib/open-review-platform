@@ -72,6 +72,22 @@ group. Use `RISK_REVIEW_MODE=critical` only for incident-style fast paths; it
 reviews the strict high-risk scope and, when no strict path exists, at most two
 highest-signal paths rather than reporting an empty success.
 
+## Pull-request review commands
+
+An explicit GitHub or GitLab comment starts a separately auditable run only
+after Open Review has acknowledged the comment. A normal `@openreview review`
+uses `RISK_REVIEW_MODE`; command modes never mutate that deployment setting:
+
+```text
+@openreview review --mode=standard  # balanced focused scope
+@openreview review --mode=deep      # complete selected source delta
+@openreview review --mode=security  # critical high-signal paths first
+```
+
+The chosen mode is stored on the review run. `@openreview retry <run-id>`
+preserves it, even when an administrator changes the deployment default while
+the pull request is open.
+
 For a DeepSeek flash-class OpenAI-compatible route, a concrete starting set is:
 
 ```text

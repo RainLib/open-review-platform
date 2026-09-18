@@ -426,7 +426,7 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "no review run is available for this pull request")
 	}
 	current, err := scanReviewRun(tx.QueryRow(ctx, `
-		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, rule_snapshot_id, created_at, started_at, finished_at
+		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, review_mode, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, rule_snapshot_id, created_at, started_at, finished_at
 		FROM review_runs WHERE id = $1 AND request_id = $2 FOR UPDATE`, *selectedRunID, requestID))
 	if err != nil {
 		return domain.InteractionOutcome{}, fmt.Errorf("load current review run: %w", err)
@@ -464,7 +464,17 @@ func (s *PostgresStore) ProcessInteraction(ctx context.Context, input domain.Int
 		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "unsupported command")
 	}
 
-	run, err := createCommentRun(ctx, tx, requestID, current, installation, input.Event, input.Command, interactionID)
+	mode := current.ReviewMode
+	if input.Command == "review" {
+		mode = domain.ReviewMode(input.Mode)
+		if mode == "" {
+			mode = domain.ReviewModeConfigured
+		}
+	}
+	if !mode.Valid() {
+		return rejectInteraction(ctx, tx, installation, input.Event, interactionID, "review mode is invalid")
+	}
+	run, err := createCommentRun(ctx, tx, requestID, current, installation, input.Event, input.Command, mode, interactionID)
 	if err != nil {
 		return domain.InteractionOutcome{}, err
 	}
@@ -687,7 +697,7 @@ func terminalInteractionBody(runID uuid.UUID, state domain.RunState) string {
 // review must not merely create an audit run: without its own review_jobs row the
 // runner would never claim it.  The last run's job supplies the immutable clone
 // and ref metadata, while the issue_comment delivery makes the retry auditable.
-func createCommentRun(ctx context.Context, tx pgx.Tx, requestID uuid.UUID, current domain.ReviewRun, installation domain.Installation, event domain.CommentEvent, triggerKind string, interactionID uuid.UUID) (domain.ReviewRun, error) {
+func createCommentRun(ctx context.Context, tx pgx.Tx, requestID uuid.UUID, current domain.ReviewRun, installation domain.Installation, event domain.CommentEvent, triggerKind string, mode domain.ReviewMode, interactionID uuid.UUID) (domain.ReviewRun, error) {
 	if current.LegacyJobID == nil {
 		return domain.ReviewRun{}, fmt.Errorf("current review run has no execution job")
 	}
@@ -726,9 +736,9 @@ func createCommentRun(ctx context.Context, tx pgx.Tx, requestID uuid.UUID, curre
 		return domain.ReviewRun{}, fmt.Errorf("resolve comment rule snapshot: %w", err)
 	}
 	run, err := scanReviewRun(tx.QueryRow(ctx, `
-		INSERT INTO review_runs (request_id, legacy_job_id, state, trigger_kind, head_sha, base_sha, rule_snapshot_id)
-		VALUES ($1, $2, 'acknowledged', $3, $4, $5, $6)
-		RETURNING id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, rule_snapshot_id, created_at, started_at, finished_at`, requestID, job.ID, triggerKind, current.HeadSHA, current.BaseSHA, ruleSnapshotID))
+		INSERT INTO review_runs (request_id, legacy_job_id, state, trigger_kind, review_mode, head_sha, base_sha, rule_snapshot_id)
+		VALUES ($1, $2, 'acknowledged', $3, $4, $5, $6, $7)
+		RETURNING id, request_id, legacy_job_id, revision, state, trigger_kind, review_mode, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, rule_snapshot_id, created_at, started_at, finished_at`, requestID, job.ID, triggerKind, mode, current.HeadSHA, current.BaseSHA, ruleSnapshotID))
 	if err != nil {
 		return domain.ReviewRun{}, fmt.Errorf("create comment review run: %w", err)
 	}
@@ -738,7 +748,7 @@ func createCommentRun(ctx context.Context, tx pgx.Tx, requestID uuid.UUID, curre
 	if _, err := tx.Exec(ctx, `INSERT INTO review_run_stages (run_id, stage, state) SELECT $1, stage, 'pending' FROM unnest(ARRAY['ack', 'admit', 'prepare', 'analyze', 'normalize', 'publish']) AS stage`, run.ID); err != nil {
 		return domain.ReviewRun{}, fmt.Errorf("initialize comment run stages: %w", err)
 	}
-	if err := appendRunEvent(ctx, tx, run.ID, run.Revision, "run.acknowledged", "user", "", map[string]any{"interaction_id": interactionID.String(), "trigger": triggerKind}); err != nil {
+	if err := appendRunEvent(ctx, tx, run.ID, run.Revision, "run.acknowledged", "user", "", map[string]any{"interaction_id": interactionID.String(), "trigger": triggerKind, "review_mode": mode}); err != nil {
 		return domain.ReviewRun{}, err
 	}
 	return run, nil
@@ -785,7 +795,7 @@ func appendRunEvent(ctx context.Context, tx pgx.Tx, runID uuid.UUID, revision in
 func scanReviewRun(row rowScanner) (domain.ReviewRun, error) {
 	var run domain.ReviewRun
 	var failureCode, failureMessage *string
-	if err := row.Scan(&run.ID, &run.RequestID, &run.LegacyJobID, &run.Revision, &run.State, &run.TriggerKind, &run.HeadSHA, &run.BaseSHA, &run.CancelRequestedAt, &run.SupersededBy, &failureCode, &failureMessage, &run.RuleSnapshotID, &run.CreatedAt, &run.StartedAt, &run.FinishedAt); err != nil {
+	if err := row.Scan(&run.ID, &run.RequestID, &run.LegacyJobID, &run.Revision, &run.State, &run.TriggerKind, &run.ReviewMode, &run.HeadSHA, &run.BaseSHA, &run.CancelRequestedAt, &run.SupersededBy, &failureCode, &failureMessage, &run.RuleSnapshotID, &run.CreatedAt, &run.StartedAt, &run.FinishedAt); err != nil {
 		return domain.ReviewRun{}, err
 	}
 	if failureCode != nil {
@@ -806,7 +816,7 @@ func (s *PostgresStore) ListReviewRuns(ctx context.Context, actor, tenantSlug st
 		limit = 25
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.rule_snapshot_id, r.created_at, r.started_at, r.finished_at,
+		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.review_mode, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.rule_snapshot_id, r.created_at, r.started_at, r.finished_at,
 		       request.provider, request.repository, request.review_number
 		FROM review_runs r
 		JOIN review_requests request ON request.id = r.request_id
@@ -837,7 +847,7 @@ func (s *PostgresStore) GetReviewRun(ctx context.Context, actor, tenantSlug stri
 		return domain.ReviewRunSummary{}, err
 	}
 	run, err := scanReviewRunSummary(s.pool.QueryRow(ctx, `
-		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.rule_snapshot_id, r.created_at, r.started_at, r.finished_at,
+		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.review_mode, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.rule_snapshot_id, r.created_at, r.started_at, r.finished_at,
 		       request.provider, request.repository, request.review_number
 		FROM review_runs r
 		JOIN review_requests request ON request.id = r.request_id
@@ -900,7 +910,7 @@ func (s *PostgresStore) RequestRunCancellation(ctx context.Context, actor, tenan
 		return domain.ReviewRun{}, ErrForbidden
 	}
 	run, err := scanReviewRun(tx.QueryRow(ctx, `
-		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.rule_snapshot_id, r.created_at, r.started_at, r.finished_at
+		SELECT r.id, r.request_id, r.legacy_job_id, r.revision, r.state, r.trigger_kind, r.review_mode, r.head_sha, r.base_sha, r.cancel_requested_at, r.superseded_by, r.failure_code, r.failure_message, r.rule_snapshot_id, r.created_at, r.started_at, r.finished_at
 		FROM review_runs r JOIN review_requests request ON request.id = r.request_id
 		WHERE r.id = $1 AND request.tenant_id = $2 FOR UPDATE`, runID, tenantID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -948,7 +958,7 @@ func (s *PostgresStore) AdvanceLegacyRun(ctx context.Context, jobID uuid.UUID, n
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	run, err := scanReviewRun(tx.QueryRow(ctx, `
-		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, rule_snapshot_id, created_at, started_at, finished_at
+		SELECT id, request_id, legacy_job_id, revision, state, trigger_kind, review_mode, head_sha, base_sha, cancel_requested_at, superseded_by, failure_code, failure_message, rule_snapshot_id, created_at, started_at, finished_at
 		FROM review_runs WHERE legacy_job_id = $1 FOR UPDATE`, jobID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ReviewRun{}, ErrNotFound
@@ -1060,7 +1070,7 @@ func authorizedTenantTx(ctx context.Context, tx pgx.Tx, actor, tenantSlug string
 func scanReviewRunSummary(row rowScanner) (domain.ReviewRunSummary, error) {
 	var summary domain.ReviewRunSummary
 	var failureCode, failureMessage *string
-	if err := row.Scan(&summary.ID, &summary.RequestID, &summary.LegacyJobID, &summary.Revision, &summary.State, &summary.TriggerKind, &summary.HeadSHA, &summary.BaseSHA, &summary.CancelRequestedAt, &summary.SupersededBy, &failureCode, &failureMessage, &summary.RuleSnapshotID, &summary.CreatedAt, &summary.StartedAt, &summary.FinishedAt, &summary.Provider, &summary.Repository, &summary.ReviewNumber); err != nil {
+	if err := row.Scan(&summary.ID, &summary.RequestID, &summary.LegacyJobID, &summary.Revision, &summary.State, &summary.TriggerKind, &summary.ReviewMode, &summary.HeadSHA, &summary.BaseSHA, &summary.CancelRequestedAt, &summary.SupersededBy, &failureCode, &failureMessage, &summary.RuleSnapshotID, &summary.CreatedAt, &summary.StartedAt, &summary.FinishedAt, &summary.Provider, &summary.Repository, &summary.ReviewNumber); err != nil {
 		return domain.ReviewRunSummary{}, err
 	}
 	if failureCode != nil {

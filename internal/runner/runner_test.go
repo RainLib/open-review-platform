@@ -18,6 +18,7 @@ import (
 type snapshotStore struct {
 	snapshot domain.RuleSnapshot
 	err      error
+	mode     domain.ReviewMode
 }
 
 func (s snapshotStore) Claim(context.Context, string) (*domain.ReviewJob, error) {
@@ -31,6 +32,12 @@ func (s snapshotStore) AdvanceLegacyRun(context.Context, uuid.UUID, domain.RunSt
 }
 func (s snapshotStore) RuleSnapshotForJob(context.Context, uuid.UUID) (domain.RuleSnapshot, error) {
 	return s.snapshot, s.err
+}
+func (s snapshotStore) ReviewModeForJob(context.Context, uuid.UUID) (domain.ReviewMode, error) {
+	if s.mode == "" {
+		return domain.ReviewModeConfigured, nil
+	}
+	return s.mode, nil
 }
 func (snapshotStore) SaveFindings(context.Context, uuid.UUID, []domain.Finding) error { return nil }
 func (snapshotStore) Succeed(context.Context, uuid.UUID, string) error                { return nil }
@@ -126,6 +133,19 @@ type blockingExecutor struct {
 type selectedPathExecutor struct {
 	recordingExecutor
 	selected []string
+}
+
+type modeRecordingPlanner struct {
+	mode risk.Mode
+}
+
+func (*modeRecordingPlanner) Plan(context.Context, string, string, string) (risk.Plan, error) {
+	return risk.Plan{}, nil
+}
+
+func (p *modeRecordingPlanner) PlanWithMode(_ context.Context, _, _, _ string, mode risk.Mode) (risk.Plan, error) {
+	p.mode = mode
+	return risk.Plan{}, nil
 }
 
 func (e *selectedPathExecutor) ReviewWithSelectedPaths(_ context.Context, _ string, _ string, _ string, selected []string) ([]domain.Finding, error) {
@@ -250,6 +270,28 @@ func TestExecutionBudgetTimeoutIsTerminal(t *testing.T) {
 func TestModelContextExhaustionIsTerminal(t *testing.T) {
 	if !isTerminalExecutionFailure(domain.ErrReviewContextExhausted) {
 		t.Fatal("expected model context exhaustion to bypass retries")
+	}
+}
+
+func TestSecurityCommandUsesCriticalRiskMode(t *testing.T) {
+	planner := &modeRecordingPlanner{}
+	processor := Processor{
+		Store:          snapshotStore{mode: domain.ReviewModeSecurity},
+		RiskPlanner:    planner,
+		RiskReviewMode: string(risk.ModeFocused),
+	}
+	mode, err := processor.riskModeForJob(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != risk.ModeCritical {
+		t.Fatalf("security command mode=%q, want critical", mode)
+	}
+	if _, err := processor.planRisk(context.Background(), "/workspace", "base", "head", mode); err != nil {
+		t.Fatal(err)
+	}
+	if planner.mode != risk.ModeCritical {
+		t.Fatalf("planner mode=%q, want critical", planner.mode)
 	}
 }
 

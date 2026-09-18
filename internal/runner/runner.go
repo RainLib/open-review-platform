@@ -49,6 +49,12 @@ type RiskPlanner interface {
 	Plan(context.Context, string, string, string) (risk.Plan, error)
 }
 
+// ModeAwareRiskPlanner preserves the legacy planner contract while allowing a
+// command-triggered run to choose its persisted review intensity.
+type ModeAwareRiskPlanner interface {
+	PlanWithMode(context.Context, string, string, string, risk.Mode) (risk.Plan, error)
+}
+
 type WorkspacePreparer interface {
 	Prepare(context.Context, domain.ReviewJob) (*Workspace, error)
 }
@@ -60,6 +66,7 @@ type RunnerStore interface {
 	Claim(context.Context, string) (*domain.ReviewJob, error)
 	ClaimForRun(context.Context, string, uuid.UUID) (*domain.ReviewJob, error)
 	AdvanceLegacyRun(context.Context, uuid.UUID, domain.RunState) (domain.ReviewRun, error)
+	ReviewModeForJob(context.Context, uuid.UUID) (domain.ReviewMode, error)
 	RuleSnapshotForJob(context.Context, uuid.UUID) (domain.RuleSnapshot, error)
 	SaveFindings(context.Context, uuid.UUID, []domain.Finding) error
 	Succeed(context.Context, uuid.UUID, string) error
@@ -323,7 +330,11 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	if run.State.Terminal() && run.State != domain.RunCompleted {
 		return nil, terminalRunError{run: run}
 	}
-	plan, err := p.planRisk(ctx, workspace.Path, workspace.BaseSHA, job.HeadSHA)
+	mode, err := p.riskModeForJob(ctx, job.ID)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := p.planRisk(ctx, workspace.Path, workspace.BaseSHA, job.HeadSHA, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +359,7 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	if run.State.Terminal() {
 		return nil, terminalRunError{run: run}
 	}
-	result := p.reviewResult(ctx, job, plan, findings)
+	result := p.reviewResult(ctx, job, string(mode), plan, findings)
 	if err := p.Publisher.Publish(ctx, job, result); err != nil {
 		return nil, err
 	}
@@ -362,11 +373,11 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	return findings, nil
 }
 
-func (p Processor) reviewResult(ctx context.Context, job domain.ReviewJob, plan risk.Plan, findings []domain.Finding) publisher.ReviewResult {
+func (p Processor) reviewResult(ctx context.Context, job domain.ReviewJob, mode string, plan risk.Plan, findings []domain.Finding) publisher.ReviewResult {
 	result := publisher.ReviewResult{
 		Findings:           findings,
 		Gate:               publisher.EvaluateMergeGate(findings, p.MergeGateSeverity),
-		Scope:              publisher.ReviewScope{Mode: p.RiskReviewMode, DeferredFiles: len(plan.Deferred)},
+		Scope:              publisher.ReviewScope{Mode: mode, DeferredFiles: len(plan.Deferred)},
 		EngineVersion:      p.EngineVersion,
 		RuleSnapshotStatus: "none",
 	}
@@ -495,16 +506,44 @@ func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob,
 	return executor.ReviewWithRule(ctx, directory, base, job.HeadSHA, encoded)
 }
 
-func (p Processor) planRisk(ctx context.Context, directory, base, head string) (risk.Plan, error) {
+func (p Processor) riskModeForJob(ctx context.Context, jobID uuid.UUID) (risk.Mode, error) {
+	configured := p.RiskReviewMode
+	if configured == "" {
+		configured = string(risk.ModeFocused)
+	}
+	mode := domain.ReviewModeConfigured
+	if p.Store != nil {
+		resolved, err := p.Store.ReviewModeForJob(ctx, jobID)
+		if err != nil {
+			return "", fmt.Errorf("load review mode for job: %w", err)
+		}
+		mode = resolved
+	}
+	effective := risk.Mode(mode.RiskMode(configured))
+	if !effective.Valid() {
+		return "", fmt.Errorf("unsupported effective risk review mode %q", effective)
+	}
+	return effective, nil
+}
+
+func (p Processor) planRisk(ctx context.Context, directory, base, head string, mode risk.Mode) (risk.Plan, error) {
 	if p.RiskPlanner == nil {
 		return risk.Plan{}, nil
 	}
-	plan, err := p.RiskPlanner.Plan(ctx, directory, base, head)
+	var (
+		plan risk.Plan
+		err  error
+	)
+	if planner, ok := p.RiskPlanner.(ModeAwareRiskPlanner); ok {
+		plan, err = planner.PlanWithMode(ctx, directory, base, head, mode)
+	} else {
+		plan, err = p.RiskPlanner.Plan(ctx, directory, base, head)
+	}
 	if err != nil {
 		return risk.Plan{}, fmt.Errorf("plan risk-based review scope: %w", err)
 	}
 	if p.Logger != nil {
-		p.Logger.Info("planned risk-based review scope", "selected_files", len(plan.Selected), "deferred_files", len(plan.Deferred))
+		p.Logger.Info("planned risk-based review scope", "mode", mode, "selected_files", len(plan.Selected), "deferred_files", len(plan.Deferred))
 	}
 	return plan, nil
 }

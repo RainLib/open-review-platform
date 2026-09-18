@@ -298,6 +298,24 @@ func (s *PostgresStore) ClaimForRun(ctx context.Context, workerID string, runID 
 	return &job, nil
 }
 
+// ReviewModeForJob loads the immutable mode selected when this run was
+// acknowledged. It deliberately reads from review_runs, not mutable deployment
+// configuration, so a retry preserves the original scope contract.
+func (s *PostgresStore) ReviewModeForJob(ctx context.Context, jobID uuid.UUID) (domain.ReviewMode, error) {
+	var mode domain.ReviewMode
+	err := s.pool.QueryRow(ctx, `SELECT review_mode FROM review_runs WHERE legacy_job_id = $1`, jobID).Scan(&mode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("load review mode for job: %w", err)
+	}
+	if !mode.Valid() {
+		return "", fmt.Errorf("stored review mode %q is invalid", mode)
+	}
+	return mode, nil
+}
+
 // ReviewJobForRun loads the provider-facing job for a durable run without
 // claiming it. Terminal-status consumers use this after a cancellation or
 // supersession, when the backing job is intentionally no longer claimable by a

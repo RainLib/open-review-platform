@@ -59,6 +59,41 @@ func ValidateRunTransition(current, next RunState) error {
 	return nil
 }
 
+// ReviewMode records the caller's requested review intensity independently of
+// the deployment default. It is persisted with a run so retries use the same
+// scope instead of silently changing after a configuration update.
+type ReviewMode string
+
+const (
+	ReviewModeConfigured ReviewMode = "configured"
+	ReviewModeStandard   ReviewMode = "standard"
+	ReviewModeDeep       ReviewMode = "deep"
+	ReviewModeSecurity   ReviewMode = "security"
+)
+
+func (m ReviewMode) Valid() bool {
+	return m == ReviewModeConfigured || m == ReviewModeStandard || m == ReviewModeDeep || m == ReviewModeSecurity
+}
+
+// RiskMode resolves a command mode to the planner mode. Standard always uses
+// the balanced focused scope, deep expands to the full source delta, and
+// security uses the critical high-signal path set. Configured alone honors
+// the deployment default.
+func (m ReviewMode) RiskMode(configured string) string {
+	switch m {
+	case ReviewModeStandard:
+		return "focused"
+	case ReviewModeDeep:
+		return "standard"
+	case ReviewModeSecurity:
+		return "critical"
+	case ReviewModeConfigured, "":
+		return configured
+	default:
+		return configured
+	}
+}
+
 type ReviewRequest struct {
 	ID             uuid.UUID
 	TenantID       uuid.UUID
@@ -79,6 +114,7 @@ type ReviewRun struct {
 	Revision          int        `json:"revision"`
 	State             RunState   `json:"state"`
 	TriggerKind       string     `json:"trigger_kind"`
+	ReviewMode        ReviewMode `json:"review_mode"`
 	HeadSHA           string     `json:"head_sha"`
 	BaseSHA           string     `json:"base_sha"`
 	CancelRequestedAt *time.Time `json:"cancel_requested_at,omitempty"`

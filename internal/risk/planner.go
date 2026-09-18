@@ -45,6 +45,12 @@ type Planner struct {
 }
 
 func (p Planner) Plan(ctx context.Context, directory, base, head string) (Plan, error) {
+	return p.PlanWithMode(ctx, directory, base, head, p.Mode)
+}
+
+// PlanWithMode lets an authorized command select a run-local review intensity
+// without mutating the deployment-wide default for other tenants or runs.
+func (p Planner) PlanWithMode(ctx context.Context, directory, base, head string, mode Mode) (Plan, error) {
 	git := p.GitBinary
 	if git == "" {
 		git = "git"
@@ -55,7 +61,6 @@ func (p Planner) Plan(ctx context.Context, directory, base, head string) (Plan, 
 	if err != nil {
 		return Plan{}, fmt.Errorf("list changed files for risk planning: %w", err)
 	}
-	mode := p.Mode
 	if mode == "" {
 		mode = ModeFocused
 	}
