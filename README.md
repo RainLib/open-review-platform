@@ -23,7 +23,7 @@ The current implementation includes:
   deliveries, durable review jobs, findings, and audit events;
 - delivery-level idempotency, a transactional outbox, and a consumer inbox;
 - revisioned review runs with durable stage events and SSE task updates;
-- separate relay, acknowledger, interaction-responder, and runner processes;
+- separate relay, acknowledger, interaction-responder, terminal-reporter, and runner processes;
 - an OCR adapter that executes `ocr review --from … --to … --format json` in a
   temporary repository checkout; and
 - GitHub App installation-token exchange immediately before GitHub reads or
@@ -70,6 +70,7 @@ go run ./cmd/control-api
 go run ./cmd/outbox-relay
 go run ./cmd/acknowledger
 go run ./cmd/interaction-responder
+go run ./cmd/terminal-reporter
 go run ./cmd/runner
 ```
 

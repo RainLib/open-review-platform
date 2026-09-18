@@ -250,6 +250,45 @@ func (s *PostgresStore) ClaimForRun(ctx context.Context, workerID string, runID 
 	return &job, nil
 }
 
+// ReviewJobForRun loads the provider-facing job for a durable run without
+// claiming it. Terminal-status consumers use this after a cancellation or
+// supersession, when the backing job is intentionally no longer claimable by a
+// runner but the provider check still needs a final state.
+func (s *PostgresStore) ReviewJobForRun(ctx context.Context, runID uuid.UUID) (domain.ReviewJob, domain.RunState, error) {
+	var job domain.ReviewJob
+	var state domain.RunState
+	var lockedBy, errorMessage *string
+	var lockedUntil, startedAt, finishedAt *time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT j.id, j.tenant_id, j.installation_id, i.external_id, i.credential_ref, j.delivery_id, j.provider, j.api_base_url, j.repository, j.clone_url,
+		       j.review_number, j.base_ref, j.base_sha, j.head_ref, j.head_sha, j.state, j.attempts,
+		       j.locked_by, j.locked_until, j.error_message, j.created_at, j.started_at, j.finished_at,
+		       r.state
+		FROM review_runs r
+		JOIN review_jobs j ON j.id = r.legacy_job_id
+		JOIN provider_installations i ON i.id = j.installation_id
+		WHERE r.id = $1`, runID).Scan(
+		&job.ID, &job.TenantID, &job.InstallationID, &job.InstallationExternalID, &job.CredentialRef, &job.DeliveryID, &job.Provider, &job.APIBaseURL, &job.Repository, &job.CloneURL,
+		&job.ReviewNumber, &job.BaseRef, &job.BaseSHA, &job.HeadRef, &job.HeadSHA, &job.State, &job.Attempts,
+		&lockedBy, &lockedUntil, &errorMessage, &job.CreatedAt, &startedAt, &finishedAt,
+		&state,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ReviewJob{}, "", ErrNotFound
+	}
+	if err != nil {
+		return domain.ReviewJob{}, "", fmt.Errorf("load review job for terminal run: %w", err)
+	}
+	if lockedBy != nil {
+		job.LockedBy = *lockedBy
+	}
+	if errorMessage != nil {
+		job.ErrorMessage = *errorMessage
+	}
+	job.LockedUntil, job.StartedAt, job.FinishedAt = lockedUntil, startedAt, finishedAt
+	return job, state, nil
+}
+
 // RenewClaim keeps an in-flight execution recoverable: a process that exits
 // cannot strand its job for the full OCR timeout, while a healthy process
 // retains exclusive ownership throughout a long review.

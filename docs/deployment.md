@@ -2,8 +2,8 @@
 
 ## Services
 
-Run `control-api`, `outbox-relay`, `acknowledger`, `interaction-responder`, and
-`runner` as separate workloads with distinct service accounts. All need the
+Run `control-api`, `outbox-relay`, `acknowledger`, `interaction-responder`,
+`terminal-reporter`, and `runner` as separate workloads with distinct service accounts. All need the
 private PostgreSQL/RabbitMQ network. Only `control-api` receives public
 webhooks; only `runner` needs Git and the OCR executable.
 
@@ -38,7 +38,8 @@ once for each release. The migration lock prevents concurrent application.
    installation; repeats return `202` with `duplicate: true` and create no
    second job.
 5. Confirm the acknowledger is consuming `review.run.acknowledged`, the runner
-   is consuming `review.run.admitted`, and comments are published using an
+   is consuming `review.run.admitted`, the terminal-reporter is consuming
+   terminal run events, and comments are published using an
    installation identity, not a personal access token. The runner's database
    poller is only the recovery path for a lost broker notification.
 

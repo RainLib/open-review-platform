@@ -51,6 +51,9 @@ func (p *AMQPPublisher) DeclareTopology() error {
 		{"openreview.review.ack.v1", "review.run.acknowledged"},
 		{"openreview.review.execute.v1", "review.run.admitted"},
 		{"openreview.review.publish.v1", "review.run.publishing"},
+		{"openreview.review.terminal.v1", "review.run.cancelled"},
+		{"openreview.review.terminal.v1", "review.run.superseded"},
+		{"openreview.review.terminal.v1", "review.run.failed"},
 		{"openreview.interaction.response.v1", "review.interaction.response"},
 	}
 	for _, queue := range queues {
