@@ -20,11 +20,21 @@ const (
 type ReviewResult struct {
 	Findings           []domain.Finding
 	Gate               MergeGateVerdict
+	Scope              ReviewScope
 	EngineVersion      string
 	RuleSnapshotID     string
 	RuleSnapshotSHA    string
 	CompilerVersion    string
 	RuleSnapshotStatus string
+}
+
+// ReviewScope distinguishes the full PR delta from the subset selected for an
+// intentionally risk-prioritized OCR pass. It is evidence from the runner,
+// not a claim inferred from the model output.
+type ReviewScope struct {
+	Mode          string
+	SelectedPaths []string
+	DeferredFiles int
 }
 
 type ChangedFile struct {
@@ -347,7 +357,7 @@ func changedFilesDetails(context ReviewContext) MarkdownComponent {
 	if context.Truncated || context.TotalFiles > len(rows) {
 		note = fmt.Sprintf("Showing %d of %d changed files.", len(rows), context.TotalFiles)
 	}
-	return Details{Summary: fmt.Sprintf("📂 Changed files (%d)", context.TotalFiles), Components: []MarkdownComponent{
+	return Details{Summary: fmt.Sprintf("📂 PR changed files (%d)", context.TotalFiles), Components: []MarkdownComponent{
 		Table{Headers: []string{"File", "Status", "Additions", "Deletions"}, Rows: rows},
 		Paragraph{Text: note},
 	}}
@@ -367,6 +377,17 @@ func reviewOverview(job domain.ReviewJob, context ReviewContext, result ReviewRe
 	if context.TotalFiles > 0 {
 		scope = fmt.Sprintf("%d files · +%d / -%d", context.TotalFiles, context.TotalAdditions, context.TotalDeletions)
 	}
+	if len(result.Scope.SelectedPaths) > 0 {
+		mode := result.Scope.Mode
+		if mode == "" {
+			mode = "risk-prioritized"
+		}
+		if context.TotalFiles > 0 {
+			scope = fmt.Sprintf("%d prioritized / %d changed · %s", len(result.Scope.SelectedPaths), context.TotalFiles, mode)
+		} else {
+			scope = fmt.Sprintf("%d prioritized paths · %s", len(result.Scope.SelectedPaths), mode)
+		}
+	}
 	return Table{
 		Headers: []string{"Gate", "Findings", "Scope", "Revision"},
 		Rows:    [][]string{{gate, findingCountSummary(result.Findings), scope, codeSpan(shortSHA(job.HeadSHA))}},
@@ -384,6 +405,7 @@ func scopeAndRiskDetails(job domain.ReviewJob, context ReviewContext, result Rev
 	}
 	components = append(components, Heading{Level: 4, Text: "Scope"})
 	components = append(components, scopeSummaryComponents(job, context)...)
+	components = append(components, reviewScopeComponents(context, result)...)
 	components = appendDeclaredEvidence(components, context.Contract, ContractScope)
 	components = append(components,
 		Heading{Level: 4, Text: "Risk"},
@@ -391,6 +413,41 @@ func scopeAndRiskDetails(job domain.ReviewJob, context ReviewContext, result Rev
 	)
 	components = appendDeclaredEvidence(components, context.Contract, ContractRisk)
 	return Details{Summary: "Scope & risk", Components: components}
+}
+
+func reviewScopeComponents(context ReviewContext, result ReviewResult) []MarkdownComponent {
+	if len(result.Scope.SelectedPaths) == 0 {
+		return nil
+	}
+	mode := result.Scope.Mode
+	if mode == "" {
+		mode = "risk-prioritized"
+	}
+	items := []string{fmt.Sprintf("**Review selection:** %d priority path(s) selected by `%s` mode.", len(result.Scope.SelectedPaths), mode)}
+	if result.Scope.DeferredFiles > 0 {
+		items = append(items, fmt.Sprintf("**Deferred:** %d changed path(s) were intentionally not sent to this OCR pass.", result.Scope.DeferredFiles))
+	}
+	for _, selected := range result.Scope.SelectedPaths[:min(len(result.Scope.SelectedPaths), maxRenderedFiles)] {
+		items = append(items, "Reviewed boundary: "+reviewScopePath(context, selected))
+	}
+	if len(result.Scope.SelectedPaths) > maxRenderedFiles {
+		items = append(items, fmt.Sprintf("…and %d more selected path(s).", len(result.Scope.SelectedPaths)-maxRenderedFiles))
+	}
+	return []MarkdownComponent{BulletList{Items: items}}
+}
+
+func reviewScopePath(context ReviewContext, selected string) string {
+	path := codeSpan(selected)
+	for _, changed := range context.ChangedFiles {
+		if changed.Path != selected {
+			continue
+		}
+		if link := safeProviderLink(changed.URL); link != "" {
+			return fmt.Sprintf("[%s](%s)", path, link)
+		}
+		break
+	}
+	return path
 }
 
 func acceptanceAndVerificationDetails(job domain.ReviewJob, context ReviewContext, result ReviewResult) MarkdownComponent {

@@ -180,11 +180,19 @@ func (s *PostgresStore) Enqueue(ctx context.Context, event domain.InboundEvent) 
 	if err != nil {
 		return domain.ReviewJob{}, false, fmt.Errorf("create review job: %w", err)
 	}
-	if err := createWorkflowRun(ctx, tx, installation, job, event); err != nil {
-		return domain.ReviewJob{}, false, fmt.Errorf("create reliable workflow state: %w", err)
+	workflowErr := createWorkflowRun(ctx, tx, installation, job, event)
+	if workflowErr != nil && !errors.Is(workflowErr, errRunCoalesced) {
+		return domain.ReviewJob{}, false, fmt.Errorf("create reliable workflow state: %w", workflowErr)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.ReviewJob{}, false, fmt.Errorf("commit review job: %w", err)
+	}
+	if errors.Is(workflowErr, errRunCoalesced) {
+		job.State = domain.JobCancelled
+		job.ErrorMessage = "coalesced into an active review run for the same head"
+		finishedAt := time.Now().UTC()
+		job.FinishedAt = &finishedAt
+		return job, true, nil
 	}
 	return job, false, nil
 }

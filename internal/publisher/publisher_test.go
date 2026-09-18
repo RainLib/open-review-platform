@@ -109,7 +109,7 @@ func TestPublishStartedCreatesUpdatableScopeReport(t *testing.T) {
 			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodPost && r.URL.Path == "/repos/RainLib/demo/issues/8/comments":
 			body, _ := io.ReadAll(r.Body)
-			for _, expected := range []string{"Code review started", "Changed files (2)", "[`api.go`](https://github.com/RainLib/demo/blob/head/api.go)", "Open Review / Analysis", "open-review-platform:summary:"} {
+			for _, expected := range []string{"Code review started", "PR changed files (2)", "[`api.go`](https://github.com/RainLib/demo/blob/head/api.go)", "Open Review / Analysis", "open-review-platform:summary:"} {
 				if !strings.Contains(string(body), expected) {
 					t.Fatalf("start report missing %q: %s", expected, body)
 				}
@@ -128,6 +128,21 @@ func TestPublishStartedCreatesUpdatableScopeReport(t *testing.T) {
 	}
 	if !posted {
 		t.Fatal("expected start report to be posted")
+	}
+}
+
+func TestCompletedReportDistinguishesPRDeltaFromRiskSelection(t *testing.T) {
+	job := testReportJob()
+	context := ReviewContext{TotalFiles: 5, ChangedFiles: []ChangedFile{{Path: "apps/web/app/[org]/page.tsx", URL: "https://github.com/RainLib/demo/blob/head/apps/web/app/%5Borg%5D/page.tsx"}}}
+	result := ReviewResult{
+		Gate:  EvaluateMergeGate(nil, "critical"),
+		Scope: ReviewScope{Mode: "critical", SelectedPaths: []string{"apps/web/app/[org]/page.tsx"}, DeferredFiles: 4},
+	}
+	report := CompletedReport(job, context, result, "marker")
+	for _, expected := range []string{"1 prioritized / 5 changed · critical", "Review selection:** 1 priority", "Deferred:** 4", "Reviewed boundary: [`apps/web/app/[org]/page.tsx`](https://github.com/RainLib/demo/blob/head/apps/web/app/%5Borg%5D/page.tsx)", "PR changed files (5)"} {
+		if !strings.Contains(report, expected) {
+			t.Fatalf("scope report missing %q: %s", expected, report)
+		}
 	}
 }
 

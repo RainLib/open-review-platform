@@ -64,6 +64,7 @@ type Processor struct {
 	Checks            publisher.CheckReporter
 	Lifecycle         publisher.LifecycleReporter
 	RiskPlanner       RiskPlanner
+	RiskReviewMode    string
 	EngineVersion     string
 	CheckoutTimeout   time.Duration
 	LeaseDuration     time.Duration
@@ -329,7 +330,7 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	if run.State.Terminal() {
 		return nil, terminalRunError{run: run}
 	}
-	result := p.reviewResult(ctx, job, findings)
+	result := p.reviewResult(ctx, job, plan, findings)
 	if err := p.Publisher.Publish(ctx, job, result); err != nil {
 		return nil, err
 	}
@@ -343,12 +344,16 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	return findings, nil
 }
 
-func (p Processor) reviewResult(ctx context.Context, job domain.ReviewJob, findings []domain.Finding) publisher.ReviewResult {
+func (p Processor) reviewResult(ctx context.Context, job domain.ReviewJob, plan risk.Plan, findings []domain.Finding) publisher.ReviewResult {
 	result := publisher.ReviewResult{
 		Findings:           findings,
 		Gate:               publisher.EvaluateMergeGate(findings, p.MergeGateSeverity),
+		Scope:              publisher.ReviewScope{Mode: p.RiskReviewMode, DeferredFiles: len(plan.Deferred)},
 		EngineVersion:      p.EngineVersion,
 		RuleSnapshotStatus: "none",
+	}
+	for _, item := range plan.Selected {
+		result.Scope.SelectedPaths = append(result.Scope.SelectedPaths, item.Path)
 	}
 	snapshot, err := p.Store.RuleSnapshotForJob(ctx, job.ID)
 	if err == nil {

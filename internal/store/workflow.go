@@ -22,6 +22,12 @@ const (
 
 var _ WorkflowStore = (*PostgresStore)(nil)
 
+// errRunCoalesced tells Enqueue to commit the delivery ledger while returning
+// duplicate=true. It is not a transaction failure: the newly allocated legacy
+// job has been terminally cancelled because an identical active run already
+// owns the same PR head.
+var errRunCoalesced = errors.New("review run coalesced into active head")
+
 // createWorkflowRun runs inside the delivery transaction. It means an accepted
 // provider delivery can never leave a run without its first durable event and
 // outbox notification, even when the broker is unavailable.
@@ -80,8 +86,15 @@ func createWorkflowRun(ctx context.Context, tx pgx.Tx, installation domain.Insta
 		LIMIT 1`, requestID, event.HeadSHA).Scan(&currentRunID)
 	if err == nil {
 		// GitHub may emit more than one accepted delivery for the same head. The
-		// delivery ledger retains it, but we must not create a second active run.
-		return nil
+		// delivery ledger retains it, but we must not create a second active run
+		// or leave its preallocated legacy job queued forever.
+		if _, err := tx.Exec(ctx, `
+			UPDATE review_jobs
+			SET state = 'cancelled', finished_at = now(), error_message = $2
+			WHERE id = $1`, job.ID, "coalesced into active review run "+currentRunID.String()); err != nil {
+			return fmt.Errorf("cancel coalesced review job: %w", err)
+		}
+		return errRunCoalesced
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("find active run for head: %w", err)

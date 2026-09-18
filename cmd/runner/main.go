@@ -65,6 +65,7 @@ func main() {
 		Checks:            reviewPublisher,
 		Lifecycle:         reviewPublisher,
 		RiskPlanner:       risk.Planner{GitBinary: cfg.Runner.GitBinary, Mode: risk.Mode(cfg.Runner.RiskReviewMode)},
+		RiskReviewMode:    cfg.Runner.RiskReviewMode,
 		EngineVersion:     cfg.Runner.OCRVersion,
 		CheckoutTimeout:   cfg.Runner.CheckoutTimeout,
 		LeaseDuration:     cfg.Runner.LeaseDuration,

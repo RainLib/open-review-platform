@@ -53,10 +53,22 @@ func TestReviewArgumentsIncludesConfiguredExecutionPolicy(t *testing.T) {
 	want := []string{
 		"review", "--from", "base", "--to", "head", "--format", "json", "--output", "result.json",
 		"--concurrency", "2", "--effort", "low", "--max-tokens", "8000", "--max-tokens-budget", "128000", "--timeout", "5",
-		"--rule", "rules.json", "--exclude", "docs/**,*_test.go",
+		"--rule", "rules.json", "--exclude", "docs/\\*\\*,\\*_test.go",
 	}
 	if strings.Join(arguments, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("unexpected review arguments:\n got: %#v\nwant: %#v", arguments, want)
+	}
+}
+
+func TestExactExcludePatternsTreatsChangedPathsAsLiterals(t *testing.T) {
+	got := exactExcludePatterns([]string{
+		"apps/web/app/(console)/[org]/connect/page.tsx",
+		"literal*question?/[value].go",
+		"!important.go",
+	})
+	want := "apps/web/app/(console)/\\[org\\]/connect/page.tsx,literal\\*question\\?/\\[value\\].go,\\!important.go"
+	if got != want {
+		t.Fatalf("unexpected literal exclude patterns: got %q, want %q", got, want)
 	}
 }
 

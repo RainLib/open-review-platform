@@ -160,9 +160,32 @@ func (e Executor) reviewArguments(base, head, output, rulePath string, exclude [
 		arguments = append(arguments, "--rule", rulePath)
 	}
 	if len(exclude) > 0 {
-		arguments = append(arguments, "--exclude", strings.Join(exclude, ","))
+		arguments = append(arguments, "--exclude", exactExcludePatterns(exclude))
 	}
 	return arguments
+}
+
+// exactExcludePatterns converts changed-file paths into literal gitignore
+// patterns. OCR accepts gitignore-style exclusions, where a Next.js path such
+// as app/[org]/page.tsx would otherwise interpret [org] as a character class
+// and scan a file that the risk planner explicitly deferred.
+func exactExcludePatterns(paths []string) string {
+	patterns := make([]string, 0, len(paths))
+	for _, path := range paths {
+		patterns = append(patterns, exactExcludePattern(path))
+	}
+	return strings.Join(patterns, ",")
+}
+
+func exactExcludePattern(path string) string {
+	var builder strings.Builder
+	for index, character := range path {
+		if character == '\\' || character == '*' || character == '?' || character == '[' || character == ']' || (index == 0 && (character == '!' || character == '#')) {
+			builder.WriteByte('\\')
+		}
+		builder.WriteRune(character)
+	}
+	return builder.String()
 }
 
 // configureProcessGroup prevents a wrapper CLI from leaving its native OCR
