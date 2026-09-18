@@ -39,6 +39,7 @@ OCR_VERSION=1.12.4
 GIT_BINARY=git # Git 2.41+ is required for OCR range reviews
 OCR_CONCURRENCY=2 # reduce to 1 for rate-limited or serial model gateways
 RISK_REVIEW_MODE=focused # standard | focused | critical
+MERGE_GATE_MIN_SEVERITY=critical # off | critical | high | medium | low
 CHECKOUT_TIMEOUT=2m # clone/fetch deadline; prevents stalled Git transports
 RUNNER_LEASE_DURATION=2m # abandoned work becomes recoverable after this window
 RUNNER_LEASE_RENEW_INTERVAL=30s # live workers renew before lease expiry
@@ -70,6 +71,18 @@ Grant the GitHub App **Checks: Read and write** in addition to Contents,
 Issues, Pull requests, and required Metadata access. The runner creates the
 native `Open Review / Analysis` Check Run directly through the GitHub API; no
 GitHub Actions workflow is needed.
+
+## GitHub merge gate
+
+`MERGE_GATE_MIN_SEVERITY` controls the conclusion of `Open Review / Analysis`
+after a review has completed: `critical` blocks only critical findings, while
+`off` preserves advisory-only behavior. A review execution failure always
+reports a failure after retries; findings do not make the durable job fail.
+
+To make the policy enforceable, configure `Open Review / Analysis` as a
+required status check in the target branch's GitHub protection rule. The
+recommended starting policy mirrors Kodus: begin at `critical`, calibrate
+false-positive rates, then optionally move to `high` or `medium` per tenant.
 
 ## Local GitHub App verification
 

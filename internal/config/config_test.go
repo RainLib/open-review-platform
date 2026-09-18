@@ -52,3 +52,13 @@ func TestCheckoutTimeoutMustBePositiveDuration(t *testing.T) {
 		t.Fatal("CHECKOUT_TIMEOUT must reject a non-positive duration")
 	}
 }
+
+func TestMergeGateSeverityMustBeKnown(t *testing.T) {
+	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("AUTH_MODE", "development")
+	t.Setenv("MERGE_GATE_MIN_SEVERITY", "urgent")
+	if _, err := Load(); err == nil {
+		t.Fatal("MERGE_GATE_MIN_SEVERITY must reject unknown severities")
+	}
+}

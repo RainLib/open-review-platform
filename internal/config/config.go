@@ -43,19 +43,20 @@ type BrokerConfig struct {
 }
 
 type RunnerConfig struct {
-	ID              string
-	GitBinary       string
-	OCRBinary       string
-	OCRVersion      string
-	OCRConcurrency  int
-	RiskReviewMode  string
-	CheckoutTimeout time.Duration
-	OCRTimeout      time.Duration
-	LeaseDuration   time.Duration
-	LeaseRenewEvery time.Duration
-	PollInterval    time.Duration
-	GitHubToken     string
-	GitLabToken     string
+	ID                string
+	GitBinary         string
+	OCRBinary         string
+	OCRVersion        string
+	OCRConcurrency    int
+	RiskReviewMode    string
+	MergeGateSeverity string
+	CheckoutTimeout   time.Duration
+	OCRTimeout        time.Duration
+	LeaseDuration     time.Duration
+	LeaseRenewEvery   time.Duration
+	PollInterval      time.Duration
+	GitHubToken       string
+	GitLabToken       string
 }
 
 func Load() (Config, error) {
@@ -71,6 +72,10 @@ func Load() (Config, error) {
 	riskReviewMode := env("RISK_REVIEW_MODE", "focused")
 	if riskReviewMode != "standard" && riskReviewMode != "focused" && riskReviewMode != "critical" {
 		return Config{}, fmt.Errorf("RISK_REVIEW_MODE must be standard, focused, or critical")
+	}
+	mergeGateSeverity := strings.ToLower(env("MERGE_GATE_MIN_SEVERITY", "critical"))
+	if mergeGateSeverity != "off" && mergeGateSeverity != "critical" && mergeGateSeverity != "high" && mergeGateSeverity != "medium" && mergeGateSeverity != "low" {
+		return Config{}, fmt.Errorf("MERGE_GATE_MIN_SEVERITY must be off, critical, high, medium, or low")
 	}
 	ocrTimeout, err := time.ParseDuration(env("OCR_TIMEOUT", "15m"))
 	if err != nil || ocrTimeout <= 0 {
@@ -110,19 +115,20 @@ func Load() (Config, error) {
 			RelayID:  env("OUTBOX_RELAY_ID", "relay-1"),
 		},
 		Runner: RunnerConfig{
-			ID:              env("RUNNER_ID", "runner-1"),
-			GitBinary:       env("GIT_BINARY", "git"),
-			OCRBinary:       env("OCR_BINARY", "ocr"),
-			OCRVersion:      env("OCR_VERSION", "1.12.4"),
-			OCRConcurrency:  ocrConcurrency,
-			RiskReviewMode:  riskReviewMode,
-			CheckoutTimeout: checkoutTimeout,
-			OCRTimeout:      ocrTimeout,
-			LeaseDuration:   leaseDuration,
-			LeaseRenewEvery: leaseRenewEvery,
-			PollInterval:    poll,
-			GitHubToken:     os.Getenv("GITHUB_TOKEN"),
-			GitLabToken:     os.Getenv("GITLAB_TOKEN"),
+			ID:                env("RUNNER_ID", "runner-1"),
+			GitBinary:         env("GIT_BINARY", "git"),
+			OCRBinary:         env("OCR_BINARY", "ocr"),
+			OCRVersion:        env("OCR_VERSION", "1.12.4"),
+			OCRConcurrency:    ocrConcurrency,
+			RiskReviewMode:    riskReviewMode,
+			MergeGateSeverity: mergeGateSeverity,
+			CheckoutTimeout:   checkoutTimeout,
+			OCRTimeout:        ocrTimeout,
+			LeaseDuration:     leaseDuration,
+			LeaseRenewEvery:   leaseRenewEvery,
+			PollInterval:      poll,
+			GitHubToken:       os.Getenv("GITHUB_TOKEN"),
+			GitLabToken:       os.Getenv("GITLAB_TOKEN"),
 		},
 	}
 	if c.DatabaseURL == "" {

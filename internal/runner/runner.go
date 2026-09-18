@@ -56,17 +56,18 @@ type RunnerStore interface {
 }
 
 type Processor struct {
-	Store           RunnerStore
-	Checkout        WorkspacePreparer
-	Executor        ReviewExecutor
-	Publisher       publisher.Publisher
-	Checks          publisher.CheckReporter
-	RiskPlanner     RiskPlanner
-	CheckoutTimeout time.Duration
-	LeaseDuration   time.Duration
-	LeaseRenewEvery time.Duration
-	WorkerID        string
-	Logger          *slog.Logger
+	Store             RunnerStore
+	Checkout          WorkspacePreparer
+	Executor          ReviewExecutor
+	Publisher         publisher.Publisher
+	Checks            publisher.CheckReporter
+	RiskPlanner       RiskPlanner
+	CheckoutTimeout   time.Duration
+	LeaseDuration     time.Duration
+	LeaseRenewEvery   time.Duration
+	MergeGateSeverity string
+	WorkerID          string
+	Logger            *slog.Logger
 	// TerminalPollInterval controls how quickly an in-flight review observes a
 	// cancellation or supersession. It is configurable for deterministic tests;
 	// production callers should leave it unset.
@@ -164,7 +165,8 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 		return true, fmt.Errorf("mark job %s succeeded: %w", job.ID, err)
 	}
 	if p.Checks != nil {
-		if checkErr := p.Checks.CompleteCheck(ctx, *job, publisher.CheckSuccess, publisher.ResultSummary(findings)); checkErr != nil && p.Logger != nil {
+		gate := publisher.EvaluateMergeGate(findings, p.MergeGateSeverity)
+		if checkErr := p.Checks.CompleteCheck(ctx, *job, gate.Conclusion, gate.Summary(findings)); checkErr != nil && p.Logger != nil {
 			p.Logger.Warn("could not finalize successful review check", "job_id", job.ID, "error", checkErr)
 		}
 	}
