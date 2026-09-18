@@ -1,0 +1,24 @@
+# Local GitHub App override. Keep this file separate from docker-compose.yml so
+# CI and contributors without an App key can still start the base stack.
+#
+# Usage:
+#   GITHUB_APP_PRIVATE_KEY_HOST_PATH=/absolute/path/to/app.pem \
+#     docker compose -f docker-compose.yml -f docker-compose.github-app.yml up --build -d
+services:
+  runner:
+    environment:
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+    volumes:
+      - type: bind
+        source: ${GITHUB_APP_PRIVATE_KEY_HOST_PATH:?set GITHUB_APP_PRIVATE_KEY_HOST_PATH to the GitHub App PEM on the host}
+        target: /run/secrets/github-app.pem
+        read_only: true
+
+  interaction-responder:
+    environment:
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+    volumes:
+      - type: bind
+        source: ${GITHUB_APP_PRIVATE_KEY_HOST_PATH:?set GITHUB_APP_PRIVATE_KEY_HOST_PATH to the GitHub App PEM on the host}
+        target: /run/secrets/github-app.pem
+        read_only: true

@@ -70,3 +70,18 @@ Grant the GitHub App **Checks: Read and write** in addition to Contents,
 Issues, Pull requests, and required Metadata access. The runner creates the
 native `Open Review / Analysis` Check Run directly through the GitHub API; no
 GitHub Actions workflow is needed.
+
+## Local GitHub App verification
+
+The base Compose file deliberately contains no host-secret mount. For an
+end-to-end GitHub App test, keep the PEM outside the repository and start the
+explicit override:
+
+```sh
+GITHUB_APP_PRIVATE_KEY_HOST_PATH=/absolute/path/to/github-app.pem \
+  docker compose -f docker-compose.yml -f docker-compose.github-app.yml up --build -d
+```
+
+The override mounts that one file read-only at `/run/secrets/github-app.pem`
+only for `runner` and `interaction-responder`; it never copies the key into an
+image or injects it into `control-api`, `outbox-relay`, or `acknowledger`.
