@@ -238,7 +238,11 @@ func (p Processor) processUntilTerminal(ctx context.Context, job domain.ReviewJo
 	if observeErr != nil {
 		return findings, err
 	}
-	if run.State.Terminal() {
+	// Completed is the successful terminal state produced by process. It must
+	// flow back to runClaimed so the legacy job is marked succeeded and the
+	// provider Check receives the result. Only cancellation/supersession/failure
+	// terminal states stop publication.
+	if run.State.Terminal() && run.State != domain.RunCompleted {
 		return nil, terminalRunError{run: run}
 	}
 	return findings, err
@@ -263,7 +267,7 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	if err != nil {
 		return nil, err
 	}
-	if run.State.Terminal() {
+	if run.State.Terminal() && run.State != domain.RunCompleted {
 		return nil, terminalRunError{run: run}
 	}
 	plan, err := p.planRisk(ctx, workspace.Path, workspace.BaseSHA, job.HeadSHA)
@@ -437,7 +441,7 @@ func (p Processor) advance(ctx context.Context, jobID uuid.UUID, state domain.Ru
 // worker from publishing stale findings after a user cancelled the task or a
 // newer PR head superseded it.
 func (p Processor) stopTerminalRun(ctx context.Context, job domain.ReviewJob, run domain.ReviewRun) (bool, error) {
-	if !run.State.Terminal() {
+	if !run.State.Terminal() || run.State == domain.RunCompleted {
 		return false, nil
 	}
 	if err := p.Store.Cancel(ctx, job.ID, p.WorkerID); err != nil && !errors.Is(err, store.ErrJobClaimLost) {

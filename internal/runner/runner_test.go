@@ -214,3 +214,14 @@ func TestReviewUntilTerminalCancelsInFlightExecutor(t *testing.T) {
 		t.Fatal("executor did not receive cancellation")
 	}
 }
+
+func TestStopTerminalRunDoesNotCancelCompletedReview(t *testing.T) {
+	processor := Processor{Store: snapshotStore{}, WorkerID: "worker-1"}
+	stopped, err := processor.stopTerminalRun(context.Background(), domain.ReviewJob{ID: uuid.New()}, domain.ReviewRun{State: domain.RunCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped {
+		t.Fatal("completed review must be allowed to mark its job succeeded")
+	}
+}
