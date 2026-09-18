@@ -51,6 +51,8 @@ type RunnerConfig struct {
 	RiskReviewMode  string
 	CheckoutTimeout time.Duration
 	OCRTimeout      time.Duration
+	LeaseDuration   time.Duration
+	LeaseRenewEvery time.Duration
 	PollInterval    time.Duration
 	GitHubToken     string
 	GitLabToken     string
@@ -77,6 +79,14 @@ func Load() (Config, error) {
 	checkoutTimeout, err := time.ParseDuration(env("CHECKOUT_TIMEOUT", "2m"))
 	if err != nil || checkoutTimeout <= 0 {
 		return Config{}, fmt.Errorf("CHECKOUT_TIMEOUT must be a positive duration")
+	}
+	leaseDuration, err := time.ParseDuration(env("RUNNER_LEASE_DURATION", "2m"))
+	if err != nil || leaseDuration <= 0 {
+		return Config{}, fmt.Errorf("RUNNER_LEASE_DURATION must be a positive duration")
+	}
+	leaseRenewEvery, err := time.ParseDuration(env("RUNNER_LEASE_RENEW_INTERVAL", "30s"))
+	if err != nil || leaseRenewEvery <= 0 || leaseRenewEvery >= leaseDuration {
+		return Config{}, fmt.Errorf("RUNNER_LEASE_RENEW_INTERVAL must be positive and shorter than RUNNER_LEASE_DURATION")
 	}
 	c := Config{
 		DatabaseURL: os.Getenv("CONTROL_DATABASE_URL"),
@@ -108,6 +118,8 @@ func Load() (Config, error) {
 			RiskReviewMode:  riskReviewMode,
 			CheckoutTimeout: checkoutTimeout,
 			OCRTimeout:      ocrTimeout,
+			LeaseDuration:   leaseDuration,
+			LeaseRenewEvery: leaseRenewEvery,
 			PollInterval:    poll,
 			GitHubToken:     os.Getenv("GITHUB_TOKEN"),
 			GitLabToken:     os.Getenv("GITLAB_TOKEN"),

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/store"
@@ -156,7 +157,10 @@ func (*recordingStore) SaveFindings(context.Context, uuid.UUID, []domain.Finding
 func (*recordingStore) Succeed(context.Context, uuid.UUID, string) error                { return nil }
 func (*recordingStore) Fail(context.Context, uuid.UUID, string, string) error           { return nil }
 func (*recordingStore) Cancel(context.Context, uuid.UUID, string) error                 { return nil }
-func (*recordingStore) Close()                                                          {}
+func (*recordingStore) RenewClaim(context.Context, uuid.UUID, string, time.Duration) error {
+	return nil
+}
+func (*recordingStore) Close() {}
 
 func TestGitHubWebhookVerifiesBeforeQueueing(t *testing.T) {
 	secret := "secret"

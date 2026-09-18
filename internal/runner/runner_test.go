@@ -35,6 +35,9 @@ func (snapshotStore) SaveFindings(context.Context, uuid.UUID, []domain.Finding) 
 func (snapshotStore) Succeed(context.Context, uuid.UUID, string) error                { return nil }
 func (snapshotStore) Fail(context.Context, uuid.UUID, string, string) error           { return nil }
 func (snapshotStore) Cancel(context.Context, uuid.UUID, string) error                 { return nil }
+func (snapshotStore) RenewClaim(context.Context, uuid.UUID, string, time.Duration) error {
+	return nil
+}
 
 type recordingExecutor struct {
 	defaultCalls int
@@ -100,6 +103,20 @@ func (s terminalStore) AdvanceLegacyRun(context.Context, uuid.UUID, domain.RunSt
 	return s.run, nil
 }
 
+type renewalStore struct {
+	snapshotStore
+	calls chan struct{}
+	err   error
+}
+
+func (s renewalStore) RenewClaim(context.Context, uuid.UUID, string, time.Duration) error {
+	select {
+	case s.calls <- struct{}{}:
+	default:
+	}
+	return s.err
+}
+
 type blockingExecutor struct {
 	stopped chan struct{}
 }
@@ -153,6 +170,29 @@ func TestProcessBoundsStalledCheckout(t *testing.T) {
 	case <-stopped:
 	case <-time.After(time.Second):
 		t.Fatal("checkout did not receive its deadline cancellation")
+	}
+}
+
+func TestClaimHeartbeatRenewsAndStopsOnLostLease(t *testing.T) {
+	leaseLost := errors.New("lease lost")
+	store := renewalStore{calls: make(chan struct{}, 1), err: leaseLost}
+	processor := Processor{
+		Store:           store,
+		WorkerID:        "worker-1",
+		LeaseDuration:   time.Second,
+		LeaseRenewEvery: time.Millisecond,
+	}
+	executionCtx, stop := processor.keepClaimAlive(context.Background(), domain.ReviewJob{ID: uuid.New()})
+	defer stop()
+	select {
+	case <-store.calls:
+	case <-time.After(time.Second):
+		t.Fatal("expected claim renewal")
+	}
+	select {
+	case <-executionCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("execution continued after claim renewal failed")
 	}
 }
 

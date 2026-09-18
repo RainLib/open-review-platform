@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -46,7 +47,8 @@ func (c Checkout) Prepare(ctx context.Context, job domain.ReviewJob) (*Workspace
 		_ = os.RemoveAll(directory)
 		return nil, err
 	}
-	if err := c.git(ctx, "", token, "clone", "--no-checkout", "--depth=1", job.CloneURL, directory); err != nil {
+	cloneURL := authenticatedCloneURL(job, token)
+	if err := c.git(ctx, "", token, "clone", "--no-checkout", "--depth=1", cloneURL, directory); err != nil {
 		return fail(fmt.Errorf("clone review repository: %w", err))
 	}
 	if err := c.git(ctx, directory, token, "fetch", "--depth=1", "origin", job.BaseRef); err != nil {
@@ -73,6 +75,27 @@ func (c Checkout) Prepare(ctx context.Context, job domain.ReviewJob) (*Workspace
 		return fail(err)
 	}
 	return &Workspace{Path: directory, BaseSHA: strings.TrimSpace(baseSHA), cleanup: func() error { return os.RemoveAll(directory) }}, nil
+}
+
+// GitHub webhooks commonly carry an SSH clone URL. Installation tokens only
+// authenticate HTTP(S) transport, so normalize that URL before starting Git;
+// otherwise a runner can wait on blocked SSH port 22 despite holding a valid
+// GitHub App token. HTTPS, file fixtures, and other providers remain intact.
+func authenticatedCloneURL(job domain.ReviewJob, token string) string {
+	if job.Provider != domain.ProviderGitHub || token == "" {
+		return job.CloneURL
+	}
+	if parsed, err := url.Parse(job.CloneURL); err == nil && parsed.Scheme == "ssh" && parsed.Host != "" {
+		return "https://" + parsed.Hostname() + "/" + strings.TrimPrefix(parsed.Path, "/")
+	}
+	if !strings.HasPrefix(job.CloneURL, "git@") {
+		return job.CloneURL
+	}
+	parts := strings.SplitN(strings.TrimPrefix(job.CloneURL, "git@"), ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return job.CloneURL
+	}
+	return "https://" + parts[0] + "/" + strings.TrimPrefix(parts[1], "/")
 }
 
 func (c Checkout) ensureMergeBase(ctx context.Context, directory, token, baseSHA, headSHA, baseRef string) error {

@@ -204,7 +204,7 @@ func (s *PostgresStore) Claim(ctx context.Context, workerID string) (*domain.Rev
 		)
 		UPDATE review_jobs AS j
 		SET state = 'running', attempts = attempts + 1, locked_by = $1,
-			locked_until = now() + interval '30 minutes', started_at = now()
+			locked_until = now() + interval '2 minutes', started_at = now()
 		FROM candidate, provider_installations AS i
 		WHERE j.id = candidate.id AND i.id = j.installation_id
 		RETURNING j.id, j.tenant_id, j.installation_id, i.external_id, i.credential_ref, j.delivery_id, j.provider, j.api_base_url, j.repository, j.clone_url,
@@ -235,7 +235,7 @@ func (s *PostgresStore) ClaimForRun(ctx context.Context, workerID string, runID 
 		)
 		UPDATE review_jobs AS j
 		SET state = 'running', attempts = attempts + 1, locked_by = $1,
-			locked_until = now() + interval '30 minutes', started_at = now()
+			locked_until = now() + interval '2 minutes', started_at = now()
 		FROM candidate, provider_installations AS i
 		WHERE j.id = candidate.id AND i.id = j.installation_id
 		RETURNING j.id, j.tenant_id, j.installation_id, i.external_id, i.credential_ref, j.delivery_id, j.provider, j.api_base_url, j.repository, j.clone_url,
@@ -248,6 +248,26 @@ func (s *PostgresStore) ClaimForRun(ctx context.Context, workerID string, runID 
 		return nil, fmt.Errorf("claim review job for run: %w", err)
 	}
 	return &job, nil
+}
+
+// RenewClaim keeps an in-flight execution recoverable: a process that exits
+// cannot strand its job for the full OCR timeout, while a healthy process
+// retains exclusive ownership throughout a long review.
+func (s *PostgresStore) RenewClaim(ctx context.Context, jobID uuid.UUID, workerID string, lease time.Duration) error {
+	if lease <= 0 {
+		return fmt.Errorf("renew review job claim: lease must be positive")
+	}
+	command, err := s.pool.Exec(ctx, `
+		UPDATE review_jobs
+		SET locked_until = now() + $3::interval
+		WHERE id = $1 AND state = 'running' AND locked_by = $2`, jobID, workerID, lease.String())
+	if err != nil {
+		return fmt.Errorf("renew review job claim: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return ErrJobClaimLost
+	}
+	return nil
 }
 
 func (s *PostgresStore) SaveFindings(ctx context.Context, jobID uuid.UUID, findings []domain.Finding) error {

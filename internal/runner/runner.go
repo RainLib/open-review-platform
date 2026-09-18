@@ -52,6 +52,7 @@ type RunnerStore interface {
 	Succeed(context.Context, uuid.UUID, string) error
 	Fail(context.Context, uuid.UUID, string, string) error
 	Cancel(context.Context, uuid.UUID, string) error
+	RenewClaim(context.Context, uuid.UUID, string, time.Duration) error
 }
 
 type Processor struct {
@@ -62,6 +63,8 @@ type Processor struct {
 	Checks          publisher.CheckReporter
 	RiskPlanner     RiskPlanner
 	CheckoutTimeout time.Duration
+	LeaseDuration   time.Duration
+	LeaseRenewEvery time.Duration
 	WorkerID        string
 	Logger          *slog.Logger
 	// TerminalPollInterval controls how quickly an in-flight review observes a
@@ -108,7 +111,9 @@ func (p Processor) RunForRun(ctx context.Context, runID uuid.UUID) (worked bool,
 
 func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worked bool, err error) {
 	worked = true
-	run, err := p.advance(ctx, job.ID, domain.RunAdmitted)
+	executionCtx, stopLeaseHeartbeat := p.keepClaimAlive(ctx, *job)
+	defer stopLeaseHeartbeat()
+	run, err := p.advance(executionCtx, job.ID, domain.RunAdmitted)
 	if err != nil {
 		return true, err
 	}
@@ -116,21 +121,21 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 		return true, stopErr
 	}
 	if p.Checks != nil {
-		if checkErr := p.Checks.StartCheck(ctx, *job); checkErr != nil && p.Logger != nil {
+		if checkErr := p.Checks.StartCheck(executionCtx, *job); checkErr != nil && p.Logger != nil {
 			// A status surface must not prevent an otherwise valid review from
 			// running. The durable provider publication path still reports the
 			// final result, and governance decides whether a later check blocks.
 			p.Logger.Warn("could not start review check", "job_id", job.ID, "error", checkErr)
 		}
 	}
-	run, err = p.advance(ctx, job.ID, domain.RunPreparing)
+	run, err = p.advance(executionCtx, job.ID, domain.RunPreparing)
 	if err != nil {
 		return true, err
 	}
 	if stopped, stopErr := p.stopTerminalRun(ctx, *job, run); stopErr != nil || stopped {
 		return true, stopErr
 	}
-	findings, err := p.processUntilTerminal(ctx, *job)
+	findings, err := p.processUntilTerminal(executionCtx, *job)
 	if err != nil {
 		var terminal terminalRunError
 		if errors.As(err, &terminal) {
@@ -167,6 +172,55 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 		p.Logger.Info("review job succeeded", "job_id", job.ID, "attempt", job.Attempts)
 	}
 	return true, nil
+}
+
+// keepClaimAlive makes the database lease explicit. A restart therefore makes
+// work eligible again within two minutes, while a healthy review (including a
+// long model invocation) renews before its lease can expire.
+func (p Processor) keepClaimAlive(ctx context.Context, job domain.ReviewJob) (context.Context, context.CancelFunc) {
+	executionCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	interval := p.leaseRenewInterval()
+	lease := p.leaseDuration()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				cancel()
+				return
+			case <-ticker.C:
+				if err := p.Store.RenewClaim(ctx, job.ID, p.WorkerID, lease); err != nil {
+					if p.Logger != nil {
+						p.Logger.Warn("review job lease could not be renewed; stopping execution", "job_id", job.ID, "error", err)
+					}
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return executionCtx, func() {
+		close(done)
+		cancel()
+	}
+}
+
+func (p Processor) leaseDuration() time.Duration {
+	if p.LeaseDuration > 0 {
+		return p.LeaseDuration
+	}
+	return 2 * time.Minute
+}
+
+func (p Processor) leaseRenewInterval() time.Duration {
+	if p.LeaseRenewEvery > 0 {
+		return p.LeaseRenewEvery
+	}
+	return 30 * time.Second
 }
 
 // processUntilTerminal covers preparation as well as OCR execution. Provider

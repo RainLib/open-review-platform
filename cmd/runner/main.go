@@ -55,6 +55,8 @@ func main() {
 		Checks:          reviewPublisher,
 		RiskPlanner:     risk.Planner{GitBinary: cfg.Runner.GitBinary, Mode: risk.Mode(cfg.Runner.RiskReviewMode)},
 		CheckoutTimeout: cfg.Runner.CheckoutTimeout,
+		LeaseDuration:   cfg.Runner.LeaseDuration,
+		LeaseRenewEvery: cfg.Runner.LeaseRenewEvery,
 		WorkerID:        cfg.Runner.ID,
 		Logger:          slog.Default(),
 	}

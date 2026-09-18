@@ -53,6 +53,21 @@ func TestCheckoutPrepareDeepensHistoryForMergeBase(t *testing.T) {
 	t.Logf("shallow=%s", strings.TrimSpace(runGit(t, workspace.Path, "rev-parse", "--is-shallow-repository")))
 }
 
+func TestAuthenticatedCloneURLUsesHTTPSForGitHubAppToken(t *testing.T) {
+	job := domain.ReviewJob{Provider: domain.ProviderGitHub, CloneURL: "git@github.com:RainLib/open-review-platform.git"}
+	if got := authenticatedCloneURL(job, "installation-token"); got != "https://github.com/RainLib/open-review-platform.git" {
+		t.Fatalf("unexpected GitHub SSH normalization: %q", got)
+	}
+	job.CloneURL = "ssh://git@ghe.example.test/RainLib/open-review-platform.git"
+	if got := authenticatedCloneURL(job, "installation-token"); got != "https://ghe.example.test/RainLib/open-review-platform.git" {
+		t.Fatalf("unexpected GitHub Enterprise SSH normalization: %q", got)
+	}
+	job.Provider = domain.ProviderGitLab
+	if got := authenticatedCloneURL(job, "token"); got != job.CloneURL {
+		t.Fatalf("non-GitHub URL changed: %q", got)
+	}
+}
+
 func runGit(t *testing.T, directory string, args ...string) string {
 	t.Helper()
 	command := exec.Command("git", args...)

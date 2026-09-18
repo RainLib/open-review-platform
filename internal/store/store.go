@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/google/uuid"
@@ -49,6 +50,10 @@ type Store interface {
 	// ClaimForRun makes a broker message an execution hint for its own run,
 	// rather than allowing a consumer to claim an unrelated tenant job.
 	ClaimForRun(ctx context.Context, workerID string, runID uuid.UUID) (*domain.ReviewJob, error)
+	// RenewClaim extends an active worker lease. A worker must stop execution if
+	// this operation reports a lost claim so a recovered worker cannot publish a
+	// duplicate or stale review.
+	RenewClaim(ctx context.Context, jobID uuid.UUID, workerID string, lease time.Duration) error
 	RuleSnapshotForJob(ctx context.Context, jobID uuid.UUID) (domain.RuleSnapshot, error)
 	SaveFindings(ctx context.Context, jobID uuid.UUID, findings []domain.Finding) error
 	Succeed(ctx context.Context, jobID uuid.UUID, workerID string) error
