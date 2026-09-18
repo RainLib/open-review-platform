@@ -33,6 +33,28 @@ func TestGitHubWebhookSecretIsOptionalForLocalDevelopment(t *testing.T) {
 	}
 }
 
+func TestProviderAPIURLsMustBeTrustedHTTPSDestinations(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "GitHub HTTP", key: "GITHUB_API_URL", value: "http://github.example.com/api/v3"},
+		{name: "GitLab user info", key: "GITLAB_API_URL", value: "https://token@gitlab.example.com/api/v4"},
+		{name: "GitHub query", key: "GITHUB_API_URL", value: "https://github.example.com/api/v3?redirect=https://attacker.invalid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+			t.Setenv("ENVIRONMENT", "development")
+			t.Setenv("AUTH_MODE", "development")
+			t.Setenv(test.key, test.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("%s must be rejected", test.key)
+			}
+		})
+	}
+}
+
 func TestOCRTimeoutMustBePositiveDuration(t *testing.T) {
 	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
 	t.Setenv("ENVIRONMENT", "development")

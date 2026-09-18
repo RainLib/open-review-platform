@@ -23,6 +23,7 @@ type recordingStore struct {
 	event                  domain.InboundEvent
 	interaction            domain.InteractionCommand
 	installation           domain.Installation
+	installationInput      domain.InstallationInput
 	called                 bool
 	interactionCalled      bool
 	createRuleSetErr       error
@@ -53,7 +54,8 @@ func (s *recordingStore) UpsertMembership(context.Context, string, string, strin
 	return domain.Membership{}, nil
 }
 
-func (s *recordingStore) CreateInstallation(context.Context, string, string, domain.InstallationInput) (domain.Installation, error) {
+func (s *recordingStore) CreateInstallation(_ context.Context, _ string, _ string, input domain.InstallationInput) (domain.Installation, error) {
+	s.installationInput = input
 	return s.installation, nil
 }
 
@@ -346,6 +348,37 @@ func TestInstallationResponseDoesNotExposeCredentialReference(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "credential_ref") || strings.Contains(response.Body.String(), "github-app") {
 		t.Fatalf("credential reference must not be serialized: %s", response.Body.String())
+	}
+}
+
+func TestInstallationEndpointComesFromTrustedProviderConfiguration(t *testing.T) {
+	recording := &recordingStore{installation: domain.Installation{ID: uuid.New(), Active: true}}
+	server := NewWithProviderAPIURLs(
+		recording,
+		fixedAuthenticator{},
+		"",
+		"",
+		"https://github.example.com/api/v3",
+		"https://gitlab.example.com/api/v4",
+	)
+	mux := http.NewServeMux()
+	server.Register(mux)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/tenants/acme/installations",
+		strings.NewReader(`{"provider":"GitHub","external_id":"123","repository_scope":"acme/*","api_base_url":"https://attacker.invalid/api","credential_ref":"github-app"}`),
+	)
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d, want %d; body=%s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	if recording.installationInput.Provider != domain.ProviderGitHub {
+		t.Fatalf("provider=%q, want github", recording.installationInput.Provider)
+	}
+	if recording.installationInput.APIBaseURL != "https://github.example.com/api/v3" {
+		t.Fatalf("api base URL=%q, want trusted GitHub endpoint", recording.installationInput.APIBaseURL)
 	}
 }
 

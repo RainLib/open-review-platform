@@ -13,7 +13,6 @@ type ConnectionForm = {
   provider: Provider;
   externalID: string;
   repositoryScope: string;
-  apiBaseURL: string;
 };
 
 const inputClassName =
@@ -21,14 +20,12 @@ const inputClassName =
 
 const providerDefaults: Record<
   Provider,
-  Pick<ConnectionForm, "apiBaseURL" | "repositoryScope">
+  Pick<ConnectionForm, "repositoryScope">
 > = {
   github: {
-    apiBaseURL: "https://api.github.com",
     repositoryScope: "owner/*",
   },
   gitlab: {
-    apiBaseURL: "https://gitlab.com/api/v4",
     repositoryScope: "group/*",
   },
 };
@@ -78,7 +75,6 @@ export function ConnectionManager({
             provider: form.provider,
             external_id: form.externalID,
             repository_scope: form.repositoryScope,
-            api_base_url: form.apiBaseURL,
             credential_ref: credentialRef,
           }),
         },
@@ -176,23 +172,10 @@ export function ConnectionManager({
             value={form.repositoryScope}
           />
         </label>
-        <label className="space-y-1.5 text-xs font-medium text-zinc-400">
-          Provider API base URL
-          <input
-            className={inputClassName}
-            disabled={!enabled || pending}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                apiBaseURL: event.target.value,
-              }))
-            }
-            placeholder="https://api.github.com"
-            required
-            type="url"
-            value={form.apiBaseURL}
-          />
-        </label>
+        <p className="rounded-xl border border-white/[0.06] bg-black/15 px-3 py-2.5 text-xs leading-5 text-zinc-500">
+          The provider API endpoint is selected from trusted deployment
+          configuration. It cannot be changed from this browser.
+        </p>
         <div className="flex flex-col justify-end gap-2 lg:col-span-2 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs leading-5 text-zinc-500">
             {form.provider === "github"

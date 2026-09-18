@@ -25,7 +25,12 @@ once for each release. The migration lock prevents concurrent application.
    short-lived installation tokens. Never put a token in a webhook, job
    payload, log, review comment, or database column. GitLab remains a
    separately configured provider credential.
-6. Set a retention policy for raw webhook payloads and audit logs according to
+6. Set `GITHUB_API_URL` and `GITLAB_API_URL` to the HTTPS API endpoint for
+   each configured provider instance. The control API derives each
+   installation's stored endpoint from these deployment-owned values; a
+   browser or management API caller cannot redirect runner credentials to an
+   arbitrary host.
+7. Set a retention policy for raw webhook payloads and audit logs according to
    the tenant's data-residency and privacy requirements.
 
 ## Bootstrap order

@@ -10,7 +10,6 @@ type InstallationRequest = {
   provider?: unknown;
   external_id?: unknown;
   repository_scope?: unknown;
-  api_base_url?: unknown;
   credential_ref?: unknown;
 };
 
@@ -30,15 +29,14 @@ export async function POST(
     );
   }
 
-  const provider = typeof input.provider === "string" ? input.provider : "";
+  const provider =
+    typeof input.provider === "string" ? input.provider.trim().toLowerCase() : "";
   const externalID =
     typeof input.external_id === "string" ? input.external_id.trim() : "";
   const repositoryScope =
     typeof input.repository_scope === "string"
       ? input.repository_scope.trim()
       : "";
-  const apiBaseURL =
-    typeof input.api_base_url === "string" ? input.api_base_url.trim() : "";
   const credentialRef =
     typeof input.credential_ref === "string"
       ? input.credential_ref.trim()
@@ -54,7 +52,6 @@ export async function POST(
     !expectedCredentialRef ||
     !externalID ||
     !repositoryScope ||
-    !apiBaseURL ||
     credentialRef !== expectedCredentialRef
   ) {
     return Response.json(
@@ -74,7 +71,6 @@ export async function POST(
         provider,
         external_id: externalID,
         repository_scope: repositoryScope,
-        api_base_url: apiBaseURL,
         credential_ref: credentialRef,
       }),
       headers: { "Content-Type": "application/json" },

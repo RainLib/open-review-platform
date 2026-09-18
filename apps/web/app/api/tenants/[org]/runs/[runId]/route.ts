@@ -23,8 +23,8 @@ export async function POST(
   }
 
   if (
-    !Number.isInteger(revision) ||
     typeof revision !== "number" ||
+    !Number.isInteger(revision) ||
     revision < 1
   ) {
     return Response.json(

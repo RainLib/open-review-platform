@@ -3,6 +3,7 @@ WORKDIR /app
 RUN corepack enable
 
 FROM base AS dependencies
+# This Dockerfile's build context is apps/web, where its manifest and lockfile live.
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 

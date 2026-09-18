@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -14,7 +15,7 @@ type Config struct {
 	Environment string
 	Auth        AuthConfig
 	GitHub      GitHubConfig
-	GitLab      WebhookConfig
+	GitLab      GitLabConfig
 	Broker      BrokerConfig
 	Runner      RunnerConfig
 }
@@ -25,15 +26,16 @@ type AuthConfig struct {
 	Audience string
 }
 
-type WebhookConfig struct {
-	Secret string
-}
-
 type GitHubConfig struct {
 	Secret         string
 	AppID          string
 	PrivateKeyPath string
 	APIURL         string
+}
+
+type GitLabConfig struct {
+	Secret string
+	APIURL string
 }
 
 type BrokerConfig struct {
@@ -131,7 +133,10 @@ func Load() (Config, error) {
 			PrivateKeyPath: os.Getenv("GITHUB_APP_PRIVATE_KEY_PATH"),
 			APIURL:         env("GITHUB_API_URL", "https://api.github.com"),
 		},
-		GitLab: WebhookConfig{Secret: os.Getenv("GITLAB_WEBHOOK_SECRET")},
+		GitLab: GitLabConfig{
+			Secret: os.Getenv("GITLAB_WEBHOOK_SECRET"),
+			APIURL: env("GITLAB_API_URL", "https://gitlab.com/api/v4"),
+		},
 		Broker: BrokerConfig{
 			URL:      env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
 			Exchange: env("RABBITMQ_EXCHANGE", "openreview.events"),
@@ -173,7 +178,18 @@ func Load() (Config, error) {
 	if c.Environment != "development" && c.GitHub.Secret == "" {
 		return Config{}, fmt.Errorf("GITHUB_WEBHOOK_SECRET is required outside development")
 	}
+	if !trustedProviderAPIURL(c.GitHub.APIURL) {
+		return Config{}, fmt.Errorf("GITHUB_API_URL must be an HTTPS API URL without credentials, query, or fragment")
+	}
+	if !trustedProviderAPIURL(c.GitLab.APIURL) {
+		return Config{}, fmt.Errorf("GITLAB_API_URL must be an HTTPS API URL without credentials, query, or fragment")
+	}
 	return c, nil
+}
+
+func trustedProviderAPIURL(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
 }
 
 func env(name, fallback string) string {

@@ -39,14 +39,16 @@ curl -X POST http://localhost:8080/v1/tenants/acme/installations \
     "provider":"github",
     "external_id":"12345678",
     "repository_scope":"acme/*",
-    "api_base_url":"https://api.github.com",
     "credential_ref":"github-app"
   }'
 ```
 
-For GitHub Enterprise use `https://github.example.com/api/v3`; for GitLab
-self-managed use `https://gitlab.example.com/api/v4`. The base URL participates
-in installation matching, preventing identically numbered installations from
+The control API derives `api_base_url` from its trusted `GITHUB_API_URL` or
+`GITLAB_API_URL` deployment configuration; browser and API callers cannot
+choose it. For GitHub Enterprise configure
+`https://github.example.com/api/v3`; for GitLab self-managed configure
+`https://gitlab.example.com/api/v4`. That configured endpoint participates in
+installation matching, preventing identically numbered installations from
 different provider instances being mixed.
 
 List credential-safe installation summaries for an authorized tenant:

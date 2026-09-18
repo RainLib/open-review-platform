@@ -24,21 +24,38 @@ import (
 
 const maxWebhookBytes = 2 << 20
 
+const (
+	defaultGitHubAPIURL = "https://api.github.com"
+	defaultGitLabAPIURL = "https://gitlab.com/api/v4"
+)
+
 type Server struct {
-	store        store.Store
-	auth         identity.Authenticator
-	githubSecret string
-	gitlabSecret string
-	now          func() time.Time
+	store               store.Store
+	auth                identity.Authenticator
+	githubSecret        string
+	gitlabSecret        string
+	providerAPIBaseURLs map[domain.Provider]string
+	now                 func() time.Time
 }
 
 func New(store store.Store, auth identity.Authenticator, githubSecret, gitlabSecret string) *Server {
+	return NewWithProviderAPIURLs(store, auth, githubSecret, gitlabSecret, defaultGitHubAPIURL, defaultGitLabAPIURL)
+}
+
+// NewWithProviderAPIURLs pins provider API destinations to deployment
+// configuration. Installation requests may identify a provider, but may never
+// select the endpoint to which runner-side credentials are sent.
+func NewWithProviderAPIURLs(store store.Store, auth identity.Authenticator, githubSecret, gitlabSecret, githubAPIURL, gitlabAPIURL string) *Server {
 	return &Server{
 		store:        store,
 		auth:         auth,
 		githubSecret: githubSecret,
 		gitlabSecret: gitlabSecret,
-		now:          time.Now,
+		providerAPIBaseURLs: map[domain.Provider]string{
+			domain.ProviderGitHub: trustedProviderAPIBaseURL(githubAPIURL),
+			domain.ProviderGitLab: trustedProviderAPIBaseURL(gitlabAPIURL),
+		},
+		now: time.Now,
 	}
 }
 
@@ -123,10 +140,11 @@ func (s *Server) createInstallation(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	input.Provider = domain.Provider(strings.ToLower(strings.TrimSpace(string(input.Provider))))
 	input.ExternalID = strings.TrimSpace(input.ExternalID)
 	input.RepositoryScope = strings.TrimSpace(input.RepositoryScope)
-	input.APIBaseURL = strings.TrimSuffix(strings.TrimSpace(input.APIBaseURL), "/")
 	input.CredentialRef = strings.TrimSpace(input.CredentialRef)
+	input.APIBaseURL = s.providerAPIBaseURLs[input.Provider]
 	if !validInstallation(input) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider installation is invalid"})
 		return
@@ -807,11 +825,29 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
 }
 
 func validInstallation(input domain.InstallationInput) bool {
-	if !input.Provider.Valid() || input.ExternalID == "" || input.RepositoryScope == "" || input.CredentialRef == "" {
+	if !input.Provider.Valid() || input.ExternalID == "" || input.RepositoryScope == "" || input.APIBaseURL == "" {
 		return false
 	}
-	parsed, err := url.Parse(input.APIBaseURL)
-	return err == nil && parsed.Host != "" && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.User == nil
+	switch input.Provider {
+	case domain.ProviderGitHub:
+		return input.CredentialRef == "github-app"
+	case domain.ProviderGitLab:
+		return input.CredentialRef == "gitlab-token"
+	default:
+		return false
+	}
+}
+
+func trustedProviderAPIBaseURL(value string) string {
+	value = strings.TrimSuffix(strings.TrimSpace(value), "/")
+	if value == "" {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return ""
+	}
+	return value
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

@@ -29,7 +29,7 @@ func main() {
 		log.Fatal(err)
 	}
 	mux := stdhttp.NewServeMux()
-	api.New(database, authenticator, cfg.GitHub.Secret, cfg.GitLab.Secret).Register(mux)
+	api.NewWithProviderAPIURLs(database, authenticator, cfg.GitHub.Secret, cfg.GitLab.Secret, cfg.GitHub.APIURL, cfg.GitLab.APIURL).Register(mux)
 	server := khttp.NewServer(khttp.Address(cfg.HTTPAddress))
 	server.HandlePrefix("/", mux)
 	app := kratos.New(
