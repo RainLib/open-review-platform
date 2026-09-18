@@ -61,7 +61,9 @@ type Processor struct {
 	Executor          ReviewExecutor
 	Publisher         publisher.Publisher
 	Checks            publisher.CheckReporter
+	Lifecycle         publisher.LifecycleReporter
 	RiskPlanner       RiskPlanner
+	EngineVersion     string
 	CheckoutTimeout   time.Duration
 	LeaseDuration     time.Duration
 	LeaseRenewEvery   time.Duration
@@ -129,6 +131,11 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 			p.Logger.Warn("could not start review check", "job_id", job.ID, "error", checkErr)
 		}
 	}
+	if p.Lifecycle != nil {
+		if publishErr := p.Lifecycle.PublishStarted(executionCtx, *job); publishErr != nil && p.Logger != nil {
+			p.Logger.Warn("could not publish review start report", "job_id", job.ID, "error", publishErr)
+		}
+	}
 	run, err = p.advance(executionCtx, job.ID, domain.RunPreparing)
 	if err != nil {
 		return true, err
@@ -153,6 +160,11 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 			if p.Checks != nil {
 				if checkErr := p.Checks.CompleteCheck(ctx, *job, publisher.CheckFailure, "The review could not be completed after retrying. See the task detail for the safe error summary."); checkErr != nil && p.Logger != nil {
 					p.Logger.Warn("could not finalize failed review check", "job_id", job.ID, "error", checkErr)
+				}
+			}
+			if p.Lifecycle != nil {
+				if publishErr := p.Lifecycle.PublishTerminal(ctx, *job, publisher.LifecycleFailed); publishErr != nil && p.Logger != nil {
+					p.Logger.Warn("could not publish failed review report", "job_id", job.ID, "error", publishErr)
 				}
 			}
 		}
@@ -297,7 +309,8 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	if run.State.Terminal() {
 		return nil, terminalRunError{run: run}
 	}
-	if err := p.Publisher.Publish(ctx, job, findings); err != nil {
+	result := p.reviewResult(ctx, job, findings)
+	if err := p.Publisher.Publish(ctx, job, result); err != nil {
 		return nil, err
 	}
 	run, err = p.advance(ctx, job.ID, domain.RunCompleted)
@@ -308,6 +321,28 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 		return nil, terminalRunError{run: run}
 	}
 	return findings, nil
+}
+
+func (p Processor) reviewResult(ctx context.Context, job domain.ReviewJob, findings []domain.Finding) publisher.ReviewResult {
+	result := publisher.ReviewResult{
+		Findings:           findings,
+		Gate:               publisher.EvaluateMergeGate(findings, p.MergeGateSeverity),
+		EngineVersion:      p.EngineVersion,
+		RuleSnapshotStatus: "none",
+	}
+	snapshot, err := p.Store.RuleSnapshotForJob(ctx, job.ID)
+	if err == nil {
+		result.RuleSnapshotID = snapshot.ID.String()
+		result.RuleSnapshotSHA = snapshot.SHA256
+		result.CompilerVersion = snapshot.CompilerVersion
+		result.RuleSnapshotStatus = "resolved"
+	} else if !errors.Is(err, store.ErrNotFound) && p.Logger != nil {
+		result.RuleSnapshotStatus = "unavailable"
+		p.Logger.Warn("could not attach rule snapshot provenance", "job_id", job.ID, "error", err)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		result.RuleSnapshotStatus = "unavailable"
+	}
+	return result
 }
 
 // reviewUntilTerminal gives the executor a cancellable context while a small
@@ -456,6 +491,18 @@ func (p Processor) stopTerminalRun(ctx context.Context, job domain.ReviewJob, ru
 		}
 		if checkErr := p.Checks.CompleteCheck(ctx, job, publisher.CheckNeutral, summary); checkErr != nil && p.Logger != nil {
 			p.Logger.Warn("could not finalize stopped review check", "job_id", job.ID, "error", checkErr)
+		}
+	}
+	if p.Lifecycle != nil {
+		state := publisher.LifecycleFailed
+		switch run.State {
+		case domain.RunCancelled:
+			state = publisher.LifecycleCancelled
+		case domain.RunSuperseded:
+			state = publisher.LifecycleSuperseded
+		}
+		if publishErr := p.Lifecycle.PublishTerminal(ctx, job, state); publishErr != nil && p.Logger != nil {
+			p.Logger.Warn("could not publish stopped review report", "job_id", job.ID, "error", publishErr)
 		}
 	}
 	return true, nil

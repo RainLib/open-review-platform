@@ -39,6 +39,7 @@
 | [08-delivery-plan-and-acceptance.md](08-delivery-plan-and-acceptance.md) | 阶段一/二实施计划、测试门禁、发布与回滚 | 全体 |
 | [09-decisions-and-open-questions.md](09-decisions-and-open-questions.md) | 已确认决策与需业务确认的问题 | 决策人 |
 | [10-reference-architecture-lessons.md](10-reference-architecture-lessons.md) | Kodus/OCR 可复用经验、明确不照搬的部分与来源 | 架构、法律、安全 |
+| [11-review-reporting-design.md](11-review-reporting-design.md) | PR/MR 生命周期评论、Change Contract、证据回执与渲染组件 | 产品、后端、安全、研发效能 |
 
 ## 4. 视觉设计稿
 

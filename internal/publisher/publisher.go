@@ -19,7 +19,15 @@ import (
 )
 
 type Publisher interface {
-	Publish(context.Context, domain.ReviewJob, []domain.Finding) error
+	Publish(context.Context, domain.ReviewJob, ReviewResult) error
+}
+
+// LifecycleReporter owns the single evolving PR/MR status comment. Keeping it
+// separate from findings publication lets the runner acknowledge work and
+// report terminal states even when the review engine never returns findings.
+type LifecycleReporter interface {
+	PublishStarted(context.Context, domain.ReviewJob) error
+	PublishTerminal(context.Context, domain.ReviewJob, LifecycleState) error
 }
 
 type HTTPPublisher struct {
@@ -38,18 +46,60 @@ func NewHTTPWithResolver(resolver credentials.Resolver) *HTTPPublisher {
 	}
 }
 
-func (p *HTTPPublisher) Publish(ctx context.Context, job domain.ReviewJob, findings []domain.Finding) error {
+func (p *HTTPPublisher) Publish(ctx context.Context, job domain.ReviewJob, result ReviewResult) error {
 	token, err := p.resolve(ctx, job)
 	if err != nil {
 		return err
 	}
 	if job.Provider == domain.ProviderGitHub {
-		return p.publishGitHub(ctx, job, token, findings)
+		return p.publishGitHub(ctx, job, token, result)
 	}
 	if job.Provider == domain.ProviderGitLab {
-		return p.publishGitLab(ctx, job, token, findings)
+		return p.publishGitLab(ctx, job, token, result)
 	}
 	return fmt.Errorf("unsupported provider %q", job.Provider)
+}
+
+func (p *HTTPPublisher) PublishStarted(ctx context.Context, job domain.ReviewJob) error {
+	token, err := p.resolve(ctx, job)
+	if err != nil {
+		return err
+	}
+	marker := "open-review-platform:summary:" + job.ID.String()
+	body := StartedReport(job, p.loadReviewContext(ctx, job, token), marker)
+	switch job.Provider {
+	case domain.ProviderGitHub:
+		return p.githubUpsertSummary(ctx, githubAPIBase(job.APIBaseURL), job, token, body)
+	case domain.ProviderGitLab:
+		base := strings.TrimSuffix(job.APIBaseURL, "/")
+		if base == "" {
+			base = "https://gitlab.com/api/v4"
+		}
+		return p.gitLabUpsertSummary(ctx, base, url.PathEscape(job.Repository), job, token, body)
+	default:
+		return fmt.Errorf("unsupported provider %q", job.Provider)
+	}
+}
+
+func (p *HTTPPublisher) PublishTerminal(ctx context.Context, job domain.ReviewJob, state LifecycleState) error {
+	token, err := p.resolve(ctx, job)
+	if err != nil {
+		return err
+	}
+	marker := "open-review-platform:summary:" + job.ID.String()
+	body := TerminalReport(job, state, marker)
+	switch job.Provider {
+	case domain.ProviderGitHub:
+		return p.githubUpsertSummary(ctx, githubAPIBase(job.APIBaseURL), job, token, body)
+	case domain.ProviderGitLab:
+		base := strings.TrimSuffix(job.APIBaseURL, "/")
+		if base == "" {
+			base = "https://gitlab.com/api/v4"
+		}
+		return p.gitLabUpsertSummary(ctx, base, url.PathEscape(job.Repository), job, token, body)
+	default:
+		return fmt.Errorf("unsupported provider %q", job.Provider)
+	}
 }
 
 // PublishInteractionResponse writes a single, marker-keyed issue comment after
@@ -161,11 +211,12 @@ func (p *HTTPPublisher) publishGitLabInteractionResponse(ctx context.Context, re
 	return p.requestJSON(ctx, http.MethodPost, endpoint, token, map[string]string{"body": body}, nil)
 }
 
-func (p *HTTPPublisher) publishGitHub(ctx context.Context, job domain.ReviewJob, token string, findings []domain.Finding) error {
+func (p *HTTPPublisher) publishGitHub(ctx context.Context, job domain.ReviewJob, token string, result ReviewResult) error {
 	base := strings.TrimSuffix(job.APIBaseURL, "/")
 	if base == "" {
 		base = "https://api.github.com"
 	}
+	findings := result.Findings
 	existing, err := p.githubMarkers(ctx, base, job, token)
 	if err != nil {
 		return err
@@ -177,7 +228,7 @@ func (p *HTTPPublisher) publishGitHub(ctx context.Context, job domain.ReviewJob,
 			continue
 		}
 		if canInline(job, finding) {
-			inline = append(inline, githubInlineComment{Path: finding.Path, Line: finding.EndLine, Side: "RIGHT", Body: renderFinding(finding, marker)})
+			inline = append(inline, githubInlineComment{Path: finding.Path, Line: finding.EndLine, Side: "RIGHT", Body: FindingReport(job, finding, marker)})
 		}
 	}
 	for start := 0; start < len(inline); start += 25 {
@@ -201,7 +252,7 @@ func (p *HTTPPublisher) publishGitHub(ctx context.Context, job domain.ReviewJob,
 	// Inline annotations are easy to miss in GitHub's Files view. Always leave
 	// one concise, updatable PR-level result so authors know whether the bot
 	// recommends changes or found no actionable risk.
-	body := renderSummary(job, findings, "open-review-platform:summary:"+job.ID.String())
+	body := CompletedReport(job, p.loadReviewContext(ctx, job, token), result, "open-review-platform:summary:"+job.ID.String())
 	if err := p.githubUpsertSummary(ctx, base, job, token, body); err != nil {
 		return err
 	}
@@ -238,12 +289,13 @@ func (p *HTTPPublisher) githubUpsertSummary(ctx context.Context, base string, jo
 	return p.requestJSON(ctx, http.MethodPost, endpoint, token, map[string]string{"body": body}, nil)
 }
 
-func (p *HTTPPublisher) publishGitLab(ctx context.Context, job domain.ReviewJob, token string, findings []domain.Finding) error {
+func (p *HTTPPublisher) publishGitLab(ctx context.Context, job domain.ReviewJob, token string, result ReviewResult) error {
 	base := strings.TrimSuffix(job.APIBaseURL, "/")
 	if base == "" {
 		base = "https://gitlab.com/api/v4"
 	}
 	project := url.PathEscape(job.Repository)
+	findings := result.Findings
 	existing, err := p.gitLabMarkers(ctx, base, project, job, token)
 	if err != nil {
 		return err
@@ -253,7 +305,7 @@ func (p *HTTPPublisher) publishGitLab(ctx context.Context, job domain.ReviewJob,
 		if existing[marker] {
 			continue
 		}
-		body := renderFinding(finding, marker)
+		body := FindingReport(job, finding, marker)
 		if canInline(job, finding) && job.BaseSHA != "" {
 			payload := struct {
 				Body     string `json:"body"`
@@ -280,7 +332,7 @@ func (p *HTTPPublisher) publishGitLab(ctx context.Context, job domain.ReviewJob,
 			return fmt.Errorf("publish GitLab note: %w", err)
 		}
 	}
-	if err := p.gitLabUpsertSummary(ctx, base, project, job, token, renderSummary(job, findings, "open-review-platform:summary:"+job.ID.String())); err != nil {
+	if err := p.gitLabUpsertSummary(ctx, base, project, job, token, CompletedReport(job, p.loadReviewContext(ctx, job, token), result, "open-review-platform:summary:"+job.ID.String())); err != nil {
 		return err
 	}
 	return nil
@@ -384,42 +436,6 @@ func canInline(job domain.ReviewJob, finding domain.Finding) bool {
 func findingMarker(job domain.ReviewJob, finding domain.Finding) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%d|%s|%s", job.ID, finding.Path, finding.StartLine, finding.EndLine, finding.Category, finding.Body)))
 	return "open-review-platform:finding:" + hex.EncodeToString(sum[:12])
-}
-
-func renderFinding(finding domain.Finding, marker string) string {
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "**%s · %s**\n\n%s", strings.ToUpper(finding.Severity), finding.Category, finding.Body)
-	if finding.Suggestion != "" {
-		fmt.Fprintf(&builder, "\n\n```suggestion\n%s\n```", finding.Suggestion)
-	}
-	fmt.Fprintf(&builder, "\n\n<!-- %s -->", marker)
-	return builder.String()
-}
-
-func renderSummary(job domain.ReviewJob, findings []domain.Finding, marker string) string {
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "## Open Review Platform\n\nReview job `%s` completed.", job.ID)
-	if len(findings) == 0 {
-		builder.WriteString("\n\n### ✅ AI review passed\n\nNo actionable risks were detected in this change set.")
-	} else {
-		fmt.Fprintf(&builder, "\n\n### ⚠️ Changes recommended\n\n%s\n\n", ResultSummary(findings))
-		builder.WriteString("### Findings\n")
-		for _, finding := range findings {
-			location := "repository-wide"
-			if finding.Path != "" {
-				location = finding.Path
-				if finding.StartLine > 0 {
-					location = fmt.Sprintf("%s:%d", location, finding.StartLine)
-				}
-			}
-			fmt.Fprintf(&builder, "\n- **%s · %s** `%s` — %s", strings.ToUpper(finding.Severity), finding.Category, location, finding.Body)
-			if finding.Suggestion != "" && canInline(job, finding) {
-				builder.WriteString(" _(an inline suggestion is available)_")
-			}
-		}
-	}
-	fmt.Fprintf(&builder, "\n\n<!-- %s -->", marker)
-	return builder.String()
 }
 
 // ResultSummary is used both in the PR result comment and the GitHub Check so
