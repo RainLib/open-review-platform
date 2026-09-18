@@ -68,6 +68,23 @@ services:
     tmpfs:
       - /tmp
 
+  console:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    environment:
+      CONTROL_API_URL: http://control-api:8080
+      CONTROL_API_DEVELOPMENT_SUBJECT: ${CONTROL_API_DEVELOPMENT_SUBJECT:-}
+      OPEN_REVIEW_CONSOLE_DEMO: ${OPEN_REVIEW_CONSOLE_DEMO:-false}
+    depends_on:
+      control-api:
+        condition: service_started
+    ports:
+      - "3110:3000"
+    read_only: true
+    tmpfs:
+      - /tmp
+
   outbox-relay:
     build:
       context: .

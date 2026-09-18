@@ -4,3 +4,7 @@
 bin/
 coverage.out
 tmp/
+apps/*/node_modules/
+apps/*/.next/
+apps/*/.env.local
+apps/*/*.tsbuildinfo
