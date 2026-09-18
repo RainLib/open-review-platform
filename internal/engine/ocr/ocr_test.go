@@ -60,6 +60,26 @@ func TestReviewArgumentsIncludesConfiguredExecutionPolicy(t *testing.T) {
 	}
 }
 
+func TestExecutionTimeoutUsesTheShorterPlatformOrSubtaskBudget(t *testing.T) {
+	tests := []struct {
+		name     string
+		executor Executor
+		want     time.Duration
+	}{
+		{name: "whole process only", executor: Executor{Timeout: 15 * time.Minute}, want: 15 * time.Minute},
+		{name: "subtask caps process", executor: Executor{Timeout: 15 * time.Minute, SubtaskTimeout: 5}, want: 5 * time.Minute},
+		{name: "whole process is stricter", executor: Executor{Timeout: 2 * time.Minute, SubtaskTimeout: 5}, want: 2 * time.Minute},
+		{name: "unbounded only when both unset", executor: Executor{}, want: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.executor.executionTimeout(); got != test.want {
+				t.Fatalf("execution timeout = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
 func TestExactExcludePatternsTreatsChangedPathsAsLiterals(t *testing.T) {
 	got := exactExcludePatterns([]string{
 		"apps/web/app/(console)/[org]/connect/page.tsx",

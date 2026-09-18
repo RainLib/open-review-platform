@@ -62,6 +62,9 @@ Set `OCR_CONCURRENCY`, `OCR_REVIEW_EFFORT`, `OCR_MAX_PROMPT_TOKENS`,
 `OCR_MAX_TOKENS_BUDGET`, and `OCR_SUBTASK_TIMEOUT_MINUTES` explicitly from the
 release's `.env.example`. Their bounded recommended values are also runtime
 defaults so an older environment file cannot silently remove model limits.
+The effective platform process deadline is the shorter of
+`OCR_TIMEOUT` and `OCR_SUBTASK_TIMEOUT_MINUTES`; this is enforced outside the
+OCR CLI so a stuck wrapper cannot keep consuming model capacity.
 
 The GitHub App JWT exchange is implemented. The console can read live state
 and, only through the local-development bridge, create provider installations

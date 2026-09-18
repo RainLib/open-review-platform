@@ -26,8 +26,9 @@ type Executor struct {
 	Effort      string
 	MaxTokens   int
 	TokenBudget int
-	// SubtaskTimeout is passed to OCR in minutes. The executor's Timeout still
-	// bounds the complete child process, including checkout-independent setup.
+	// SubtaskTimeout is passed to OCR in minutes and also caps the platform's
+	// child process. A CLI timeout that does not terminate its wrapper must not
+	// leave an in-flight review consuming model capacity beyond this budget.
 	SubtaskTimeout int
 	Timeout        time.Duration
 }
@@ -143,9 +144,10 @@ func (e Executor) trustedRuleFile(directory string, ruleFileJSON []byte) (string
 }
 
 func (e Executor) review(ctx context.Context, directory, base, head, rulePath string, exclude []string) ([]domain.Finding, error) {
-	if e.Timeout > 0 {
+	timeout := e.executionTimeout()
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, e.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 	output := filepath.Join(directory, "open-review-result.json")
@@ -157,7 +159,7 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 	logs, err := command.CombinedOutput()
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%w after %s", domain.ErrReviewTimedOut, e.Timeout)
+			return nil, fmt.Errorf("%w after %s", domain.ErrReviewTimedOut, timeout)
 		}
 		if contextExhausted(logs) {
 			return nil, fmt.Errorf("%w: reduce the selected scope or increase the model context", domain.ErrReviewContextExhausted)
@@ -173,6 +175,18 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 		return nil, fmt.Errorf("parse OCR result: %w", err)
 	}
 	return findings, nil
+}
+
+func (e Executor) executionTimeout() time.Duration {
+	timeout := e.Timeout
+	if e.SubtaskTimeout <= 0 {
+		return timeout
+	}
+	subtaskTimeout := time.Duration(e.SubtaskTimeout) * time.Minute
+	if timeout <= 0 || subtaskTimeout < timeout {
+		return subtaskTimeout
+	}
+	return timeout
 }
 
 func (e Executor) reviewSelected(ctx context.Context, directory, base, head, rulePath string, selected []string) ([]domain.Finding, error) {
