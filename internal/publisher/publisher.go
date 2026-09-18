@@ -239,7 +239,7 @@ func (p *HTTPPublisher) publishGitHub(ctx context.Context, job domain.ReviewJob,
 			Event    string                `json:"event"`
 			Comments []githubInlineComment `json:"comments"`
 		}{
-			Body:     "Open Review Platform findings. <!-- open-review-platform:review:" + job.ID.String() + " -->",
+			Body:     "## Open Review findings\n\n" + ResultSummary(findings) + " Detailed analysis and fixes are attached to the relevant lines.\n\n<!-- open-review-platform:review:" + job.ID.String() + " -->",
 			CommitID: job.HeadSHA,
 			Event:    "COMMENT",
 			Comments: inline[start:end],

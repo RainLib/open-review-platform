@@ -89,7 +89,13 @@ Report Builder 不调用 provider API；Provider Loader 不拼接 Markdown；门
 
 ## 6. 最终证据报告
 
-最终生命周期评论固定包含：
+最终生命周期评论采用“决策优先、证据折叠”的两层结构，避免与行内 Finding 重复：
+
+- 默认可见区只显示门禁结论、Finding 严重度统计、变更规模、Head SHA，以及需要关注的文件/行号。位置链接直达代码；不再复制诊断正文和修复建议。
+- 详细证据默认收进 `Scope & risk`、`Acceptance & verification`、`Release readiness`、`Provenance` 四组折叠区。
+- 具体原因、影响、可应用 Suggestion 与可复制的 LLM Prompt 只放在对应代码行的 Finding 中。
+
+折叠区完整保留：
 
 1. `Outcome`：执行结果、Finding 数量、门禁结论。
 2. `Scope`：精确 Commit、文件数量与折叠文件表。
@@ -108,6 +114,8 @@ Report Builder 不调用 provider API；Provider Loader 不拼接 Markdown；门
 - 生命周期 Marker 使用 Review Job ID，重试更新原评论而不是制造评论风暴。
 - Finding Marker 使用 Job、路径、行号、类别和正文的稳定摘要。
 - 每条 Finding 包含折叠的 `Prompt for LLM` 文本代码块，GitHub/GitLab 可直接复制；Prompt 只包含可公开的定位、诊断、期望结果和验证约束，不包含系统提示、密钥或模型推理。
+- Finding 的简短诊断直接显示；超过 480 个字符或 5 个换行时只显示紧凑预览，完整诊断放入默认收起的 `Full analysis`。可应用 Suggestion 始终保持展开，避免隐藏主要修复动作。
+- GitHub review 的父评论只报告本批 Finding 数量并引导查看行内详情，不再使用无信息量的通用占位文字。
 - 文件表最多展开 20 行，仍保留总文件/增删统计。
 - 文件名是可点击链接：GitHub 直达当前 Head 的文件，GitLab 直达 MR Diffs；仅允许 provider 返回的 HTTP(S) 地址。
 - 作者声明在重新渲染前进行 HTML 转义和长度限制。

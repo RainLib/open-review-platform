@@ -43,11 +43,15 @@ func TestRenderSummaryGivesClearPassOrChangeVerdict(t *testing.T) {
 		t.Fatalf("pass summary must state the verdict: %s", pass)
 	}
 	findings := []domain.Finding{{Path: "reader.go", StartLine: 12, EndLine: 12, Severity: "high", Category: "resource-leak", Body: "close the reader", Suggestion: "defer reader.Close()"}}
-	changes := CompletedReport(job, ReviewContext{}, ReviewResult{Findings: findings, Gate: EvaluateMergeGate(findings, "high")}, "marker")
-	for _, expected := range []string{"Merge blocked", "1 high", "reader.go:12", "close the reader", "Acceptance mapping", "Provenance"} {
+	context := ReviewContext{TotalFiles: 1, TotalAdditions: 2, TotalDeletions: 1, ChangedFiles: []ChangedFile{{Path: "reader.go", URL: "https://github.com/RainLib/demo/blob/head/reader.go"}}}
+	changes := CompletedReport(job, context, ReviewResult{Findings: findings, Gate: EvaluateMergeGate(findings, "high")}, "marker")
+	for _, expected := range []string{"Merge blocked", "1 high", "Needs attention", "[`reader.go:12`](https://github.com/RainLib/demo/blob/head/reader.go#L12)", "<summary>Scope & risk</summary>", "<summary>Acceptance & verification</summary>", "<summary>Release readiness</summary>", "<summary>Provenance</summary>"} {
 		if !strings.Contains(changes, expected) {
 			t.Fatalf("change summary missing %q: %s", expected, changes)
 		}
+	}
+	if strings.Contains(changes, "close the reader") {
+		t.Fatalf("PR summary must not duplicate inline finding detail: %s", changes)
 	}
 }
 
@@ -63,7 +67,7 @@ func TestPublishGitHubAlwaysPostsPRLevelVerdictForInlineFinding(t *testing.T) {
 			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodPost && r.URL.Path == "/repos/RainLib/demo/pulls/4/reviews":
 			body, _ := io.ReadAll(r.Body)
-			if !strings.Contains(string(body), `"comments"`) || !strings.Contains(string(body), "reader.go") {
+			if !strings.Contains(string(body), `"comments"`) || !strings.Contains(string(body), "reader.go") || !strings.Contains(string(body), "Open Review findings") {
 				t.Fatalf("expected inline review: %s", body)
 			}
 			sawInline = true
@@ -162,6 +166,22 @@ func TestLLMFixPromptIncludesSuggestionAndUsesSafeFence(t *testing.T) {
 	}
 	if !strings.Contains(report, "````text") {
 		t.Fatalf("expected a fence longer than embedded backticks: %s", report)
+	}
+}
+
+func TestFindingReportCollapsesLongAnalysisButKeepsActionsVisible(t *testing.T) {
+	job := domain.ReviewJob{Repository: "RainLib/demo", ReviewNumber: 9, HeadSHA: "abcdef"}
+	longBody := strings.Repeat("This diagnostic explains one concrete risk and its impact. ", 16)
+	finding := domain.Finding{Path: "api.go", StartLine: 10, EndLine: 10, Severity: "medium", Category: "maintainability", Body: longBody, Suggestion: "return typedError"}
+	report := FindingReport(job, finding, "marker")
+	for _, expected := range []string{"<summary>Full analysis</summary>", " …", "**Recommended change**", "```suggestion", "return typedError", "<summary>Prompt for LLM</summary>"} {
+		if !strings.Contains(report, expected) {
+			t.Fatalf("long finding report missing %q: %s", expected, report)
+		}
+	}
+	short := FindingReport(job, domain.Finding{Path: "api.go", StartLine: 10, EndLine: 10, Body: "Short actionable diagnosis."}, "marker")
+	if strings.Contains(short, "Full analysis") {
+		t.Fatalf("short findings should remain directly readable: %s", short)
 	}
 }
 
