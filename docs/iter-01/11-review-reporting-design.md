@@ -107,6 +107,7 @@ Report Builder 不调用 provider API；Provider Loader 不拼接 Markdown；门
 
 - 生命周期 Marker 使用 Review Job ID，重试更新原评论而不是制造评论风暴。
 - Finding Marker 使用 Job、路径、行号、类别和正文的稳定摘要。
+- 每条 Finding 包含折叠的 `Prompt for LLM` 文本代码块，GitHub/GitLab 可直接复制；Prompt 只包含可公开的定位、诊断、期望结果和验证约束，不包含系统提示、密钥或模型推理。
 - 文件表最多展开 20 行，仍保留总文件/增删统计。
 - 文件名是可点击链接：GitHub 直达当前 Head 的文件，GitLab 直达 MR Diffs；仅允许 provider 返回的 HTTP(S) 地址。
 - 作者声明在重新渲染前进行 HTML 转义和长度限制。
