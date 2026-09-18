@@ -1,6 +1,6 @@
 # Zeabur deployment
 
-Deploy this project as **seven services**, not one process:
+Deploy this project as **eight services**, not one process:
 
 1. PostgreSQL 16 service (Zeabur managed PostgreSQL is preferred).
 2. RabbitMQ 4.1 with the management image and quorum-queue support; keep it
@@ -12,7 +12,9 @@ Deploy this project as **seven services**, not one process:
    `/app/interaction-responder`, with no public port.
 6. `acknowledger`, built from `Dockerfile` with entrypoint `/app/acknowledger`,
    with no public port.
-7. `runner`, built from `Dockerfile.runner`, with no public port.
+7. `terminal-reporter`, built from `Dockerfile` with entrypoint
+   `/app/terminal-reporter`, with no public port.
+8. `runner`, built from `Dockerfile.runner`, with no public port.
 
 Run `/app/migrate` as a release command or one-off job before rolling either
 application workload. Give both workloads the same `CONTROL_DATABASE_URL` from
@@ -31,13 +33,17 @@ GITHUB_WEBHOOK_SECRET=<unique-random-secret>
 GITLAB_WEBHOOK_SECRET=<unique-random-secret>
 ```
 
-Set these on both the runner and interaction-responder only:
+Set these on the runner only:
 
 ```text
 OCR_BINARY=ocr
 OCR_VERSION=1.12.4
 GIT_BINARY=git # Git 2.41+ is required for OCR range reviews
 OCR_CONCURRENCY=2 # reduce to 1 for rate-limited or serial model gateways
+OCR_REVIEW_EFFORT=low # low | medium | high; low is the latency-oriented starting point
+OCR_MAX_PROMPT_TOKENS=8000 # 0 preserves the OCR template default
+OCR_MAX_TOKENS_BUDGET=128000 # input + output budget across the whole review
+OCR_SUBTASK_TIMEOUT_MINUTES=5 # 0 preserves the OCR CLI default (15 minutes)
 RISK_REVIEW_MODE=focused # standard | focused | critical
 MERGE_GATE_MIN_SEVERITY=critical # off | critical | high | medium | low
 CHECKOUT_TIMEOUT=2m # clone/fetch deadline; prevents stalled Git transports
@@ -53,8 +59,37 @@ GITLAB_TOKEN=<development-only; replace with application-token resolver>
 
 The runner also needs one OpenCodeReview model route. Set either the native OCR
 configuration (`OCR_LLM_URL`, `OCR_LLM_TOKEN`, `OCR_LLM_MODEL`) or the
-equivalent provider variables supported by the pinned OCR release. Do not set
-model tokens on `control-api`, `outbox-relay`, or `acknowledger`.
+equivalent provider variables supported by the pinned OCR release. For an
+OpenAI-compatible gateway, explicitly set `OCR_USE_ANTHROPIC=false`; otherwise
+the CLI can select the Anthropic `/v1/messages` protocol. Do not set model
+tokens on `control-api`, `outbox-relay`, `acknowledger`,
+`interaction-responder`, or `terminal-reporter`.
+
+`OCR_MAX_TOKENS_BUDGET` is a guardrail, not an output-length cap: OCR checks it
+before each LLM round, so a selected group can finish its current round above
+the cap. Start with at least the CLI's printed estimate for every selected
+group. Use `RISK_REVIEW_MODE=critical` only for incident-style fast paths; it
+reviews the strict high-risk scope and, when no strict path exists, at most two
+highest-signal paths rather than reporting an empty success.
+
+For a DeepSeek flash-class OpenAI-compatible route, a concrete starting set is:
+
+```text
+OCR_LLM_URL=https://<gateway>/v1/chat/completions
+OCR_LLM_TOKEN=<secret>
+OCR_LLM_MODEL=deepseek-v4-flash
+OCR_USE_ANTHROPIC=false
+OCR_REVIEW_EFFORT=low
+OCR_MAX_PROMPT_TOKENS=8000
+OCR_MAX_TOKENS_BUDGET=128000
+OCR_SUBTASK_TIMEOUT_MINUTES=5
+OCR_TIMEOUT=15m
+```
+
+Run `ocr llm test` inside the runner image before accepting live webhooks. It
+must report the intended model and a successful connection; that test verifies
+the provider route only, so follow it with one disposable pull request to
+verify a complete review and Check Run.
 
 Create provider webhooks with `https://<control-api-domain>/v1/webhooks/github`
 and `https://<control-api-domain>/v1/webhooks/gitlab`. Keep the API behind

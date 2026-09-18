@@ -39,7 +39,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	executor := ocr.Executor{Binary: cfg.Runner.OCRBinary, Version: cfg.Runner.OCRVersion, GitBinary: cfg.Runner.GitBinary, Concurrency: cfg.Runner.OCRConcurrency, Timeout: cfg.Runner.OCRTimeout}
+	executor := ocr.Executor{
+		Binary:         cfg.Runner.OCRBinary,
+		Version:        cfg.Runner.OCRVersion,
+		GitBinary:      cfg.Runner.GitBinary,
+		Concurrency:    cfg.Runner.OCRConcurrency,
+		Effort:         cfg.Runner.OCREffort,
+		MaxTokens:      cfg.Runner.OCRMaxTokens,
+		TokenBudget:    cfg.Runner.OCRTokenBudget,
+		SubtaskTimeout: cfg.Runner.OCRSubtaskTimeout,
+		Timeout:        cfg.Runner.OCRTimeout,
+	}
 	if err := executor.VerifyVersion(ctx); err != nil {
 		log.Fatal(err)
 	}

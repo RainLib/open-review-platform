@@ -22,7 +22,13 @@ type Executor struct {
 	Version     string
 	GitBinary   string
 	Concurrency int
-	Timeout     time.Duration
+	Effort      string
+	MaxTokens   int
+	TokenBudget int
+	// SubtaskTimeout is passed to OCR in minutes. The executor's Timeout still
+	// bounds the complete child process, including checkout-independent setup.
+	SubtaskTimeout int
+	Timeout        time.Duration
 }
 
 var gitVersionPattern = regexp.MustCompile(`git version (\d+)\.(\d+)`)
@@ -110,16 +116,7 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 		defer cancel()
 	}
 	output := filepath.Join(directory, "open-review-result.json")
-	arguments := []string{"review", "--from", base, "--to", head, "--format", "json", "--output", output}
-	if e.Concurrency > 0 {
-		arguments = append(arguments, "--concurrency", strconv.Itoa(e.Concurrency))
-	}
-	if rulePath != "" {
-		arguments = append(arguments, "--rule", rulePath)
-	}
-	if len(exclude) > 0 {
-		arguments = append(arguments, "--exclude", strings.Join(exclude, ","))
-	}
+	arguments := e.reviewArguments(base, head, output, rulePath, exclude)
 	command := exec.CommandContext(ctx, e.Binary, arguments...)
 	command.Dir = directory
 	command.Env = withGitBinaryPath(os.Environ(), e.gitBinary())
@@ -140,6 +137,32 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 		return nil, fmt.Errorf("parse OCR result: %w", err)
 	}
 	return findings, nil
+}
+
+func (e Executor) reviewArguments(base, head, output, rulePath string, exclude []string) []string {
+	arguments := []string{"review", "--from", base, "--to", head, "--format", "json", "--output", output}
+	if e.Concurrency > 0 {
+		arguments = append(arguments, "--concurrency", strconv.Itoa(e.Concurrency))
+	}
+	if e.Effort != "" {
+		arguments = append(arguments, "--effort", e.Effort)
+	}
+	if e.MaxTokens > 0 {
+		arguments = append(arguments, "--max-tokens", strconv.Itoa(e.MaxTokens))
+	}
+	if e.TokenBudget > 0 {
+		arguments = append(arguments, "--max-tokens-budget", strconv.Itoa(e.TokenBudget))
+	}
+	if e.SubtaskTimeout > 0 {
+		arguments = append(arguments, "--timeout", strconv.Itoa(e.SubtaskTimeout))
+	}
+	if rulePath != "" {
+		arguments = append(arguments, "--rule", rulePath)
+	}
+	if len(exclude) > 0 {
+		arguments = append(arguments, "--exclude", strings.Join(exclude, ","))
+	}
+	return arguments
 }
 
 // configureProcessGroup prevents a wrapper CLI from leaving its native OCR

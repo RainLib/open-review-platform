@@ -41,6 +41,25 @@ func TestWithGitBinaryPathPrependsConfiguredDirectory(t *testing.T) {
 	}
 }
 
+func TestReviewArgumentsIncludesConfiguredExecutionPolicy(t *testing.T) {
+	executor := Executor{
+		Concurrency:    2,
+		Effort:         "low",
+		MaxTokens:      8000,
+		TokenBudget:    128000,
+		SubtaskTimeout: 5,
+	}
+	arguments := executor.reviewArguments("base", "head", "result.json", "rules.json", []string{"docs/**", "*_test.go"})
+	want := []string{
+		"review", "--from", "base", "--to", "head", "--format", "json", "--output", "result.json",
+		"--concurrency", "2", "--effort", "low", "--max-tokens", "8000", "--max-tokens-budget", "128000", "--timeout", "5",
+		"--rule", "rules.json", "--exclude", "docs/**,*_test.go",
+	}
+	if strings.Join(arguments, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("unexpected review arguments:\n got: %#v\nwant: %#v", arguments, want)
+	}
+}
+
 func TestConfigureProcessGroupCancelsWrappedChild(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns a short-lived child process")

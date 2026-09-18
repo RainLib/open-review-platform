@@ -43,6 +43,30 @@ func TestOCRTimeoutMustBePositiveDuration(t *testing.T) {
 	}
 }
 
+func TestReviewExecutionPolicyMustBeValid(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "unknown effort", key: "OCR_REVIEW_EFFORT", value: "fast"},
+		{name: "negative prompt tokens", key: "OCR_MAX_PROMPT_TOKENS", value: "-1"},
+		{name: "negative token budget", key: "OCR_MAX_TOKENS_BUDGET", value: "-1"},
+		{name: "negative subtask timeout", key: "OCR_SUBTASK_TIMEOUT_MINUTES", value: "-1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
+			t.Setenv("ENVIRONMENT", "development")
+			t.Setenv("AUTH_MODE", "development")
+			t.Setenv(test.key, test.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("%s must be rejected", test.key)
+			}
+		})
+	}
+}
+
 func TestCheckoutTimeoutMustBePositiveDuration(t *testing.T) {
 	t.Setenv("CONTROL_DATABASE_URL", "postgres://example")
 	t.Setenv("ENVIRONMENT", "development")

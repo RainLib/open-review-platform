@@ -48,6 +48,10 @@ type RunnerConfig struct {
 	OCRBinary         string
 	OCRVersion        string
 	OCRConcurrency    int
+	OCREffort         string
+	OCRMaxTokens      int
+	OCRTokenBudget    int
+	OCRSubtaskTimeout int
 	RiskReviewMode    string
 	MergeGateSeverity string
 	CheckoutTimeout   time.Duration
@@ -68,6 +72,22 @@ func Load() (Config, error) {
 	ocrConcurrency, err := envInt("OCR_CONCURRENCY", 0)
 	if err != nil || ocrConcurrency < 0 {
 		return Config{}, fmt.Errorf("OCR_CONCURRENCY must be a non-negative integer")
+	}
+	ocrEffort := env("OCR_REVIEW_EFFORT", "")
+	if ocrEffort != "" && ocrEffort != "low" && ocrEffort != "medium" && ocrEffort != "high" {
+		return Config{}, fmt.Errorf("OCR_REVIEW_EFFORT must be low, medium, high, or empty")
+	}
+	ocrMaxTokens, err := envInt("OCR_MAX_PROMPT_TOKENS", 0)
+	if err != nil || ocrMaxTokens < 0 {
+		return Config{}, fmt.Errorf("OCR_MAX_PROMPT_TOKENS must be a non-negative integer")
+	}
+	ocrTokenBudget, err := envInt("OCR_MAX_TOKENS_BUDGET", 0)
+	if err != nil || ocrTokenBudget < 0 {
+		return Config{}, fmt.Errorf("OCR_MAX_TOKENS_BUDGET must be a non-negative integer")
+	}
+	ocrSubtaskTimeout, err := envInt("OCR_SUBTASK_TIMEOUT_MINUTES", 0)
+	if err != nil || ocrSubtaskTimeout < 0 {
+		return Config{}, fmt.Errorf("OCR_SUBTASK_TIMEOUT_MINUTES must be a non-negative integer")
 	}
 	riskReviewMode := env("RISK_REVIEW_MODE", "focused")
 	if riskReviewMode != "standard" && riskReviewMode != "focused" && riskReviewMode != "critical" {
@@ -120,6 +140,10 @@ func Load() (Config, error) {
 			OCRBinary:         env("OCR_BINARY", "ocr"),
 			OCRVersion:        env("OCR_VERSION", "1.12.4"),
 			OCRConcurrency:    ocrConcurrency,
+			OCREffort:         ocrEffort,
+			OCRMaxTokens:      ocrMaxTokens,
+			OCRTokenBudget:    ocrTokenBudget,
+			OCRSubtaskTimeout: ocrSubtaskTimeout,
 			RiskReviewMode:    riskReviewMode,
 			MergeGateSeverity: mergeGateSeverity,
 			CheckoutTimeout:   checkoutTimeout,
