@@ -9,7 +9,9 @@ RUN pnpm install --frozen-lockfile
 
 FROM dependencies AS build
 COPY . .
-RUN pnpm build
+# This only caps the build processes. Runtime Node is not heap-limited by the
+# image, and the production TypeScript/build checks remain enabled.
+RUN NODE_OPTIONS=--max-old-space-size=1024 pnpm build
 
 FROM node:22-alpine AS runtime
 WORKDIR /app

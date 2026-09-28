@@ -35,7 +35,7 @@ ingress:
 
 Run Cloudflared in the same private network as `control-api`. It must be the
 only public-facing workload. The runner, relay, interaction responder,
-PostgreSQL, and RabbitMQ must not receive public ports.
+interaction admitter, PostgreSQL, and RabbitMQ must not receive public ports.
 
 ## GitHub App boundary
 
@@ -50,10 +50,12 @@ GitHub Actions is not required. Branch Rules may mark a future
 check required unless the tenant deliberately chooses fail-closed AI review.
 
 Set `GITHUB_WEBHOOK_SECRET` on `control-api`. Set `GITHUB_APP_ID` and
-`GITHUB_APP_PRIVATE_KEY_PATH` on `runner` and `interaction-responder` only; use
-`credential_ref=github-app` when registering the provider installation. This
-keeps GitHub write capability out of the public webhook process. The
-`acknowledger` needs only PostgreSQL and RabbitMQ credentials.
+`GITHUB_APP_PRIVATE_KEY_PATH` only on the provider-call workloads: `runner`,
+`interaction-responder`, `interaction-admitter`, `terminal-reporter`,
+`issue-publisher`, and `provider-prober`; use `credential_ref=github-app` when registering the
+provider installation. This keeps GitHub write capability out of the public
+webhook process. The `acknowledger` needs only PostgreSQL and RabbitMQ
+credentials.
 
 ## Acceptance checks
 

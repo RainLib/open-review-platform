@@ -5,8 +5,8 @@ import type { ConsoleData } from "@/lib/control-api";
 export function DataSourceNotice({ data }: { data: ConsoleData }) {
   if (data.source === "live") {
     return (
-      <div className="flex items-center gap-2 text-xs text-emerald-200/80">
-        <span className="size-1.5 rounded-full bg-emerald-300 shadow-console-success" />
+      <div className="flex items-center gap-2 text-xs text-[var(--ls-success-text)]">
+        <span className="size-1.5 rounded-full bg-[var(--ls-success)]" />
         Live control-plane data
       </div>
     );
@@ -20,10 +20,10 @@ export function DataSourceNotice({ data }: { data: ConsoleData }) {
       ? "Control plane unavailable"
       : "Control plane not connected";
   return (
-    <div className="flex items-start gap-2.5 rounded-xl border border-amber-300/15 bg-amber-300/[0.045] px-3 py-2.5 text-xs leading-5 text-amber-100/75">
-      <Icon className="mt-0.5 size-3.5 shrink-0 text-amber-300" />
+    <div className="flex items-start gap-2.5 rounded-[12px] border border-[color:color-mix(in_srgb,var(--ls-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ls-warning)_8%,transparent)] px-3 py-2.5 text-xs leading-5 text-[var(--ls-warning-text)]">
+      <Icon className="mt-0.5 size-3.5 shrink-0 text-[var(--ls-warning)]" />
       <div>
-        <span className="font-medium text-amber-100">{title}.</span>{" "}
+        <span className="font-medium">{title}.</span>{" "}
         {data.detail ??
           (isDemo
             ? "OPEN_REVIEW_CONSOLE_DEMO is enabled; no production data is shown."
@@ -41,11 +41,11 @@ export function EmptyData({
   detail: string;
 }) {
   return (
-    <div className="grid min-h-56 place-items-center rounded-2xl border border-dashed border-white/10 bg-white/[0.015] p-8 text-center">
+    <div className="grid min-h-56 place-items-center rounded-[16px] border border-dashed border-[var(--ls-line-strong)] bg-[var(--ls-surface)] p-8 text-center">
       <div>
-        <Database className="mx-auto mb-3 size-5 text-zinc-600" />
-        <h2 className="text-sm font-medium text-zinc-200">{title}</h2>
-        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-zinc-500">
+        <Database className="mx-auto mb-3 size-5 text-[var(--ls-text-tertiary)]" />
+        <h2 className="text-sm font-medium text-[var(--ls-text)]">{title}</h2>
+        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[var(--ls-text-secondary)]">
           {detail}
         </p>
       </div>

@@ -1,0 +1,48 @@
+# Disposable local GitLab CE for Open Review's self-managed GitLab acceptance
+# suite. It joins the existing Open Review network so provider workers can use
+# the stable `gitlab` hostname without routing repository source through the
+# public internet.
+#
+# Start after the main stack:
+#   GITLAB_LOCAL_ROOT_PASSWORD='long-local-only-password' \
+#     docker compose -f deploy/docker-compose.gitlab-local.yml up -d
+#
+# The instance intentionally uses HTTP only inside a local development
+# network. Do not use this file, its password, or `GITLAB_ALLOW_HTTP=true` in
+# a shared or production deployment.
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:17.11.2-ce.0
+    hostname: gitlab
+    shm_size: 256m
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab:8929'
+        nginx['listen_port'] = 8929
+        nginx['listen_https'] = false
+        gitlab_rails['gitlab_shell_ssh_port'] = 2229
+        gitlab_rails['allow_local_requests_from_web_hooks_and_services'] = true
+        gitlab_rails['initial_root_email'] = 'root@openreview.local'
+        gitlab_rails['initial_root_password'] = '${GITLAB_LOCAL_ROOT_PASSWORD:?set a local-only GitLab root password}'
+    ports:
+      - "127.0.0.1:8929:8929"
+      - "127.0.0.1:2229:22"
+    volumes:
+      - gitlab-local-config:/etc/gitlab
+      - gitlab-local-logs:/var/log/gitlab
+      - gitlab-local-data:/var/opt/gitlab
+    networks:
+      open-review:
+        aliases:
+          - gitlab
+    restart: unless-stopped
+
+networks:
+  open-review:
+    external: true
+    name: open-review-platform_default
+
+volumes:
+  gitlab-local-config:
+  gitlab-local-logs:
+  gitlab-local-data:

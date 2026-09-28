@@ -18,10 +18,10 @@ type DraftRule = {
 };
 
 const inputClassName =
-  "h-9 w-full rounded-xl border border-white/10 bg-black/20 px-3 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-cyan-300/50 focus:ring-2 focus:ring-cyan-300/10 disabled:cursor-not-allowed disabled:opacity-50";
+  "luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)] outline-none transition-colors placeholder:text-[var(--ls-text-tertiary)] disabled:cursor-not-allowed disabled:opacity-50";
 
 const textAreaClassName =
-  "min-h-24 w-full resize-y rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm leading-6 text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-cyan-300/50 focus:ring-2 focus:ring-cyan-300/10 disabled:cursor-not-allowed disabled:opacity-50";
+  "luminous-focus min-h-24 w-full resize-y rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 py-2.5 text-sm leading-6 text-[var(--ls-text)] outline-none transition-colors placeholder:text-[var(--ls-text-tertiary)] disabled:cursor-not-allowed disabled:opacity-50";
 
 let nextDraftRuleID = 2;
 
@@ -128,29 +128,29 @@ export function RuleSetComposer({
   }
 
   return (
-    <section className="rounded-2xl border border-white/[0.075] bg-console-surface p-5 sm:p-6">
+    <section className="rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
         <div>
-          <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
-            <span className="grid size-8 place-items-center rounded-xl bg-violet-300/[0.09] text-violet-200">
+          <div className="flex items-center gap-2 text-sm font-medium text-[var(--ls-text)]">
+            <span className="grid size-8 place-items-center rounded-[10px] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]">
               <ShieldCheck className="size-4" />
             </span>
             New policy draft
           </div>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--ls-text-secondary)]">
             Compose structured review rules. The server validates the
             normalized rules before storing an immutable draft; publication
             still requires independent approval.
           </p>
         </div>
-        <span className="inline-flex w-fit rounded-full border border-violet-300/15 bg-violet-300/[0.06] px-2.5 py-1 text-[11px] font-medium text-violet-200">
+        <span className="inline-flex w-fit rounded-full bg-[var(--ls-accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ls-accent)]">
           Governance draft
         </span>
       </div>
 
       <form className="mt-6 space-y-5" onSubmit={createRuleSet}>
         <div className="grid gap-4 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-          <label className="space-y-1.5 text-xs font-medium text-zinc-400">
+          <label className="space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">
             Policy name
             <input
               className={inputClassName}
@@ -161,7 +161,7 @@ export function RuleSetComposer({
               value={name}
             />
           </label>
-          <label className="space-y-1.5 text-xs font-medium text-zinc-400">
+          <label className="space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">
             Purpose
             <input
               className={inputClassName}
@@ -176,11 +176,11 @@ export function RuleSetComposer({
         <div className="space-y-3">
           {rules.map((rule, index) => (
             <fieldset
-              className="rounded-xl border border-white/[0.06] bg-black/15 p-4"
+              className="rounded-[14px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4"
               key={rule.id}
             >
               <div className="flex items-center justify-between gap-3">
-                <legend className="text-xs font-medium text-zinc-300">
+                <legend className="text-xs font-medium text-[var(--ls-text)]">
                   Rule {index + 1}
                 </legend>
                 <Button
@@ -199,7 +199,7 @@ export function RuleSetComposer({
                 </Button>
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                <label className="space-y-1.5 text-xs font-medium text-zinc-400 sm:col-span-1">
+                <label className="space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)] sm:col-span-1">
                   Stable key
                   <input
                     className={inputClassName}
@@ -212,7 +212,7 @@ export function RuleSetComposer({
                     value={rule.key}
                   />
                 </label>
-                <label className="space-y-1.5 text-xs font-medium text-zinc-400">
+                <label className="space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">
                   Enforcement
                   <select
                     className={inputClassName}
@@ -228,7 +228,7 @@ export function RuleSetComposer({
                     <option value="advisory">Advisory</option>
                   </select>
                 </label>
-                <label className="space-y-1.5 text-xs font-medium text-zinc-400">
+                <label className="space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">
                   Severity
                   <select
                     className={inputClassName}
@@ -247,7 +247,7 @@ export function RuleSetComposer({
                   </select>
                 </label>
               </div>
-              <label className="mt-3 block space-y-1.5 text-xs font-medium text-zinc-400">
+              <label className="mt-3 block space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">
                 Review instruction
                 <textarea
                   className={textAreaClassName}
@@ -260,7 +260,7 @@ export function RuleSetComposer({
                   value={rule.prompt}
                 />
               </label>
-              <p className="mt-2 text-[11px] leading-5 text-zinc-500">
+              <p className="mt-2 text-[11px] leading-5 text-[var(--ls-text-tertiary)]">
                 {rule.enforcement === "mandatory"
                   ? "Mandatory rules use deny_override, so lower-precedence policies cannot weaken them."
                   : "Advisory rules replace lower-precedence versions with the same stable key."}
@@ -269,7 +269,7 @@ export function RuleSetComposer({
           ))}
         </div>
 
-        <div className="flex flex-col justify-between gap-3 border-t border-white/[0.06] pt-4 sm:flex-row sm:items-center">
+        <div className="flex flex-col justify-between gap-3 border-t border-[var(--ls-line)] pt-4 sm:flex-row sm:items-center">
           <Button
             disabled={!enabled || pending}
             onClick={() => setRules((current) => [...current, newDraftRule()])}
@@ -293,15 +293,15 @@ export function RuleSetComposer({
         </div>
       </form>
       {!enabled ? (
-        <p className="mt-4 rounded-xl border border-amber-300/15 bg-amber-300/[0.045] px-3 py-2 text-xs leading-5 text-amber-100/80">
-          Enable a local development control-plane bridge to create drafts.
-          Production writes require the Casdoor session bridge.
+        <p className="mt-4 rounded-[12px] border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2 text-xs leading-5 text-[var(--ls-warning-text)]">
+          The control plane is not reachable with this signed-in session. Check
+          the web service CONTROL_API_URL and the assigned tenant role.
         </p>
       ) : null}
       {message ? (
         <p
           aria-live="polite"
-          className="mt-4 text-xs leading-5 text-cyan-100/85"
+          className="mt-4 text-xs leading-5 text-[var(--ls-accent)]"
         >
           {message}
         </p>

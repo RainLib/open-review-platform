@@ -81,3 +81,55 @@ func TestCompileCarriesDeterministicBindingFileFilters(t *testing.T) {
 		t.Fatalf("expected v2 canonical snapshot, got %s", compiled.Canonical)
 	}
 }
+
+func TestApplyExceptionsRemovesOnlyExactSourceAndChangesCanonicalSHA(t *testing.T) {
+	first := "11111111-1111-1111-1111-111111111111"
+	second := "22222222-2222-2222-2222-222222222222"
+	compiled, err := Compile([]Source{
+		{VersionID: first, Precedence: 10, Rules: []Rule{testRule("security.auth", Advisory, Append, "medium", `{"prompt":"first"}`)}},
+		{VersionID: second, Precedence: 20, Rules: []Rule{testRule("security.auth", Advisory, Append, "high", `{"prompt":"second"}`)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withException, err := ApplyExceptions(compiled, []AppliedException{{
+		ID: "exception-1", RuleKey: "security.auth", SourceVersion: first,
+		ScopeKind: "repository", ScopeRef: "RainLib/demo", ExpiresAt: "2026-12-01T00:00:00Z",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withException.Snapshot.Rules) != 1 || withException.Snapshot.Rules[0].SourceVersion != second {
+		t.Fatalf("exception removed the wrong effective entries: %#v", withException.Snapshot.Rules)
+	}
+	if len(withException.Snapshot.AppliedExceptions) != 1 || withException.SHA256 == compiled.SHA256 {
+		t.Fatalf("exception provenance must be canonical: %#v", withException)
+	}
+}
+
+func TestApplyExceptionsIsDeterministicAcrossInputOrder(t *testing.T) {
+	version := "11111111-1111-1111-1111-111111111111"
+	compiled, err := Compile([]Source{{VersionID: version, Rules: []Rule{
+		testRule("a", Advisory, Replace, "low", `{"prompt":"a"}`),
+		testRule("b", Advisory, Replace, "low", `{"prompt":"b"}`),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := []AppliedException{
+		{ID: "b", RuleKey: "b", SourceVersion: version, ScopeKind: "tenant", ExpiresAt: "2026-12-01T00:00:00Z"},
+		{ID: "a", RuleKey: "a", SourceVersion: version, ScopeKind: "tenant", ExpiresAt: "2026-12-01T00:00:00Z"},
+	}
+	right := []AppliedException{left[1], left[0]}
+	one, err := ApplyExceptions(compiled, left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := ApplyExceptions(compiled, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.SHA256 != two.SHA256 || string(one.Canonical) != string(two.Canonical) {
+		t.Fatalf("exception order changed canonical snapshot: %s != %s", one.SHA256, two.SHA256)
+	}
+}

@@ -2,13 +2,19 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
+	"github.com/RainLib/open-review-platform/internal/modelroute"
 	"github.com/RainLib/open-review-platform/internal/publisher"
 	"github.com/RainLib/open-review-platform/internal/risk"
 	"github.com/RainLib/open-review-platform/internal/rules"
@@ -76,6 +82,42 @@ type RunnerStore interface {
 	RenewClaim(context.Context, uuid.UUID, string, time.Duration) error
 }
 
+// executionPlanStore is optional only for compatibility with older recovery
+// stores. Postgres implements it, making the published scope and normalized
+// findings durable enough to resume a provider-only retry without OCR/LLM.
+type executionPlanStore interface {
+	SaveReviewExecutionPlan(context.Context, uuid.UUID, domain.ReviewExecutionPlan) (domain.ReviewExecutionPlan, error)
+	ReviewExecutionPlanForJob(context.Context, uuid.UUID) (domain.ReviewExecutionPlan, error)
+	FindingsForJob(context.Context, uuid.UUID) ([]domain.Finding, error)
+}
+
+// publicationReceiptStore is optional for compatibility with older runner
+// stores. Postgres records provider publication outcomes against the immutable
+// run so Console evidence and recovery runbooks do not rely on worker logs.
+type publicationReceiptStore interface {
+	RecordPublicationReceipts(context.Context, uuid.UUID, []domain.PublicationReceipt) error
+}
+
+// mergeGateDecisionStore is implemented by the authoritative Postgres store.
+// It retains a deterministic decision before provider publication so external
+// check failure cannot erase the policy result for the reviewed revision.
+type mergeGateDecisionStore interface {
+	SaveReviewMergeGateDecision(context.Context, uuid.UUID, domain.ReviewMergeGateDecisionInput) (domain.ReviewMergeGateDecision, error)
+}
+
+// retryAfterStore lets a provider's bounded Retry-After become durable queue
+// scheduling data instead of a worker-local sleep.
+type retryAfterStore interface {
+	FailWithRetryAfter(context.Context, uuid.UUID, string, string, time.Duration) error
+}
+
+// shadowRolloutQueueStore is deliberately optional while old recovery stores
+// are retired. The Postgres implementation queues isolated Rule Lab work only;
+// it has no provider publisher or merge-gate write path.
+type shadowRolloutQueueStore interface {
+	QueueShadowRuleTests(context.Context, uuid.UUID) error
+}
+
 type Processor struct {
 	Store             RunnerStore
 	Checkout          WorkspacePreparer
@@ -92,6 +134,8 @@ type Processor struct {
 	MergeGateSeverity string
 	WorkerID          string
 	Logger            *slog.Logger
+	ModelSecrets      modelroute.SecretResolver
+	TaskStarted       func() func()
 	// TerminalPollInterval controls how quickly an in-flight review observes a
 	// cancellation or supersession. It is configurable for deterministic tests;
 	// production callers should leave it unset.
@@ -136,28 +180,60 @@ func (p Processor) RunForRun(ctx context.Context, runID uuid.UUID) (worked bool,
 
 func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worked bool, err error) {
 	worked = true
+	done := func() {}
+	if p.TaskStarted != nil {
+		if release := p.TaskStarted(); release != nil {
+			done = release
+		}
+	}
+	defer done()
 	executionCtx, stopLeaseHeartbeat := p.keepClaimAlive(ctx, *job)
 	defer stopLeaseHeartbeat()
 	run, err := p.advance(executionCtx, job.ID, domain.RunAdmitted)
 	if err != nil {
 		return true, err
 	}
+	if validator, ok := p.Publisher.(interface{ ValidateReviewRevision(domain.ReviewJob) error }); ok {
+		if revisionErr := validator.ValidateReviewRevision(*job); revisionErr != nil {
+			if run.State.Terminal() {
+				// Recovery must not publish a terminal status for malformed
+				// historical input, even if the run ended before this claim.
+				return true, nil
+			}
+			return p.handleProcessingError(ctx, *job, revisionErr)
+		}
+	}
 	if stopped, stopErr := p.stopTerminalRun(ctx, *job, run); stopErr != nil || stopped {
 		return true, stopErr
 	}
-	if p.Checks != nil {
-		if checkErr := p.Checks.StartCheck(executionCtx, *job); checkErr != nil && p.Logger != nil {
+	if verifier, ok := p.Publisher.(publisher.ReviewRevisionVerifier); ok {
+		if verifyErr := verifier.VerifyCurrentReview(executionCtx, *job); verifyErr != nil {
+			// A recovery job may already have retained findings. Recheck its
+			// revision before that publication path as well as before OCR.
+			return p.handleProcessingError(ctx, *job, verifyErr)
+		}
+	}
+	if handled, findings, resumeErr := p.resumePublication(executionCtx, *job, run); handled {
+		if resumeErr != nil {
+			return p.handleProcessingError(ctx, *job, resumeErr)
+		}
+		return p.completeSuccessfulReview(ctx, *job, findings)
+	}
+	general, generalErr := p.generalConfigForJob(executionCtx, job.ID)
+	if generalErr != nil {
+		return p.handleProcessingError(ctx, *job, generalErr)
+	}
+	if p.Checks != nil && general.MergeGateEnabled {
+		if checkErr := p.startCheck(executionCtx, *job); checkErr != nil && p.Logger != nil {
 			// A status surface must not prevent an otherwise valid review from
 			// running. The durable provider publication path still reports the
 			// final result, and governance decides whether a later check blocks.
 			p.Logger.Warn("could not start review check", "job_id", job.ID, "error", checkErr)
 		}
 	}
-	if p.Lifecycle != nil {
-		if publishErr := p.Lifecycle.PublishStarted(executionCtx, *job); publishErr != nil && p.Logger != nil {
-			p.Logger.Warn("could not publish review start report", "job_id", job.ID, "error", publishErr)
-		}
-	}
+	// The Check/commit status carries progress without adding timeline noise.
+	// Publish a PR/MR comment only when the review has a final result or a
+	// terminal failure, regardless of whether a webhook or comment started it.
 	run, err = p.advance(executionCtx, job.ID, domain.RunPreparing)
 	if err != nil {
 		return true, err
@@ -167,60 +243,30 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 	}
 	findings, err := p.processUntilTerminal(executionCtx, *job)
 	if err != nil {
-		var terminal terminalRunError
-		if errors.As(err, &terminal) {
-			_, stopErr := p.stopTerminalRun(ctx, *job, terminal.run)
-			return true, stopErr
-		}
-		terminalFailure := isTerminalExecutionFailure(err)
-		var failureErr error
-		if terminalFailure {
-			failureErr = p.Store.FailTerminal(ctx, job.ID, p.WorkerID, err.Error())
-		} else {
-			failureErr = p.Store.Fail(ctx, job.ID, p.WorkerID, err.Error())
-		}
-		if failureErr != nil && !errors.Is(failureErr, store.ErrJobClaimLost) {
-			return true, fmt.Errorf("process job %s: %w (record failure: %v)", job.ID, err, failureErr)
-		}
-		if terminalFailure || job.Attempts >= 5 {
-			if _, transitionErr := p.advance(ctx, job.ID, domain.RunFailed); transitionErr != nil && !errors.Is(transitionErr, store.ErrJobClaimLost) {
-				return true, fmt.Errorf("mark review run %s failed: %w", job.ID, transitionErr)
-			}
-			if p.Checks != nil {
-				summary := "The review could not be completed after retrying. See the task detail for the safe error summary."
-				if terminalFailure {
-					summary = "The review exceeded its execution budget. No findings were published; adjust the execution budget or retry after the model service recovers."
-					if errors.Is(err, domain.ErrReviewContextExhausted) {
-						summary = "The review exhausted the model context for its selected scope. No findings were published; narrow the scope or increase the model context before retrying."
-					}
-				}
-				if checkErr := p.Checks.CompleteCheck(ctx, *job, publisher.CheckFailure, summary); checkErr != nil && p.Logger != nil {
-					p.Logger.Warn("could not finalize failed review check", "job_id", job.ID, "error", checkErr)
-				}
-			}
-			if p.Lifecycle != nil {
-				state := publisher.LifecycleFailed
-				if errors.Is(err, domain.ErrReviewTimedOut) {
-					state = publisher.LifecycleTimedOut
-				} else if errors.Is(err, domain.ErrReviewContextExhausted) {
-					state = publisher.LifecycleContextExhausted
-				}
-				if publishErr := p.Lifecycle.PublishTerminal(ctx, *job, state); publishErr != nil && p.Logger != nil {
-					p.Logger.Warn("could not publish failed review report", "job_id", job.ID, "error", publishErr)
-				}
-			}
-		}
-		if p.Logger != nil {
-			p.Logger.Error("review job failed; queued for retry or terminal failure", "job_id", job.ID, "attempt", job.Attempts, "error", err)
-		}
-		return true, nil
+		return p.handleProcessingError(ctx, *job, err)
+	}
+	return p.completeSuccessfulReview(ctx, *job, findings)
+}
+
+func (p Processor) completeSuccessfulReview(ctx context.Context, job domain.ReviewJob, findings []domain.Finding) (bool, error) {
+	general, err := p.generalConfigForJob(ctx, job.ID)
+	if err != nil {
+		return true, err
 	}
 	if err := p.Store.Succeed(ctx, job.ID, p.WorkerID); err != nil {
 		return true, fmt.Errorf("mark job %s succeeded: %w", job.ID, err)
 	}
-	if p.Checks != nil {
-		gate := publisher.EvaluateMergeGate(findings, p.MergeGateSeverity)
-		if checkErr := p.Checks.CompleteCheck(ctx, *job, gate.Conclusion, gate.Summary(findings)); checkErr != nil && p.Logger != nil {
+	if p.Checks != nil && general.MergeGateEnabled {
+		gate := publisher.EvaluateMergeGate(findings, general.MinimumBlockingSeverity)
+		summary := gate.Summary(findings)
+		if plans, ok := p.Store.(executionPlanStore); ok {
+			if plan, planErr := plans.ReviewExecutionPlanForJob(ctx, job.ID); planErr == nil {
+				summary = (publisher.ReviewResult{Findings: findings, Gate: gate, Scope: publisher.ReviewScope{
+					Mode: plan.Mode, SelectedPaths: plan.SelectedPaths, DeferredFiles: plan.DeferredFiles,
+				}}).CheckSummary()
+			}
+		}
+		if checkErr := p.completeCheck(ctx, job, gate.Conclusion, summary); checkErr != nil && p.Logger != nil {
 			p.Logger.Warn("could not finalize successful review check", "job_id", job.ID, "error", checkErr)
 		}
 	}
@@ -230,8 +276,144 @@ func (p Processor) runClaimed(ctx context.Context, job *domain.ReviewJob) (worke
 	return true, nil
 }
 
+func (p Processor) handleProcessingError(ctx context.Context, job domain.ReviewJob, err error) (bool, error) {
+	var terminal terminalRunError
+	if errors.As(err, &terminal) {
+		_, stopErr := p.stopTerminalRun(ctx, job, terminal.run)
+		return true, stopErr
+	}
+	if errors.Is(err, publisher.ErrReviewHeadChanged) || errors.Is(err, publisher.ErrReviewNotOpen) {
+		return p.supersedeStaleProviderHead(ctx, job)
+	}
+	invalidRevision := errors.Is(err, publisher.ErrInvalidReviewRevision)
+	terminalFailure := invalidRevision || isTerminalExecutionFailure(err)
+	var failureErr error
+	if terminalFailure {
+		failureErr = p.Store.FailTerminal(ctx, job.ID, p.WorkerID, err.Error())
+	} else if retryAfter := publisher.RetryAfter(err); retryAfter > 0 {
+		if retryStore, ok := p.Store.(retryAfterStore); ok {
+			failureErr = retryStore.FailWithRetryAfter(ctx, job.ID, p.WorkerID, err.Error(), retryAfter)
+		} else {
+			failureErr = p.Store.Fail(ctx, job.ID, p.WorkerID, err.Error())
+		}
+	} else {
+		failureErr = p.Store.Fail(ctx, job.ID, p.WorkerID, err.Error())
+	}
+	if failureErr != nil && !errors.Is(failureErr, store.ErrJobClaimLost) {
+		return true, fmt.Errorf("process job %s: %w (record failure: %v)", job.ID, err, failureErr)
+	}
+	if terminalFailure || job.Attempts >= 5 {
+		if _, transitionErr := p.advance(ctx, job.ID, domain.RunFailed); transitionErr != nil && !errors.Is(transitionErr, store.ErrJobClaimLost) {
+			return true, fmt.Errorf("mark review run %s failed: %w", job.ID, transitionErr)
+		}
+		if invalidRevision {
+			// The terminal reporter also suppresses this invalid job. Never
+			// create a Check or comment from malformed persisted input.
+			return true, nil
+		}
+		general, generalErr := p.generalConfigForJob(ctx, job.ID)
+		if generalErr != nil {
+			general = p.defaultGeneralConfig()
+			if p.Logger != nil {
+				p.Logger.Warn("could not load merge gate policy for failed review", "job_id", job.ID, "error", generalErr)
+			}
+		}
+		if p.Checks != nil && general.MergeGateEnabled {
+			summary := "The review could not be completed after retrying. See the task detail for the safe error summary."
+			if terminalFailure {
+				summary = "The review exceeded its execution budget. No findings were published; adjust the execution budget or retry after the model service recovers."
+				if errors.Is(err, domain.ErrReviewContextExhausted) {
+					summary = "The review exhausted the model context for its selected scope. No findings were published; narrow the scope or increase the model context before retrying."
+				}
+			}
+			if checkErr := p.completeCheck(ctx, job, publisher.CheckFailure, summary); checkErr != nil && p.Logger != nil {
+				p.Logger.Warn("could not finalize failed review check", "job_id", job.ID, "error", checkErr)
+			}
+		}
+		if p.Lifecycle != nil {
+			state := publisher.LifecycleFailed
+			if errors.Is(err, domain.ErrReviewTimedOut) {
+				state = publisher.LifecycleTimedOut
+			} else if errors.Is(err, domain.ErrReviewContextExhausted) {
+				state = publisher.LifecycleContextExhausted
+			}
+			if publishErr := p.Lifecycle.PublishTerminal(ctx, job, state); publishErr != nil && p.Logger != nil {
+				p.Logger.Warn("could not publish failed review report", "job_id", job.ID, "error", publishErr)
+			}
+		}
+	}
+	if p.Logger != nil {
+		p.Logger.Error("review job failed; queued for retry or terminal failure", "job_id", job.ID, "attempt", job.Attempts, "error", err)
+	}
+	return true, nil
+}
+
+// supersedeStaleProviderHead records the provider's current revision as the
+// final publication authority. The review job becomes cancelled, while the
+// durable run and its lifecycle report remain available for audit.
+func (p Processor) supersedeStaleProviderHead(ctx context.Context, job domain.ReviewJob) (bool, error) {
+	run, err := p.advance(ctx, job.ID, domain.RunSuperseded)
+	if err != nil {
+		return true, fmt.Errorf("supersede stale provider review %s: %w", job.ID, err)
+	}
+	if !run.State.Terminal() {
+		return true, fmt.Errorf("stale provider review %s did not reach a terminal run state", job.ID)
+	}
+	_, err = p.stopTerminalRun(ctx, job, run)
+	return true, err
+}
+
+// resumePublication uses the persisted findings and exact admitted scope when
+// a worker was retried after entering the publishing stage. It never invokes
+// checkout, risk planning, or the model again. Older runs without this
+// checkpoint deliberately fall back to the compatible full execution path.
+func (p Processor) resumePublication(ctx context.Context, job domain.ReviewJob, run domain.ReviewRun) (bool, []domain.Finding, error) {
+	if run.State != domain.RunPublishing {
+		return false, nil, nil
+	}
+	plans, ok := p.Store.(executionPlanStore)
+	if !ok {
+		return false, nil, nil
+	}
+	plan, err := plans.ReviewExecutionPlanForJob(ctx, job.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil, nil
+	}
+	if err != nil {
+		return true, nil, err
+	}
+	findings, err := plans.FindingsForJob(ctx, job.ID)
+	if err != nil {
+		return true, nil, err
+	}
+	result, err := p.reviewResult(ctx, job, plan.Mode, riskPlanFromExecutionPlan(plan), findings)
+	if err != nil {
+		return true, nil, err
+	}
+	if err := p.persistMergeGateDecision(ctx, job.ID, result); err != nil {
+		return true, nil, err
+	}
+	published, err := p.applyPublicationMinimum(ctx, job.ID, result.Findings, string(result.Gate.Threshold))
+	if err != nil {
+		return true, nil, err
+	}
+	result.SuppressedFindings = len(result.Findings) - len(published)
+	result.Findings = published
+	if err := p.publish(ctx, job, result); err != nil {
+		return true, nil, err
+	}
+	completed, err := p.advance(ctx, job.ID, domain.RunCompleted)
+	if err != nil {
+		return true, nil, err
+	}
+	if completed.State.Terminal() && completed.State != domain.RunCompleted {
+		return true, nil, terminalRunError{run: completed}
+	}
+	return true, findings, nil
+}
+
 func isTerminalExecutionFailure(err error) bool {
-	return errors.Is(err, domain.ErrReviewTimedOut) || errors.Is(err, domain.ErrReviewContextExhausted)
+	return errors.Is(err, domain.ErrReviewTimedOut) || errors.Is(err, domain.ErrReviewContextExhausted) || publisher.IsTerminalPublicationError(err)
 }
 
 // keepClaimAlive makes the database lease explicit. A restart therefore makes
@@ -338,12 +520,30 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	if err != nil {
 		return nil, err
 	}
+	plan, err = p.applyPathFilters(ctx, job.ID, plan)
+	if err != nil {
+		return nil, err
+	}
+	if plans, ok := p.Store.(executionPlanStore); ok {
+		if _, err := plans.SaveReviewExecutionPlan(ctx, job.ID, executionPlanFromRisk(mode, plan)); err != nil {
+			return nil, fmt.Errorf("persist admitted review scope: %w", err)
+		}
+	}
 	findings, err := p.reviewUntilTerminal(ctx, job, workspace.Path, workspace.BaseSHA, plan)
+	if err != nil {
+		return nil, err
+	}
+	findings, err = p.applyCategoryPolicy(ctx, job.ID, findings)
 	if err != nil {
 		return nil, err
 	}
 	if err := p.Store.SaveFindings(ctx, job.ID, findings); err != nil {
 		return nil, err
+	}
+	if shadow, ok := p.Store.(shadowRolloutQueueStore); ok {
+		if err := shadow.QueueShadowRuleTests(ctx, job.ID); err != nil {
+			return nil, fmt.Errorf("queue isolated shadow rollout: %w", err)
+		}
 	}
 	run, err = p.advance(ctx, job.ID, domain.RunNormalizing)
 	if err != nil {
@@ -359,8 +559,20 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	if run.State.Terminal() {
 		return nil, terminalRunError{run: run}
 	}
-	result := p.reviewResult(ctx, job, string(mode), plan, findings)
-	if err := p.Publisher.Publish(ctx, job, result); err != nil {
+	result, err := p.reviewResult(ctx, job, string(mode), plan, findings)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.persistMergeGateDecision(ctx, job.ID, result); err != nil {
+		return nil, err
+	}
+	published, err := p.applyPublicationMinimum(ctx, job.ID, result.Findings, string(result.Gate.Threshold))
+	if err != nil {
+		return nil, err
+	}
+	result.SuppressedFindings = len(result.Findings) - len(published)
+	result.Findings = published
+	if err := p.publish(ctx, job, result); err != nil {
 		return nil, err
 	}
 	run, err = p.advance(ctx, job.ID, domain.RunCompleted)
@@ -373,11 +585,143 @@ func (p Processor) process(ctx context.Context, job domain.ReviewJob) ([]domain.
 	return findings, nil
 }
 
-func (p Processor) reviewResult(ctx context.Context, job domain.ReviewJob, mode string, plan risk.Plan, findings []domain.Finding) publisher.ReviewResult {
+// publish persists every completed provider write before a run is terminal.
+// If a provider fault happens after only some comments were accepted, those
+// markers are retained and a future attempt updates them in place instead of
+// re-running OCR/LLM or leaving the Console with a false all-or-nothing view.
+func (p Processor) publish(ctx context.Context, job domain.ReviewJob, result publisher.ReviewResult) error {
+	if p.Publisher == nil {
+		return fmt.Errorf("review publisher is not configured")
+	}
+	var receipts []domain.PublicationReceipt
+	var publishErr error
+	if receiptPublisher, ok := p.Publisher.(publisher.ReceiptPublisher); ok {
+		receipts, publishErr = receiptPublisher.PublishWithReceipts(ctx, job, result)
+	} else {
+		publishErr = p.Publisher.Publish(ctx, job, result)
+	}
+
+	if len(receipts) > 0 {
+		if err := p.persistPublicationReceipts(ctx, job.ID, receipts); err != nil {
+			if publishErr != nil {
+				return fmt.Errorf("%w (persist provider publication receipts: %v)", publishErr, err)
+			}
+			return fmt.Errorf("persist provider publication receipts: %w", err)
+		}
+	}
+	if publishErr == nil || errors.Is(publishErr, publisher.ErrReviewHeadChanged) {
+		return publishErr
+	}
+	if err := p.persistPublicationReceipts(ctx, job.ID, []domain.PublicationReceipt{publicationFailureReceipt(job, result)}); err != nil {
+		return fmt.Errorf("%w (persist provider publication failure: %v)", publishErr, err)
+	}
+	return publishErr
+}
+
+func (p Processor) persistPublicationReceipts(ctx context.Context, jobID uuid.UUID, receipts []domain.PublicationReceipt) error {
+	store, ok := p.Store.(publicationReceiptStore)
+	if !ok || len(receipts) == 0 {
+		return nil
+	}
+	return store.RecordPublicationReceipts(ctx, jobID, receipts)
+}
+
+func (p Processor) persistMergeGateDecision(ctx context.Context, jobID uuid.UUID, result publisher.ReviewResult) error {
+	decisionStore, ok := p.Store.(mergeGateDecisionStore)
+	if !ok {
+		return nil
+	}
+	_, err := decisionStore.SaveReviewMergeGateDecision(ctx, jobID, domain.ReviewMergeGateDecisionInput{
+		Enabled:           result.Gate.Threshold != publisher.MergeGateOff,
+		Threshold:         string(result.Gate.Threshold),
+		Conclusion:        string(result.Gate.Conclusion),
+		BlockingFindings:  result.Gate.Blocking,
+		FindingCount:      len(result.Findings),
+		EvaluationVersion: "v1",
+	})
+	if err != nil {
+		return fmt.Errorf("persist immutable merge gate decision: %w", err)
+	}
+	return nil
+}
+
+// startCheck and completeCheck preserve the existing best-effort status
+// behavior, but persist an opaque outcome when the reporter supports it. A
+// provider status must never block the review engine; the receipt merely gives
+// the Console an honest answer about which check publication last succeeded.
+func (p Processor) startCheck(ctx context.Context, job domain.ReviewJob) error {
+	if p.Checks == nil {
+		return nil
+	}
+	if reporter, ok := p.Checks.(publisher.ReceiptCheckReporter); ok {
+		receipt, err := reporter.StartCheckWithReceipt(ctx, job)
+		if err != nil {
+			p.recordCheckFailure(ctx, job, "in_progress")
+			return err
+		}
+		return p.persistPublicationReceipts(ctx, job.ID, []domain.PublicationReceipt{receipt})
+	}
+	return p.Checks.StartCheck(ctx, job)
+}
+
+func (p Processor) completeCheck(ctx context.Context, job domain.ReviewJob, conclusion publisher.CheckConclusion, summary string) error {
+	if p.Checks == nil {
+		return nil
+	}
+	if reporter, ok := p.Checks.(publisher.ReceiptCheckReporter); ok {
+		receipt, err := reporter.CompleteCheckWithReceipt(ctx, job, conclusion, summary)
+		if err != nil {
+			p.recordCheckFailure(ctx, job, "completed:"+string(conclusion))
+			return err
+		}
+		return p.persistPublicationReceipts(ctx, job.ID, []domain.PublicationReceipt{receipt})
+	}
+	return p.Checks.CompleteCheck(ctx, job, conclusion, summary)
+}
+
+func (p Processor) recordCheckFailure(ctx context.Context, job domain.ReviewJob, phase string) {
+	// The original provider error may contain untrusted remote data or resolver
+	// details. The durable evidence records only the safe recovery instruction.
+	marker := "open-review-platform:analysis-check:" + job.ID.String()
+	digest := sha256.Sum256([]byte(job.HeadSHA + "\n" + marker + "\n" + phase))
+	if err := p.persistPublicationReceipts(ctx, job.ID, []domain.PublicationReceipt{{
+		ReceiptKind:  "status",
+		StableMarker: marker,
+		PayloadHash:  fmt.Sprintf("%x", digest[:]),
+		LastError:    "Provider analysis status could not be updated. The review continues and will attempt a final status.",
+	}}); err != nil && p.Logger != nil {
+		p.Logger.Warn("could not persist analysis status failure receipt", "job_id", job.ID, "error", err)
+	}
+}
+
+func publicationFailureReceipt(job domain.ReviewJob, result publisher.ReviewResult) domain.PublicationReceipt {
+	marker := "open-review-platform:summary:" + job.ID.String()
+	digest := sha256.Sum256([]byte(job.HeadSHA + "\n" + marker + "\n" + string(result.Gate.Conclusion) + "\n" + publisher.ResultSummary(result.Findings)))
+	return domain.PublicationReceipt{
+		ReceiptKind:  "summary",
+		StableMarker: marker,
+		PayloadHash:  fmt.Sprintf("%x", digest[:]),
+		LastError:    "Provider publication did not complete. The durable job will retry using the retained execution plan and findings.",
+	}
+}
+
+func (p Processor) reviewResult(ctx context.Context, job domain.ReviewJob, mode string, plan risk.Plan, findings []domain.Finding) (publisher.ReviewResult, error) {
+	general, err := p.generalConfigForJob(ctx, job.ID)
+	if err != nil {
+		return publisher.ReviewResult{}, err
+	}
+	mergeGateSeverity := general.MinimumBlockingSeverity
+	if !general.MergeGateEnabled {
+		mergeGateSeverity = string(publisher.MergeGateOff)
+	}
 	result := publisher.ReviewResult{
-		Findings:           findings,
-		Gate:               publisher.EvaluateMergeGate(findings, p.MergeGateSeverity),
-		Scope:              publisher.ReviewScope{Mode: mode, DeferredFiles: len(plan.Deferred)},
+		Findings: findings,
+		Gate:     publisher.EvaluateMergeGate(findings, mergeGateSeverity),
+		Scope: publisher.ReviewScope{
+			Mode:                mode,
+			DeferredFiles:       len(plan.Deferred),
+			StaticImpactSignals: append([]string(nil), plan.StaticImpactSignals...),
+		},
 		EngineVersion:      p.EngineVersion,
 		RuleSnapshotStatus: "none",
 	}
@@ -396,7 +740,19 @@ func (p Processor) reviewResult(ctx context.Context, job domain.ReviewJob, mode 
 	} else if !errors.Is(err, store.ErrNotFound) {
 		result.RuleSnapshotStatus = "unavailable"
 	}
-	return result
+	if modelStore, ok := p.Store.(modelRouteSnapshotStore); ok {
+		snapshot, routeErr := modelStore.ModelRouteForJob(ctx, job.ID)
+		if routeErr == nil {
+			route, decodeErr := domain.DecodeModelRoute(snapshot.Content)
+			if decodeErr == nil && route.Enabled {
+				result.ModelProvider = route.Provider
+				result.Model = route.Model
+				result.ModelRouteSHA = snapshot.ContentSHA256
+				result.ModelRouteOrigin = snapshot.OriginScopeKind
+			}
+		}
+	}
+	return result, nil
 }
 
 // reviewUntilTerminal gives the executor a cancellable context while a small
@@ -405,9 +761,19 @@ func (p Processor) reviewResult(ctx context.Context, job domain.ReviewJob, mode 
 // later findings from being published.
 func (p Processor) reviewUntilTerminal(ctx context.Context, job domain.ReviewJob, directory, base string, plan risk.Plan) ([]domain.Finding, error) {
 	reviewCtx, cancel := context.WithCancel(ctx)
+	routedCtx, err := p.withModelRoute(reviewCtx, job.ID)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	routedCtx, err = p.withReviewPrompts(routedCtx, job.ID)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 	done := make(chan struct{})
 	go p.cancelReviewWhenTerminal(ctx, job.ID, cancel, done)
-	findings, reviewErr := p.reviewWithSnapshot(reviewCtx, job, directory, base, plan)
+	findings, reviewErr := p.reviewWithSnapshot(routedCtx, job, directory, base, plan)
 	close(done)
 	cancel()
 
@@ -422,6 +788,123 @@ func (p Processor) reviewUntilTerminal(ctx context.Context, job domain.ReviewJob
 		return nil, terminalRunError{run: run}
 	}
 	return findings, reviewErr
+}
+
+type modelRouteSnapshotStore = ModelRouteSnapshotReader
+
+// reviewConfigSnapshotStore is deliberately optional for worker compatibility
+// with runs admitted before review-configuration snapshots existed. Postgres
+// implements it, so every newly admitted run filters categories through the
+// immutable policy captured at admission rather than the mutable UI setting.
+type reviewConfigSnapshotStore = ReviewConfigSnapshotReader
+
+func (p Processor) executionPolicy() ExecutionPolicy {
+	modelStore, _ := p.Store.(ModelRouteSnapshotReader)
+	configStore, _ := p.Store.(ReviewConfigSnapshotReader)
+	publicationStore, _ := p.Store.(PublicationMinimumReader)
+	return ExecutionPolicy{ModelRoutes: modelStore, Configurations: configStore, PublicationMinimum: publicationStore, ModelSecrets: p.ModelSecrets, Logger: p.Logger}
+}
+
+func (p Processor) applyCategoryPolicy(ctx context.Context, jobID uuid.UUID, findings []domain.Finding) ([]domain.Finding, error) {
+	return p.executionPolicy().ApplyCategoryPolicy(ctx, jobID, findings)
+}
+
+func (p Processor) applyPublicationMinimum(ctx context.Context, jobID uuid.UUID, findings []domain.Finding, blockingMinimum string) ([]domain.Finding, error) {
+	return p.executionPolicy().ApplyPublicationMinimum(ctx, jobID, findings, blockingMinimum)
+}
+
+// applyPathFilters runs after deterministic risk selection and before OCR. A
+// filtered selected path becomes deferred evidence, so the persisted execution
+// plan and provider report remain honest about why it was not analyzed.
+func (p Processor) applyPathFilters(ctx context.Context, jobID uuid.UUID, plan risk.Plan) (risk.Plan, error) {
+	configStore, ok := p.Store.(reviewConfigSnapshotStore)
+	if !ok {
+		return plan, nil
+	}
+	snapshot, err := configStore.ReviewConfigSnapshotForJob(ctx, jobID, domain.ReviewConfigFilters)
+	if errors.Is(err, store.ErrNotFound) {
+		return plan, nil
+	}
+	if err != nil {
+		return risk.Plan{}, fmt.Errorf("load review filters for review: %w", err)
+	}
+	filters, err := domain.DecodeReviewFiltersConfig(snapshot.Content)
+	if err != nil {
+		return risk.Plan{}, fmt.Errorf("decode review filters snapshot: %w", err)
+	}
+	if len(plan.Selected) == 0 && len(plan.Deferred) == 0 {
+		// A legacy executor can run without a risk planner, but it has no
+		// trustworthy changed-file inventory for path filters. Do not claim a
+		// filter was applied when there is no scope to transform.
+		if p.Logger != nil && (len(filters.IncludePaths) > 0 || len(filters.ExcludePaths) > 0 || filters.SkipGenerated || filters.SkipVendor) {
+			p.Logger.Warn("review path filters require a risk-planned file scope; preserving legacy full review", "job_id", jobID, "filter_config_sha256", snapshot.ContentSHA256)
+		}
+		return plan, nil
+	}
+	filtered := risk.Plan{Selected: make([]risk.Item, 0, len(plan.Selected)), Deferred: append([]risk.Item(nil), plan.Deferred...)}
+	for _, item := range plan.Selected {
+		if filters.AllowsPath(item.Path) {
+			filtered.Selected = append(filtered.Selected, item)
+			continue
+		}
+		item.Reasons = append(item.Reasons, "excluded by immutable review filter")
+		filtered.Deferred = append(filtered.Deferred, item)
+	}
+	filtered.Exclude = make([]string, 0, len(filtered.Deferred))
+	seen := make(map[string]struct{}, len(filtered.Deferred))
+	for _, item := range filtered.Deferred {
+		if item.Path == "" {
+			continue
+		}
+		if _, duplicate := seen[item.Path]; duplicate {
+			continue
+		}
+		seen[item.Path] = struct{}{}
+		filtered.Exclude = append(filtered.Exclude, item.Path)
+	}
+	filtered.StaticImpactSignals = risk.StaticImpactSignals(filtered.Selected)
+	if len(filtered.Selected) != len(plan.Selected) && p.Logger != nil {
+		p.Logger.Info("applied immutable review path filters", "job_id", jobID, "filter_config_sha256", snapshot.ContentSHA256, "selected_paths", len(filtered.Selected), "deferred_paths", len(filtered.Deferred))
+	}
+	return filtered, nil
+}
+
+func (p Processor) defaultGeneralConfig() domain.ReviewGeneralConfig {
+	config := domain.DefaultReviewGeneralConfig()
+	if p.MergeGateSeverity == string(publisher.MergeGateOff) {
+		config.MergeGateEnabled = false
+	} else if publisher.ValidMergeGateSeverity(p.MergeGateSeverity) {
+		config.MinimumBlockingSeverity = p.MergeGateSeverity
+	}
+	return config
+}
+
+func (p Processor) generalConfigForJob(ctx context.Context, jobID uuid.UUID) (domain.ReviewGeneralConfig, error) {
+	config := p.defaultGeneralConfig()
+	configStore, ok := p.Store.(reviewConfigSnapshotStore)
+	if !ok {
+		return config, nil
+	}
+	snapshot, err := configStore.ReviewConfigSnapshotForJob(ctx, jobID, domain.ReviewConfigGeneral)
+	if errors.Is(err, store.ErrNotFound) {
+		return config, nil
+	}
+	if err != nil {
+		return domain.ReviewGeneralConfig{}, fmt.Errorf("load general policy for review: %w", err)
+	}
+	config, err = domain.DecodeReviewGeneralConfig(snapshot.Content)
+	if err != nil {
+		return domain.ReviewGeneralConfig{}, fmt.Errorf("decode general policy snapshot: %w", err)
+	}
+	return config, nil
+}
+
+func (p Processor) withReviewPrompts(ctx context.Context, jobID uuid.UUID) (context.Context, error) {
+	return p.executionPolicy().WithReviewPrompts(ctx, jobID)
+}
+
+func (p Processor) withModelRoute(ctx context.Context, jobID uuid.UUID) (context.Context, error) {
+	return p.executionPolicy().WithModelRoute(ctx, jobID)
 }
 
 func (p Processor) cancelReviewWhenTerminal(ctx context.Context, jobID uuid.UUID, cancel context.CancelFunc, done <-chan struct{}) {
@@ -465,19 +948,17 @@ func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob,
 		return []domain.Finding{}, nil
 	}
 	snapshot, err := p.Store.RuleSnapshotForJob(ctx, job.ID)
+	var retained *domain.RuleSnapshot
 	if errors.Is(err, store.ErrNotFound) {
-		return p.reviewWithScope(ctx, directory, base, job.HeadSHA, plan)
-	}
-	if err != nil {
+		// Legacy runs can lack enterprise rules but still have prompt policy.
+	} else if err != nil {
 		return nil, fmt.Errorf("load rule snapshot for review: %w", err)
+	} else {
+		retained = &snapshot
 	}
-	var compiled rules.Snapshot
-	if err := json.Unmarshal(snapshot.CanonicalPayload, &compiled); err != nil {
-		return nil, fmt.Errorf("decode rule snapshot %s: %w", snapshot.ID, err)
-	}
-	ruleFile, err := rules.OCRRuleFileForSnapshot(compiled)
+	ruleFile, err := CompileExecutionRuleFile(ctx, directory, retained)
 	if err != nil {
-		return nil, fmt.Errorf("compile OCR rule file from snapshot %s: %w", snapshot.ID, err)
+		return nil, err
 	}
 	if len(ruleFile.Rules) == 0 {
 		return p.reviewWithScope(ctx, directory, base, job.HeadSHA, plan)
@@ -485,25 +966,123 @@ func (p Processor) reviewWithSnapshot(ctx context.Context, job domain.ReviewJob,
 	if p.Logger != nil {
 		p.Logger.Info("executing review with immutable rule snapshot", "job_id", job.ID, "rule_snapshot_id", snapshot.ID, "rule_snapshot_sha256", snapshot.SHA256, "ocr_rule_entries", len(ruleFile.Rules))
 	}
+	return p.reviewWithRuleFile(ctx, directory, base, job.HeadSHA, plan, ruleFile)
+}
+
+func (p Processor) reviewWithRuleFile(ctx context.Context, directory, base, head string, plan risk.Plan, ruleFile rules.OCRRuleFile) ([]domain.Finding, error) {
 	encoded, err := json.Marshal(ruleFile)
 	if err != nil {
-		return nil, fmt.Errorf("encode OCR rule file from snapshot %s: %w", snapshot.ID, err)
+		return nil, fmt.Errorf("encode OCR rule file: %w", err)
 	}
 	if selected := selectedPaths(plan); len(selected) > 0 {
 		if executor, ok := p.Executor.(RuleAndSelectedPathReviewExecutor); ok {
-			return executor.ReviewWithRuleAndSelectedPaths(ctx, directory, base, job.HeadSHA, encoded, selected)
+			return executor.ReviewWithRuleAndSelectedPaths(ctx, directory, base, head, encoded, selected)
 		}
 	}
 	if len(plan.Exclude) > 0 {
 		if executor, ok := p.Executor.(RuleAndScopedReviewExecutor); ok {
-			return executor.ReviewWithRuleAndExclude(ctx, directory, base, job.HeadSHA, encoded, plan.Exclude)
+			return executor.ReviewWithRuleAndExclude(ctx, directory, base, head, encoded, plan.Exclude)
 		}
 	}
 	executor, ok := p.Executor.(RuleAwareReviewExecutor)
 	if !ok {
-		return nil, fmt.Errorf("review executor does not support enterprise rule snapshots")
+		return nil, fmt.Errorf("review executor does not support trusted OCR rule files")
 	}
-	return executor.ReviewWithRule(ctx, directory, base, job.HeadSHA, encoded)
+	return executor.ReviewWithRule(ctx, directory, base, head, encoded)
+}
+
+func reviewPromptRule(ctx context.Context, directory string) (string, error) {
+	prompt, ok := modelroute.PromptExecutionFromContext(ctx)
+	if !ok {
+		return "", nil
+	}
+	sections := make([]string, 0, 3)
+	if instruction := strings.TrimSpace(prompt.SystemInstruction); instruction != "" {
+		sections = append(sections, "## Control-plane system instruction\n\n"+instruction)
+	}
+	if repositoryContext := strings.TrimSpace(prompt.RepositoryContext); repositoryContext != "" {
+		sections = append(sections, "## Control-plane repository context\n\n"+repositoryContext)
+	}
+	if prompt.AllowRepositoryInstructions {
+		instructions, err := readRepositoryInstructions(directory)
+		if err != nil {
+			return "", err
+		}
+		if instructions != "" {
+			sections = append(sections, "## Repository instructions (explicitly enabled)\n\n"+instructions)
+		}
+	}
+	if len(sections) == 0 {
+		return "", nil
+	}
+	return "# Open Review prompt policy\n\n" + strings.Join(sections, "\n\n---\n\n"), nil
+}
+
+// readRepositoryInstructions imports only a small fixed set of regular files
+// when an administrator opted in. It never follows a link outside the
+// checkout, and it bounds each file and the aggregate so a pull request cannot
+// turn prompt configuration into an unbounded read.
+func readRepositoryInstructions(directory string) (string, error) {
+	root, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return "", fmt.Errorf("resolve review workspace for repository instructions: %w", err)
+	}
+	const perFileLimit = 6 << 10
+	const totalLimit = 16 << 10
+	var builder strings.Builder
+	for _, name := range []string{"AGENTS.md", "OPENREVIEW.md", ".openreview.md", ".openreview/instructions.md", ".github/openreview.md"} {
+		if builder.Len() >= totalLimit {
+			break
+		}
+		candidate := filepath.Join(directory, filepath.FromSlash(name))
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("resolve repository instruction %s: %w", name, err)
+		}
+		relative, err := filepath.Rel(root, resolved)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			continue
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		file, err := os.Open(resolved)
+		if err != nil {
+			return "", fmt.Errorf("open repository instruction %s: %w", name, err)
+		}
+		contents, readErr := io.ReadAll(io.LimitReader(file, perFileLimit+1))
+		closeErr := file.Close()
+		if readErr != nil {
+			return "", fmt.Errorf("read repository instruction %s: %w", name, readErr)
+		}
+		if closeErr != nil {
+			return "", fmt.Errorf("close repository instruction %s: %w", name, closeErr)
+		}
+		if len(contents) > perFileLimit {
+			contents = append(contents[:perFileLimit], []byte("\n[truncated by Open Review instruction limit]\n")...)
+		}
+		prefix := "### " + name + "\n\n"
+		if builder.Len() > 0 {
+			prefix = "\n\n" + prefix
+		}
+		remaining := totalLimit - builder.Len() - len(prefix)
+		if remaining <= 0 {
+			break
+		}
+		if len(contents) > remaining {
+			contents = contents[:remaining]
+		}
+		if len(contents) == 0 {
+			continue
+		}
+		builder.WriteString(prefix)
+		builder.Write(contents)
+	}
+	return builder.String(), nil
 }
 
 func (p Processor) riskModeForJob(ctx context.Context, jobID uuid.UUID) (risk.Mode, error) {
@@ -575,6 +1154,36 @@ func selectedPaths(plan risk.Plan) []string {
 	return paths
 }
 
+func executionPlanFromRisk(mode risk.Mode, plan risk.Plan) domain.ReviewExecutionPlan {
+	// Preserve the existing count-only execution plan for unusually large diffs.
+	// File scopes are evidence enrichment, never a reason to fail a review.
+	var files []domain.ReviewFileScope
+	if len(plan.Selected)+len(plan.Deferred) <= 10_000 {
+		files = make([]domain.ReviewFileScope, 0, len(plan.Selected)+len(plan.Deferred))
+		for _, item := range plan.Selected {
+			files = append(files, domain.ReviewFileScope{Path: item.Path, Selected: true, Score: item.Score, Reasons: append([]string(nil), item.Reasons...), ChangeType: item.ChangeType, PreviousPath: item.PreviousPath, Additions: item.Additions, Deletions: item.Deletions, StatsKnown: item.StatsKnown, Binary: item.Binary})
+		}
+		for _, item := range plan.Deferred {
+			files = append(files, domain.ReviewFileScope{Path: item.Path, Score: item.Score, Reasons: append([]string(nil), item.Reasons...), ChangeType: item.ChangeType, PreviousPath: item.PreviousPath, Additions: item.Additions, Deletions: item.Deletions, StatsKnown: item.StatsKnown, Binary: item.Binary})
+		}
+	}
+	return domain.ReviewExecutionPlan{
+		Mode:                string(mode),
+		SelectedPaths:       selectedPaths(plan),
+		DeferredFiles:       len(plan.Deferred),
+		StaticImpactSignals: append([]string(nil), plan.StaticImpactSignals...),
+		FileScopes:          files,
+	}
+}
+
+func riskPlanFromExecutionPlan(plan domain.ReviewExecutionPlan) risk.Plan {
+	riskPlan := risk.Plan{Selected: make([]risk.Item, 0, len(plan.SelectedPaths)), Deferred: make([]risk.Item, plan.DeferredFiles), StaticImpactSignals: append([]string(nil), plan.StaticImpactSignals...)}
+	for _, path := range plan.SelectedPaths {
+		riskPlan.Selected = append(riskPlan.Selected, risk.Item{Path: path})
+	}
+	return riskPlan
+}
+
 // deferredOnlyScope is an explicit focused/critical decision to skip model
 // execution. An entirely empty plan means no risk planner is configured and
 // preserves the full-review default.
@@ -601,12 +1210,28 @@ func (p Processor) stopTerminalRun(ctx context.Context, job domain.ReviewJob, ru
 	if err := p.Store.Cancel(ctx, job.ID, p.WorkerID); err != nil && !errors.Is(err, store.ErrJobClaimLost) {
 		return true, fmt.Errorf("cancel terminal review job %s: %w", job.ID, err)
 	}
-	if p.Checks != nil {
+	general, generalErr := p.generalConfigForJob(ctx, job.ID)
+	if generalErr != nil {
+		general = p.defaultGeneralConfig()
+		if p.Logger != nil {
+			p.Logger.Warn("could not load merge gate policy for stopped review", "job_id", job.ID, "error", generalErr)
+		}
+	}
+	if p.Checks != nil && general.MergeGateEnabled {
 		summary := "The review was stopped before findings could be published."
+		conclusion := publisher.CheckNeutral
+		if run.State == domain.RunFailed {
+			conclusion = publisher.CheckFailure
+			summary = "The review ended before trustworthy findings could be published. See the task detail for the safe error summary."
+		}
 		if run.State == domain.RunSuperseded {
 			summary = "The review was superseded by a newer pull request revision before findings could be published."
 		}
-		if checkErr := p.Checks.CompleteCheck(ctx, job, publisher.CheckNeutral, summary); checkErr != nil && p.Logger != nil {
+		if run.State == domain.RunNeedsAttention {
+			conclusion = publisher.CheckFailure
+			summary = "The review requires human attention before trustworthy findings or a merge conclusion can be published. Resolve the recorded intervention, then retry the review."
+		}
+		if checkErr := p.completeCheck(ctx, job, conclusion, summary); checkErr != nil && p.Logger != nil {
 			p.Logger.Warn("could not finalize stopped review check", "job_id", job.ID, "error", checkErr)
 		}
 	}
@@ -617,6 +1242,8 @@ func (p Processor) stopTerminalRun(ctx context.Context, job domain.ReviewJob, ru
 			state = publisher.LifecycleCancelled
 		case domain.RunSuperseded:
 			state = publisher.LifecycleSuperseded
+		case domain.RunNeedsAttention:
+			state = publisher.LifecycleNeedsAttention
 		}
 		if publishErr := p.Lifecycle.PublishTerminal(ctx, job, state); publishErr != nil && p.Logger != nil {
 			p.Logger.Warn("could not publish stopped review report", "job_id", job.ID, "error", publishErr)

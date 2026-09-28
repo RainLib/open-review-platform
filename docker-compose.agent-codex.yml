@@ -1,0 +1,9 @@
+# Optional local coding-Agent acceptance profile. Use together with the base
+# Compose file and --profile agent-adapter; it never enables production mode.
+services:
+  agent-task-adapter:
+    build:
+      target: adapter-codex
+      network: host
+    environment:
+      AGENT_ADAPTER_EXECUTOR: codex

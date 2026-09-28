@@ -1,0 +1,34 @@
+# Lean local evaluation mode. The base Compose file remains the complete
+# deployment; use this override only when its optional capabilities are not
+# needed. `--profile full` re-enables all services listed here.
+#
+# docker compose -f docker-compose.yml -f docker-compose.github-app.yml \
+#   -f docker-compose.core.yml up -d
+# Existing optional containers from an earlier full-stack run remain running;
+# check active work and stop only the unused optional services explicitly.
+services:
+  issue-triager:
+    # One small worker image avoids rebuilding every core binary when only
+    # Issue triage changes. The base/full stack keeps its shared core image.
+    image: ${OPEN_REVIEW_ISSUE_TRIAGER_IMAGE:-open-review-platform-issue-triager:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.issue-triager
+  agent-task-source-admitter:
+    profiles: [agent-work, full]
+  agent-task-runner:
+    profiles: [agent-work, full]
+  notifier:
+    profiles: [notifications, full]
+  sso-prober:
+    profiles: [sso, full]
+  provider-feedback-poller:
+    profiles: [feedback, full]
+  model-prober:
+    profiles: [model-probes, full]
+  data-governance-worker:
+    profiles: [governance, full]
+  review-scheduler:
+    profiles: [schedules, full]
+  rule-rollout-monitor:
+    profiles: [rule-governance, full]

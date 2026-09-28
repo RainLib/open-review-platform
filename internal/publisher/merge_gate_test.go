@@ -25,7 +25,7 @@ func TestMergeGateBlocksOnlyFindingsAtConfiguredThreshold(t *testing.T) {
 func TestMergeGateSummaryNamesBlockingDecision(t *testing.T) {
 	findings := []domain.Finding{{Severity: "high"}}
 	blocked := EvaluateMergeGate(findings, "high")
-	if summary := blocked.Summary(findings); !strings.Contains(summary, "Merge gate blocked") || !strings.Contains(summary, "changes recommended") {
+	if summary := blocked.Summary(findings); !strings.Contains(summary, "Review gate failed") || !strings.Contains(summary, "Provider merge policy must require this result") || !strings.Contains(summary, "changes recommended") {
 		t.Fatalf("missing blocking verdict: %s", summary)
 	}
 	passed := EvaluateMergeGate(findings, "critical")

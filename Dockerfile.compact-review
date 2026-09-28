@@ -1,0 +1,20 @@
+# Local-only review bundle. The runner base owns the pinned Git/OCR toolchain;
+# all Go workers are rebuilt from the same source revision for one deployment.
+ARG REVIEW_RUNNER_IMAGE=open-review-platform-runner:latest
+FROM golang:1.25.14-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+RUN --mount=type=cache,id=open-review-go-build-cache,target=/root/.cache/go-build \
+    set -eu; \
+    for role in compact-review outbox-relay acknowledger interaction-responder interaction-admitter terminal-reporter issue-publisher issue-triager model-prober provider-prober provider-feedback-poller runner review-scheduler rule-exception-expirer rule-rollout-monitor sso-prober notifier data-governance-worker agent-task-source-admitter; do \
+      CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o "/out/${role}" "./cmd/${role}"; \
+    done
+
+FROM ${REVIEW_RUNNER_IMAGE}
+WORKDIR /app
+COPY --from=build --chown=node:node /out/ /app/
+USER node
+ENTRYPOINT ["/app/compact-review"]

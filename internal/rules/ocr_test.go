@@ -27,7 +27,7 @@ func TestOCRRuleFileForSnapshotAggregatesEffectiveRules(t *testing.T) {
 	if got, want := strings.Join(file.Exclude, ","), "**/fixtures/**"; got != want {
 		t.Fatalf("exclude = %q, want %q", got, want)
 	}
-	for _, expected := range []string{"payments.idempotency", "Verify idempotent retries.", "errors.handling", "Check errors are returned."} {
+	for _, expected := range []string{"Finding attribution contract", "rule_references", "payments.idempotency", "Verify idempotent retries.", "errors.handling", "Check errors are returned."} {
 		if !strings.Contains(file.Rules[0].Rule, expected) {
 			t.Fatalf("rule aggregate lacks %q: %s", expected, file.Rules[0].Rule)
 		}

@@ -15,9 +15,12 @@ import (
 	"github.com/RainLib/open-review-platform/internal/credentials"
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/engine/ocr"
+	"github.com/RainLib/open-review-platform/internal/health"
 	"github.com/RainLib/open-review-platform/internal/messaging"
+	"github.com/RainLib/open-review-platform/internal/modelroute"
 	"github.com/RainLib/open-review-platform/internal/publisher"
 	"github.com/RainLib/open-review-platform/internal/risk"
+	"github.com/RainLib/open-review-platform/internal/rulelab"
 	"github.com/RainLib/open-review-platform/internal/runner"
 	"github.com/RainLib/open-review-platform/internal/store"
 	"github.com/google/uuid"
@@ -35,7 +38,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer database.Close()
-	resolver, err := credentials.New(cfg)
+	resolver, err := credentials.New(cfg, database)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -56,7 +59,12 @@ func main() {
 	if err := executor.VerifyGitVersion(ctx); err != nil {
 		log.Fatal(err)
 	}
-	reviewPublisher := publisher.NewHTTPWithResolver(resolver)
+	reviewPublisher := publisher.NewHTTPWithResolverAndSnapshotsAndConsoleURL(resolver, database, cfg.ConsoleURL)
+	reporter := &health.Reporter{
+		Store: database, WorkerID: cfg.Runner.ID, Kind: "review-runner",
+		Version: health.EnvironmentBuildVersion(), Capacity: max(1, cfg.Runner.OCRConcurrency),
+	}
+	go reporter.Run(ctx)
 	processor := runner.Processor{
 		Store:             database,
 		Checkout:          runner.Checkout{Resolver: resolver, GitBinary: cfg.Runner.GitBinary},
@@ -73,14 +81,19 @@ func main() {
 		MergeGateSeverity: cfg.Runner.MergeGateSeverity,
 		WorkerID:          cfg.Runner.ID,
 		Logger:            slog.Default(),
+		ModelSecrets:      modelroute.EnvironmentResolver{},
+		TaskStarted:       reporter.BeginTask,
 	}
-	consumer, err := messaging.OpenAMQPConsumer(cfg.Broker.URL, cfg.Broker.Exchange)
-	if err != nil {
-		log.Fatal(err)
+	testProcessor := rulelab.Processor{
+		Store: database, Checkout: runner.Checkout{Resolver: resolver, GitBinary: cfg.Runner.GitBinary},
+		Executor: executor, ModelSecrets: modelroute.EnvironmentResolver{},
+		EngineVersion: cfg.Runner.OCRVersion, WorkerID: cfg.Runner.ID + "-rule-test",
+		CheckoutTimeout: cfg.Runner.CheckoutTimeout, LeaseDuration: cfg.Runner.LeaseDuration,
+		LeaseRenewEvery: cfg.Runner.LeaseRenewEvery, Logger: slog.Default(),
+		TaskStarted: reporter.BeginTask,
 	}
-	defer consumer.Close()
 	go func() {
-		err := consumer.Consume(ctx, "openreview.review.execute.v1", "review-runner-v1", func(ctx context.Context, body []byte) error {
+		consumeQueue(ctx, cfg.Broker.URL, cfg.Broker.Exchange, "openreview.review.execute.v1", "review-runner-v1", func(ctx context.Context, body []byte) error {
 			message, err := messaging.DecodeOutboxMessage(body)
 			if err != nil {
 				return err
@@ -96,14 +109,36 @@ func main() {
 				_, err = processor.RunForRun(ctx, runID)
 				return err
 			})
-		})
-		if err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("queue execution consumer stopped", "error", err)
-		}
+		}, openRunnerConsumer, time.Second)
+	}()
+	go func() {
+		consumeQueue(ctx, cfg.Broker.URL, cfg.Broker.Exchange, "openreview.rule-test.execute.v1", "rule-test-runner-v1", func(ctx context.Context, body []byte) error {
+			message, err := messaging.DecodeOutboxMessage(body)
+			if err != nil {
+				return err
+			}
+			if message.Topic != "rule.test.requested" {
+				return fmt.Errorf("unexpected rule test topic %q", message.Topic)
+			}
+			return messaging.HandleExactlyOnce(ctx, database, "rule-test-runner-v1", message, func(ctx context.Context, message domain.OutboxMessage) error {
+				testRunID, err := testRunIDFromPayload(message.Payload)
+				if err != nil {
+					return err
+				}
+				_, err = testProcessor.Run(ctx, testRunID)
+				return err
+			})
+		}, openRunnerConsumer, time.Second)
 	}()
 	ticker := time.NewTicker(cfg.Runner.PollInterval)
 	defer ticker.Stop()
 	for {
+		worked, runErr := testProcessor.RunOnce(ctx)
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
+			slog.Error("rule test runner iteration failed", "error", runErr)
+		} else if worked {
+			continue
+		}
 		worked, err := processor.RunOnce(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("runner iteration failed", "error", err)
@@ -117,6 +152,63 @@ func main() {
 		case <-ticker.C:
 		}
 	}
+}
+
+type queueConsumer interface {
+	Consume(context.Context, string, string, func(context.Context, []byte) error) error
+	Close() error
+}
+
+func openRunnerConsumer(url, exchange string) (queueConsumer, error) {
+	return messaging.OpenAMQPConsumer(url, exchange)
+}
+
+// The database poller alone cannot keep RabbitMQ delivery live. In
+// particular, broker replacement closes Consume's delivery channel while the
+// runner process and its heartbeat can remain healthy. Give each queue its
+// own reconnecting connection so one failed consumer cannot strand the other.
+func consumeQueue(ctx context.Context, url, exchange, queue, consumerID string,
+	handler func(context.Context, []byte) error,
+	open func(string, string) (queueConsumer, error), initialBackoff time.Duration,
+) {
+	backoff := initialBackoff
+	if backoff <= 0 {
+		backoff = time.Second
+	}
+	for ctx.Err() == nil {
+		consumer, err := open(url, exchange)
+		if err == nil {
+			err = consumer.Consume(ctx, queue, consumerID, handler)
+			_ = consumer.Close()
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			err = fmt.Errorf("consumer returned without cancellation")
+		}
+		slog.Warn("review queue consumer reconnecting", "queue", queue, "error", err, "backoff", backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		backoff = min(backoff*2, 30*time.Second)
+	}
+}
+
+func testRunIDFromPayload(payload map[string]any) (uuid.UUID, error) {
+	raw, ok := payload["test_run_id"].(string)
+	if !ok {
+		return uuid.Nil, fmt.Errorf("rule test payload test_run_id is invalid")
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("parse rule test run id: %w", err)
+	}
+	return id, nil
 }
 
 func runIDFromPayload(payload map[string]any) (uuid.UUID, error) {

@@ -201,6 +201,27 @@ OCR 官方 GitHub Action 会把 rule 输入传给 `ocr review --rule`，并对�
 - canary：按 tenant/repository/比例绑定，失败可自动回退旧 binding。
 - mandatory 阻断规则上线默认先 shadow，除非 break-glass。
 
+Canary 创建时冻结自动回退阈值（1–10 个不同 PR/MR，默认 1）与观察窗口（5–1440
+分钟，默认 60）。监控器只统计窗口内**实际选中候选 binding**、执行后进入 `failed`
+终态的不同 review request；同一 PR 的多个 head 只计一次，配额准入拒绝、基线组
+失败、取消和 supersede 不计。达到阈值时在行锁内复核并原子地将 rollout 标为
+`rolled_back`，写入原因与审计事件；重复扫描或多副本不能二次回退。新 run 恢复基线，
+已入队 run 的不可变规则快照不变。这是偏保守的运行可靠性保护，不把 finding 增减
+误判为执行失败，也不能证明失败一定由候选规则引起。候选质量/误报率等统计门槛仍需
+独立的 Canary outcome evidence 与晋升审批。
+
+当前阶段一/二实现采用受约束的 `1% → 5% → 25% → 100% → promoted` 状态序列；
+首次 Canary 只能选 1% 或 5%，不能在创建时直达 25%/100%。每次放量和最终晋升均
+校验阶段推进审计链（旧版本直接创建的 25%/100% Canary 不能绕过新门槛），并
+重新检查当前绑定仍是同一发布版本/作用域，要求本阶段已观察完整配置窗口、至少
+一个不同 PR/MR 的候选审核完成且其不可变 merge-gate 结论为 `success`、没有候选
+执行失败或未终结的候选审核。阶段推进以 optimistic revision 与行锁串行化，晋升
+另须由不同于 Canary 创建者的 owner/admin 操作；一个事务内把旧 baseline 置为
+`disabled`、candidate 置为 `active`、rollout 置为 `promoted`，并记录审计。已准入
+run 的规则快照和 cohort 决策不变。暂停后恢复会重新开始观察窗口。此门槛验证
+运行和合并策略结果，**尚不能证明误报率或业务质量**；真实 provider 灰度和这些
+质量指标仍须另行验收，不得以一次成功的测试 run 宣称生产发布完成。
+
 ## 9. 例外管理
 
 例外不是删除规则，字段包括：
@@ -213,6 +234,14 @@ OCR 官方 GitHub Action 会把 rule 输入传给 `ocr review --rule`，并对�
 - 到期提醒和自动失效。
 
 run snapshot 必须记录实际使用的 exception；规则页面可按到期、owner 和风险筛选。
+
+当前实现将例外绑定到一个 published `rule_version_id` 与精确 `rule_key`，支持 tenant
+或 repository 范围及 target branch glob。请求人不能批准自己的例外；只有 approved
+且未到期的记录会在 admission 时移除该来源的 effective rule。例外 ID、来源版本、
+key 与到期时间进入 canonical snapshot 和 `rule_snapshot_exceptions`，因此历史 run
+不受后续到期或撤销影响。路径级例外尚未启用：现有 OCR adapter 将 effective rules
+聚合为一个 catch-all rule，在没有可证明的重叠 glob 语义前，控制面拒绝用 UI 暗示
+路径级豁免已经生效。
 
 ## 10. 发布门禁与 finding 行为
 
@@ -240,6 +269,26 @@ hash(rule_key + semantic_location + normalized_evidence + head_sha_scope)
 
 反馈只作为规则改进证据，不自动修改 published 规则。
 
+当前 GitHub 闭环以 inline finding 内的确定性 marker 为关联键。经过 webhook
+signature 校验的 `reaction` 事件中，👍 记录为 `useful`，👎 记录为
+`false_positive`；创建和删除 reaction 都按 provider reaction ID 幂等处理，并记录
+actor、finding、tenant 和审计事件。其他表情不进入质量指标，反馈也不会自动改变
+merge gate、已发布规则或历史结果。GitLab emoji 与控制台的 resolved/won't-fix
+动作仍需通过同一 feedback contract 接入，不能另建一套不可对账的数据。
+
+反馈控制台当前只展示可以证明的层级：workspace 总量，以及按 repository 聚合的
+finding、active feedback、高风险 finding 和 immutable snapshot 数量。由于 OCR
+当前结构化输出没有提供 originating `rule_key`，UI 明确显示 attribution warning，
+不得把 repository/snapshot 反馈伪装成单条规则的准确率。只有引擎契约携带可信
+rule key，且该 key 能映射到 run snapshot source 后，才允许新增 rule-version 维度。
+
+GitLab 使用官方 `Emoji Hook`（`award`/`revoke`）进入同一 ledger：仅处理
+`awardable_type=Note` 且 note 含确定性 finding marker 的 `thumbsup` / `thumbsdown`，
+分别映射为 useful / false-positive。参考 [GitLab Emoji events](https://docs.gitlab.com/user/project/integrations/webhook_events/#emoji-events)。
+控制台 reviewer 还可将最近 finding 标记为 `resolved` 或 `wont_fix`，也可清除自己
+的处置；该状态以 actor+finding 幂等、记录审计，不覆盖其他人的 reaction，不修改
+原始 AI finding，也不回写既有 merge gate。
+
 ## 12. UI 关键流程
 
 ### 创建与发布
@@ -256,6 +305,33 @@ New rule set
 → Publish/canary
 → Observe feedback
 ```
+
+当前控制面落地的审批链路保持同一组不变量：策略库显示 latest version、状态与
+content SHA；草稿可以提交 1–5 人审批；审批队列从不可变 decision 记录实时聚合
+票数；发起人不可自批且同一 reviewer 只能决定一次；只有达到 quorum 的同一内容
+SHA 才能进入 `approved`，随后显式发布为不可变 `published` 版本。工作台默认展示
+摘要，完整 SHA、说明与决策控件按需展开，避免审批证据和规则详情重复占据页面。
+
+### Test Lab 证据边界
+
+`POST /v1/tenants/{slug}/rule-sets/{id}/versions/{version}/impact-preview`
+是只读预演：读取指定版本与目标仓库当前 active/published bindings，在候选
+precedence 下执行确定性合并，返回 baseline/candidate snapshot SHA、规则 key
+增改删、严重级别构成、匹配 binding 数以及该仓库最近 90 天可用于回放的真实
+run/finding 样本范围。接口不创建 review run、不调用 OCR/LLM、不消费审批，也不向
+GitHub/GitLab 写评论或 check。
+
+因此历史数量只表示 replay envelope，不表示已经完成回放或证明规则质量；UI 必须
+同步展示缺失证据和不确定性。
+
+真实回放使用独立资源 `rule_test_runs` / `rule_test_findings`：规则管理员选择一条已
+完成或 needs-attention 的历史 run，控制面冻结候选版本、active baseline 与精确
+base/head revision，写入 `rule.test.requested` outbox。专用 worker 使用同一 OCR 和
+风险选路能力执行，但类型上不持有 publisher、check 或 lifecycle reporter，因此不能
+向 GitHub/GitLab 写评论、review、check 或 merge gate。结果记录 snapshot SHA、OCR
+版本、selected/deferred path 数、耗时、finding 与错误；broker 不可用时 polling
+recovery 仍能消费 queued task。真实回放仍是规则质量证据，不消费审批，也不能替代
+发布授权。
 
 ### 查看某次 run 生效规则
 

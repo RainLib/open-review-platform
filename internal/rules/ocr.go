@@ -42,9 +42,10 @@ func OCRRuleFileForSnapshot(snapshot Snapshot) (OCRRuleFile, error) {
 		}
 		sections = append(sections, fmt.Sprintf("## %s\n\nSeverity: %s\nEnforcement: %s\nSource version: %s\n\n%s", effective.Key, effective.Severity, effective.Enforcement, effective.SourceVersion, prompt))
 	}
+	attributionContract := "## Finding attribution contract\n\nWhen a finding is directly caused by one or more enterprise rules above, include `rule_references` in the structured finding output. Each entry must contain the exact `rule_key` and `source_version` shown in that rule heading. Omit the field for system-only findings or when no exact rule is responsible. Never guess a key or version.\n\n"
 	return OCRRuleFile{Rules: []OCRRule{{
 		Path:            "**/*",
-		Rule:            "# Enterprise review rules\n\n" + strings.Join(sections, "\n\n---\n\n"),
+		Rule:            "# Enterprise review rules\n\n" + attributionContract + strings.Join(sections, "\n\n---\n\n"),
 		MergeSystemRule: snapshot.MergeSystemRule,
 	}}, Include: append([]string(nil), snapshot.Include...), Exclude: append([]string(nil), snapshot.Exclude...)}, nil
 }

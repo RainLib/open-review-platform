@@ -1,0 +1,15 @@
+# Build only the provider verification worker for local onboarding. The full
+# deployment can continue using the shared core image from Dockerfile.
+FROM golang:1.25.14-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/provider-prober ./cmd/provider-prober
+COPY internal ./internal
+RUN --mount=type=cache,id=open-review-go-build-cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/provider-prober ./cmd/provider-prober
+
+FROM gcr.io/distroless/static-debian12:nonroot
+WORKDIR /app
+COPY --from=build /out/provider-prober /app/provider-prober
+ENTRYPOINT ["/app/provider-prober"]

@@ -1,19 +1,39 @@
-FROM golang:1.25-bookworm AS build
+# Keep the Runner on the same pinned toolchain family as the control-plane
+# image. The floating `1.25-bookworm` tag was observed to build this worker
+# with Go 1.27, which made the exact runtime depend on image-cache timing and
+# produced an unrecoverable GC runtime crash in the local acceptance stack.
+FROM golang:1.25.14-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/runner ./cmd/runner
+RUN --mount=type=cache,id=open-review-go-build-cache,target=/root/.cache/go-build \
+	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/runner ./cmd/runner
+
+FROM node:24-bookworm-slim AS git-build
+ARG GIT_VERSION=2.47.3
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        autoconf build-essential ca-certificates curl gettext libcurl4-gnutls-dev libexpat1-dev libssl-dev xz-utils zlib1g-dev \
+    && curl --fail --location --retry 3 --output /tmp/git.tar.xz \
+        "https://www.kernel.org/pub/software/scm/git/git-${GIT_VERSION}.tar.xz" \
+    && tar --extract --xz --file /tmp/git.tar.xz --directory /tmp \
+    && cd "/tmp/git-${GIT_VERSION}" \
+    && make configure \
+    && ./configure --prefix=/usr/local \
+    && make -j"$(nproc)" all \
+    && make install
 
 FROM node:24-bookworm-slim
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates git \
-    && npm install --global @alibaba-group/open-code-review@1.12.4 \
+    && npm install --global @alibaba-group/open-code-review@1.12.5 \
     && ocr --version \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /out/runner /app/runner
+COPY --from=git-build /usr/local/ /usr/local/
 USER node
 ENTRYPOINT ["/app/runner"]

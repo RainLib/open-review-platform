@@ -1,0 +1,80 @@
+groups:
+  - name: open-review-core-flow
+    rules:
+      - alert: OpenReviewOperationalMetricsUnavailable
+        expr: open_review_operational_metrics_scrape_success == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Open Review cannot sample authoritative workflow metrics
+          runbook: docs/runbooks/review-backlog-recovery.md
+      - alert: OpenReviewAcknowledgementSLOBreach
+        expr: open_review_ack_sla_breaches > 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: At least one acknowledgement has exceeded the five-second target
+          runbook: docs/runbooks/review-backlog-recovery.md
+      - alert: OpenReviewOutboxStuck
+        expr: open_review_outbox_oldest_age_seconds > 60
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: A durable outbox message has remained unpublished for over one minute
+          runbook: docs/runbooks/broker-rebuild-from-outbox.md
+      - alert: OpenReviewReviewBacklogOld
+        expr: open_review_review_queue_oldest_age_seconds > 300
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: The oldest queued review has waited over five minutes
+          runbook: docs/runbooks/review-backlog-recovery.md
+      - alert: OpenReviewExpiredReviewLease
+        expr: open_review_review_leases_expired > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: At least one running review has an expired worker lease
+          runbook: docs/runbooks/review-backlog-recovery.md
+      - alert: OpenReviewWorkerHeartbeatStale
+        expr: open_review_worker_heartbeats_stale > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: The latest heartbeat for at least one worker kind is stale
+          runbook: docs/runbooks/review-backlog-recovery.md
+      - alert: OpenReviewProviderPublicationFailures
+        expr: open_review_publication_failures_last_hour > 5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: Provider publication failures exceed the bounded recovery threshold
+          runbook: docs/runbooks/provider-publication-recovery.md
+      - alert: OpenReviewTerminalFailureRatioHigh
+        expr: open_review_runs_terminal_last_hour >= 5 and open_review_runs_failed_last_hour / open_review_runs_terminal_last_hour > 0.20
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: More than 20 percent of terminal reviews failed in the last hour
+          runbook: docs/runbooks/review-backlog-recovery.md
+      - alert: OpenReviewNotificationBacklogOld
+        expr: open_review_notification_oldest_age_seconds > 300
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: The oldest pending notification has waited over five minutes
+          runbook: docs/runbooks/review-backlog-recovery.md
+      - alert: OpenReviewRabbitMQUnavailable
+        expr: up{job="open-review-rabbitmq"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: RabbitMQ metrics are unavailable
+          runbook: docs/runbooks/broker-rebuild-from-outbox.md
+      - alert: OpenReviewDeadLetterQueueNotEmpty
+        expr: sum(rabbitmq_queue_messages_ready{queue="openreview.review.dlq.v1"}) > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: The Open Review dead-letter queue contains messages
+          runbook: docs/runbooks/broker-rebuild-from-outbox.md

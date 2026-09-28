@@ -1,6 +1,6 @@
 import {
-  forwardDevelopmentRequest,
-  unavailableDevelopmentResponse,
+  forwardControlPlaneRequest,
+  unavailableControlPlaneResponse,
 } from "@/lib/control-plane-proxy";
 
 export const dynamic = "force-dynamic";
@@ -13,12 +13,12 @@ export async function GET(
   const { org, runId } = await context.params;
   const afterRevision =
     new URL(request.url).searchParams.get("afterRevision") ?? "0";
-  const upstream = await forwardDevelopmentRequest(
+  const upstream = await forwardControlPlaneRequest(
     `/v1/tenants/${encodeURIComponent(org)}/runs/${encodeURIComponent(runId)}/events?after_revision=${encodeURIComponent(afterRevision)}`,
     { headers: { Accept: "text/event-stream" }, signal: request.signal },
   );
 
-  if (!upstream) return unavailableDevelopmentResponse();
+  if (!upstream) return unavailableControlPlaneResponse();
   if (!upstream.ok || !upstream.body) {
     return new Response(await upstream.text(), {
       status: upstream.status,

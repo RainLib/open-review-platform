@@ -7,6 +7,10 @@ export function formatTime(value?: string) {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+		// Server components and hydrated client components must render the same
+		// evidence timestamp regardless of the host or browser locale.
+		timeZone: "UTC",
+		timeZoneName: "short",
   }).format(new Date(value));
 }
 

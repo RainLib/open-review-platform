@@ -19,6 +19,7 @@ const (
 // being inferred by the model.
 type ReviewResult struct {
 	Findings           []domain.Finding
+	SuppressedFindings int
 	Gate               MergeGateVerdict
 	Scope              ReviewScope
 	EngineVersion      string
@@ -26,15 +27,38 @@ type ReviewResult struct {
 	RuleSnapshotSHA    string
 	CompilerVersion    string
 	RuleSnapshotStatus string
+	ModelProvider      string
+	Model              string
+	ModelRouteSHA      string
+	ModelRouteOrigin   string
 }
 
 // ReviewScope distinguishes the full PR delta from the subset selected for an
 // intentionally risk-prioritized OCR pass. It is evidence from the runner,
 // not a claim inferred from the model output.
 type ReviewScope struct {
-	Mode          string
-	SelectedPaths []string
-	DeferredFiles int
+	Mode                string
+	SelectedPaths       []string
+	DeferredFiles       int
+	StaticImpactSignals []string
+}
+
+// AnalysisSkipped distinguishes an intentionally empty scope from a model
+// execution that completed without findings. Legacy callers with no retained
+// scope do not carry enough evidence to assert a skipped analysis.
+func (s ReviewScope) AnalysisSkipped() bool {
+	return len(s.SelectedPaths) == 0 && s.DeferredFiles > 0
+}
+
+func (r ReviewResult) CheckSummary() string {
+	if r.Scope.AnalysisSkipped() && len(r.Findings) == 0 {
+		return fmt.Sprintf("AI analysis skipped: all %d changed file(s) were outside the configured review scope. No findings were evaluated by the merge gate.", r.Scope.DeferredFiles)
+	}
+	summary := r.Gate.Summary(r.Findings)
+	if r.SuppressedFindings > 0 {
+		summary += fmt.Sprintf(" %d below-publication-threshold finding(s) are retained in Open Review evidence.", r.SuppressedFindings)
+	}
+	return summary
 }
 
 type ChangedFile struct {
@@ -47,15 +71,17 @@ type ChangedFile struct {
 }
 
 type ReviewContext struct {
-	Title          string
-	URL            string
-	ChangedFiles   []ChangedFile
-	TotalFiles     int
-	TotalAdditions int
-	TotalDeletions int
-	Truncated      bool
-	Warning        string
-	Contract       ChangeContract
+	Title              string
+	URL                string
+	ConsoleReviewURL   string
+	ConsoleCommandsURL string
+	ChangedFiles       []ChangedFile
+	TotalFiles         int
+	TotalAdditions     int
+	TotalDeletions     int
+	Truncated          bool
+	Warning            string
+	Contract           ChangeContract
 }
 
 type LifecycleState string
@@ -64,8 +90,13 @@ const (
 	LifecycleFailed           LifecycleState = "failed"
 	LifecycleTimedOut         LifecycleState = "timed_out"
 	LifecycleContextExhausted LifecycleState = "context_exhausted"
-	LifecycleCancelled        LifecycleState = "cancelled"
-	LifecycleSuperseded       LifecycleState = "superseded"
+	// LifecycleNeedsAttention is distinct from an execution failure: the run
+	// reached a durable state where a human decision is required before a
+	// trustworthy review result can be published. It is still non-passing on
+	// the provider, so a required review check cannot be mistaken for success.
+	LifecycleNeedsAttention LifecycleState = "needs_attention"
+	LifecycleCancelled      LifecycleState = "cancelled"
+	LifecycleSuperseded     LifecycleState = "superseded"
 )
 
 // MarkdownComponent is intentionally small: report builders express semantic
@@ -206,6 +237,14 @@ func RenderMarkdown(document ReportDocument) string {
 }
 
 func StartedReport(job domain.ReviewJob, context ReviewContext, marker string) string {
+	return StartedReportWithMessage(job, context, "", marker)
+}
+
+// StartedReportWithMessage keeps the durable review-state explanation fixed
+// while allowing a workspace's snapshotted lifecycle copy to add the team's
+// own acknowledgement. The configured message never replaces the state or
+// merge-check boundary below it.
+func StartedReportWithMessage(job domain.ReviewJob, context ReviewContext, message, marker string) string {
 	context.Contract = normalizedContract(context.Contract)
 	title := fmt.Sprintf("Open Review · #%d", job.ReviewNumber)
 	if context.Title != "" {
@@ -217,6 +256,10 @@ func StartedReport(job domain.ReviewJob, context ReviewContext, marker string) s
 		Heading{Level: 3, Text: "🚀 Code review started"},
 		Paragraph{Text: fmt.Sprintf("Revision `%s` has been accepted. Open Review is inspecting the change asynchronously; the **Open Review / Analysis** check will carry the merge decision.", shortSHA(job.HeadSHA))},
 	}
+	if message = renderLifecycleMessage(message, job); message != "" {
+		components = append(components, Paragraph{Text: message})
+	}
+	components = append(components, reviewActionLinkComponents(context)...)
 	components = append(components, scopeComponents(job, context)...)
 	components = append(components, Heading{Level: 3, Text: "Task context"})
 	components = append(components, contractQualityComponents(context.Contract)...)
@@ -231,7 +274,43 @@ func StartedReport(job domain.ReviewJob, context ReviewContext, marker string) s
 	return RenderMarkdown(ReportDocument{Components: components, Marker: marker})
 }
 
+// ProgressReportWithMessage replaces the initial acknowledgement with a
+// compact execution update. It intentionally keeps the same marker so one PR
+// or MR status comment evolves instead of creating timeline noise.
+func ProgressReportWithMessage(job domain.ReviewJob, context ReviewContext, message, marker string) string {
+	components := []MarkdownComponent{
+		Heading{Level: 2, Text: "Open Review · In progress"},
+		BadgeRow{Badges: []Badge{{Label: "open review", Value: "code review", Color: "6f5bd3"}, {Label: "status", Value: "analyzing", Color: "1f6feb"}}},
+		Heading{Level: 3, Text: "🔎 Reviewing this revision"},
+		Paragraph{Text: fmt.Sprintf("Open Review is executing the accepted revision `%s`. The **Open Review / Analysis** check remains in progress and will receive the final merge-gate conclusion.", shortSHA(job.HeadSHA))},
+	}
+	if message = renderLifecycleMessage(message, job); message != "" {
+		components = append(components, Paragraph{Text: message})
+	}
+	components = append(components, reviewActionLinkComponents(context)...)
+	components = append(components, scopeComponents(job, context)...)
+	components = append(components, Paragraph{Text: "<sub>This status comment is updated in place when evidence is ready. A newer revision supersedes this run.</sub>"})
+	return RenderMarkdown(ReportDocument{Components: components, Marker: marker})
+}
+
 func CompletedReport(job domain.ReviewJob, context ReviewContext, result ReviewResult, marker string) string {
+	return CompletedReportWithMessage(job, context, result, "", marker)
+}
+
+// CompletedReportWithMessage adds a configured lifecycle message after the
+// canonical verdict. A custom message can therefore never conceal a blocked
+// gate or turn a non-passing result into an approval.
+func CompletedReportWithMessage(job domain.ReviewJob, context ReviewContext, result ReviewResult, message, marker string) string {
+	return CompletedReportWithSummary(job, context, result, domain.DefaultReviewSummaryConfig(), message, marker)
+}
+
+// CompletedReportWithSummary lets an admitted summary snapshot control only
+// optional evidence detail. The top-level gate, scope table, and finding index
+// remain canonical so no configuration can conceal a blocked merge decision.
+func CompletedReportWithSummary(job domain.ReviewJob, context ReviewContext, result ReviewResult, summary domain.ReviewSummaryConfig, message, marker string) string {
+	if !summary.Valid() {
+		summary = domain.DefaultReviewSummaryConfig()
+	}
 	context.Contract = normalizedContract(context.Contract)
 	verdictTitle, verdictText, statusBadge, statusColor := completedVerdict(result)
 	components := []MarkdownComponent{
@@ -245,6 +324,13 @@ func CompletedReport(job domain.ReviewJob, context ReviewContext, result ReviewR
 		Paragraph{Text: verdictText},
 		reviewOverview(job, context, result),
 	}
+	if result.SuppressedFindings > 0 {
+		components = append(components, Paragraph{Text: fmt.Sprintf("%d finding(s) below the publication threshold were not posted to code lines; they remain in the Open Review evidence. The merge gate evaluated all findings.", result.SuppressedFindings)})
+	}
+	if message = renderLifecycleMessage(message, job); message != "" {
+		components = append(components, Paragraph{Text: message})
+	}
+	components = append(components, reviewActionLinkComponents(context)...)
 	if len(result.Findings) > 0 {
 		components = append(components,
 			Heading{Level: 3, Text: "Needs attention"},
@@ -252,15 +338,18 @@ func CompletedReport(job domain.ReviewJob, context ReviewContext, result ReviewR
 			Paragraph{Text: "Detailed analysis, suggested patches, and copyable LLM prompts are attached to the relevant code lines."},
 		)
 	}
-	if changedFiles := changedFilesDetails(context); changedFiles != nil {
-		components = append(components, changedFiles)
+	if summary.Includes("scope") {
+		if changedFiles := changedFilesDetails(context); changedFiles != nil {
+			components = append(components, changedFiles)
+		}
 	}
-	components = append(components,
-		scopeAndRiskDetails(job, context, result),
-		acceptanceAndVerificationDetails(job, context, result),
-		releaseReadinessDetails(context),
-		provenanceDetails(job, context, result),
-	)
+	details := []MarkdownComponent{
+		scopeAndRiskDetails(job, context, result, summary),
+		acceptanceAndVerificationDetails(job, context, result, summary),
+		releaseReadinessDetails(context, summary),
+		provenanceDetails(job, context, result, summary),
+	}
+	components = appendSummaryDetailsWithinBudget(components, summary.MaxCharacters, details)
 	components = append(components,
 		Divider{},
 		Paragraph{Text: "<sub>Need another pass? Comment `@openreview review`. Was this useful? React with 👍 or 👎.</sub>"},
@@ -268,12 +357,36 @@ func CompletedReport(job domain.ReviewJob, context ReviewContext, result ReviewR
 	return RenderMarkdown(ReportDocument{Components: components, Marker: marker})
 }
 
+func appendSummaryDetailsWithinBudget(components []MarkdownComponent, maxCharacters int, details []MarkdownComponent) []MarkdownComponent {
+	used := len([]rune(RenderMarkdown(ReportDocument{Components: components})))
+	for _, detail := range details {
+		if detail == nil {
+			continue
+		}
+		rendered := RenderMarkdown(ReportDocument{Components: []MarkdownComponent{detail}})
+		if maxCharacters > 0 && used+len([]rune(rendered)) > maxCharacters {
+			continue
+		}
+		components = append(components, detail)
+		used += len([]rune(rendered))
+	}
+	return components
+}
+
 func TerminalReport(job domain.ReviewJob, state LifecycleState, marker string) string {
+	return TerminalReportWithMessage(job, state, "", marker)
+}
+
+// TerminalReportWithMessage preserves the reason that provider merge evidence
+// is non-passing, then adds the current run's immutable lifecycle message.
+func TerminalReportWithMessage(job domain.ReviewJob, state LifecycleState, message, marker string) string {
 	title := "⚠️ Review could not complete"
 	body := "The review stopped before a trustworthy result could be published. The merge check remains non-passing; use `@openreview retry` after the underlying issue is resolved."
 	badge := "failed"
 	color := "d1242f"
 	switch state {
+	case LifecycleNeedsAttention:
+		title, body, badge, color = "🧭 Review needs human attention", "Open Review could not safely publish a merge conclusion for this revision. No findings from this run were published; resolve the recorded intervention, then retry the review.", "needs attention", "bf8700"
 	case LifecycleTimedOut:
 		title, body, badge, color = "⏱️ Review timed out", "The review exceeded its configured execution budget before a trustworthy result could be published. No findings were published; adjust the budget or retry after the model service recovers.", "timed out", "bf8700"
 	case LifecycleContextExhausted:
@@ -283,14 +396,20 @@ func TerminalReport(job domain.ReviewJob, state LifecycleState, marker string) s
 	case LifecycleSuperseded:
 		title, body, badge, color = "🔁 Review superseded", "A newer pull-request revision replaced this run. Its partial output was discarded and cannot affect the merge decision.", "superseded", "6e7781"
 	}
-	return RenderMarkdown(ReportDocument{Components: []MarkdownComponent{
+	components := []MarkdownComponent{
 		Heading{Level: 2, Text: "Open Review"},
 		BadgeRow{Badges: []Badge{{Label: "open review", Value: "code review", Color: "6f5bd3"}, {Label: "status", Value: badge, Color: color}}},
 		Heading{Level: 3, Text: title},
 		Paragraph{Text: body},
+	}
+	if message = renderLifecycleMessage(message, job); message != "" {
+		components = append(components, Paragraph{Text: message})
+	}
+	components = append(components,
 		Heading{Level: 3, Text: "Provenance"},
 		BulletList{Items: []string{fmt.Sprintf("Review job: `%s`", job.ID), fmt.Sprintf("Head commit: `%s`", shortSHA(job.HeadSHA))}},
-	}, Marker: marker})
+	)
+	return RenderMarkdown(ReportDocument{Components: components, Marker: marker})
 }
 
 func FindingReport(job domain.ReviewJob, finding domain.Finding, marker string) string {
@@ -366,6 +485,24 @@ func changedFilesDetails(context ReviewContext) MarkdownComponent {
 	}}
 }
 
+// reviewActionLinkComponents keeps high-value provider-comment navigation
+// visible without duplicating detailed findings. The URLs are generated from
+// deployment configuration; render-time validation remains defensive so a
+// malformed test or legacy caller cannot inject provider markdown.
+func reviewActionLinkComponents(context ReviewContext) []MarkdownComponent {
+	links := make([]string, 0, 2)
+	if link := safeConsoleLink(context.ConsoleReviewURL); link != "" {
+		links = append(links, fmt.Sprintf("[Open this review in Open Review](%s)", link))
+	}
+	if link := safeConsoleLink(context.ConsoleCommandsURL); link != "" {
+		links = append(links, fmt.Sprintf("[Review commands & shortcuts](%s)", link))
+	}
+	if len(links) == 0 {
+		return nil
+	}
+	return []MarkdownComponent{Paragraph{Text: "**Open Review:** " + strings.Join(links, " · ")}}
+}
+
 func reviewOverview(job domain.ReviewJob, context ReviewContext, result ReviewResult) MarkdownComponent {
 	gate := "Passed"
 	switch {
@@ -380,6 +517,9 @@ func reviewOverview(job domain.ReviewJob, context ReviewContext, result ReviewRe
 	if context.TotalFiles > 0 {
 		scope = fmt.Sprintf("%d files · +%d / -%d", context.TotalFiles, context.TotalAdditions, context.TotalDeletions)
 	}
+	if result.Scope.AnalysisSkipped() {
+		scope = fmt.Sprintf("0 reviewed · %d deferred", result.Scope.DeferredFiles)
+	}
 	if len(result.Scope.SelectedPaths) > 0 {
 		mode := result.Scope.Mode
 		if mode == "" {
@@ -391,34 +531,52 @@ func reviewOverview(job domain.ReviewJob, context ReviewContext, result ReviewRe
 			scope = fmt.Sprintf("%d prioritized paths · %s", len(result.Scope.SelectedPaths), mode)
 		}
 	}
+	findingCount := findingCountSummary(result.Findings)
+	if result.SuppressedFindings > 0 {
+		findingCount += fmt.Sprintf(" · %d retained below publication floor", result.SuppressedFindings)
+	}
 	return Table{
 		Headers: []string{"Gate", "Findings", "Scope", "Revision"},
-		Rows:    [][]string{{gate, findingCountSummary(result.Findings), scope, codeSpan(shortSHA(job.HeadSHA))}},
+		Rows:    [][]string{{gate, findingCount, scope, codeSpan(shortSHA(job.HeadSHA))}},
 	}
 }
 
-func scopeAndRiskDetails(job domain.ReviewJob, context ReviewContext, result ReviewResult) MarkdownComponent {
+func scopeAndRiskDetails(job domain.ReviewJob, context ReviewContext, result ReviewResult, summary domain.ReviewSummaryConfig) MarkdownComponent {
 	components := make([]MarkdownComponent, 0, 9)
-	if evidence := declaredEvidence(context.Contract, ContractOutcome); evidence != nil {
-		components = append(components,
-			Heading{Level: 4, Text: "Outcome"},
-			Paragraph{Text: "The author-declared outcome is context only; the merge decision is the reviewer verdict above."},
-			evidence,
-		)
+	if summary.Includes("outcome") {
+		if evidence := declaredSummaryEvidence(context.Contract, ContractOutcome, summary.IncludeChangeContract); evidence != nil {
+			components = append(components,
+				Heading{Level: 4, Text: "Outcome"},
+				Paragraph{Text: "The author-declared outcome is context only; the merge decision is the reviewer verdict above."},
+				evidence,
+			)
+		} else {
+			components = append(components, Heading{Level: 4, Text: "Outcome"}, Paragraph{Text: "No author-declared outcome was supplied. The merge decision is the reviewer verdict above."})
+		}
 	}
-	components = append(components, Heading{Level: 4, Text: "Scope"})
-	components = append(components, scopeSummaryComponents(job, context)...)
-	components = append(components, reviewScopeComponents(context, result)...)
-	components = appendDeclaredEvidence(components, context.Contract, ContractScope)
-	components = append(components,
-		Heading{Level: 4, Text: "Risk"},
-		BulletList{Items: riskItems(context, result)},
-	)
-	components = appendDeclaredEvidence(components, context.Contract, ContractRisk)
+	if summary.Includes("scope") {
+		components = append(components, Heading{Level: 4, Text: "Scope"})
+		components = append(components, scopeSummaryComponents(job, context)...)
+		components = append(components, reviewScopeComponents(context, result)...)
+		components = appendDeclaredSummaryEvidence(components, context.Contract, ContractScope, summary.IncludeChangeContract)
+	}
+	if summary.Includes("risk") {
+		components = append(components,
+			Heading{Level: 4, Text: "Risk"},
+			BulletList{Items: riskItems(context, result)},
+		)
+		components = appendDeclaredSummaryEvidence(components, context.Contract, ContractRisk, summary.IncludeChangeContract)
+	}
+	if len(components) == 0 {
+		return nil
+	}
 	return Details{Summary: "Scope & risk", Components: components}
 }
 
 func reviewScopeComponents(context ReviewContext, result ReviewResult) []MarkdownComponent {
+	if result.Scope.AnalysisSkipped() {
+		return []MarkdownComponent{Paragraph{Text: fmt.Sprintf("**AI analysis: skipped.** All %d changed file(s) were outside the configured review scope. Adjust review mode or path filters to include them.", result.Scope.DeferredFiles)}}
+	}
 	if len(result.Scope.SelectedPaths) == 0 {
 		return nil
 	}
@@ -429,6 +587,9 @@ func reviewScopeComponents(context ReviewContext, result ReviewResult) []Markdow
 	items := []string{fmt.Sprintf("**Review selection:** %d priority path(s) selected by `%s` mode.", len(result.Scope.SelectedPaths), mode)}
 	if result.Scope.DeferredFiles > 0 {
 		items = append(items, fmt.Sprintf("**Deferred:** %d changed path(s) were intentionally not sent to this OCR pass.", result.Scope.DeferredFiles))
+	}
+	if len(result.Scope.StaticImpactSignals) > 0 {
+		items = append(items, "**Static impact signals:** "+strings.Join(result.Scope.StaticImpactSignals, "; ")+". Runtime dependency reachability was not measured.")
 	}
 	for _, selected := range result.Scope.SelectedPaths[:min(len(result.Scope.SelectedPaths), maxRenderedFiles)] {
 		items = append(items, "Reviewed boundary: "+reviewScopePath(context, selected))
@@ -453,69 +614,99 @@ func reviewScopePath(context ReviewContext, selected string) string {
 	return path
 }
 
-func acceptanceAndVerificationDetails(job domain.ReviewJob, context ReviewContext, result ReviewResult) MarkdownComponent {
-	components := []MarkdownComponent{Heading{Level: 4, Text: "Acceptance mapping"}}
-	if evidence := declaredEvidence(context.Contract, ContractAcceptanceMapping); evidence != nil {
-		components = append(components,
-			Paragraph{Text: "Acceptance mappings below were declared by the author. This run did not execute the referenced tests or independently prove the mappings."},
-			evidence,
-		)
-	} else {
-		components = append(components, Paragraph{Text: "No acceptance-criteria evidence was supplied. This result does not prove product acceptance."})
+func acceptanceAndVerificationDetails(job domain.ReviewJob, context ReviewContext, result ReviewResult, summary domain.ReviewSummaryConfig) MarkdownComponent {
+	components := make([]MarkdownComponent, 0, 9)
+	if summary.Includes("acceptance") {
+		components = append(components, Heading{Level: 4, Text: "Acceptance mapping"})
+		if evidence := declaredSummaryEvidence(context.Contract, ContractAcceptanceMapping, summary.IncludeChangeContract); evidence != nil {
+			components = append(components,
+				Paragraph{Text: "Acceptance mappings below were declared by the author. This run did not execute the referenced tests or independently prove the mappings."},
+				evidence,
+			)
+		} else {
+			components = append(components, Paragraph{Text: "No acceptance-criteria evidence was supplied. This result does not prove product acceptance."})
+		}
 	}
-	components = append(components,
-		Heading{Level: 4, Text: "Invariants"},
-		BulletList{Items: []string{
-			fmt.Sprintf("**Exact revision reviewed:** `%s` — verified.", shortSHA(job.HeadSHA)),
-			"**A newer revision cannot reuse this result:** enforced by run supersession.",
-			"**Repository content cannot change governance policy:** enforcement uses the immutable rule snapshot resolved at admission.",
-		}},
-	)
-	components = appendDeclaredEvidence(components, context.Contract, ContractInvariants)
-	components = append(components,
-		Heading{Level: 4, Text: "Verification"},
-		BulletList{Items: verificationItems(result)},
-	)
-	components = appendDeclaredEvidence(components, context.Contract, ContractVerification)
+	if summary.Includes("invariants") {
+		components = append(components,
+			Heading{Level: 4, Text: "Invariants"},
+			BulletList{Items: []string{
+				fmt.Sprintf("**Exact revision reviewed:** `%s` — verified.", shortSHA(job.HeadSHA)),
+				"**A newer revision cannot reuse this result:** enforced by run supersession.",
+				"**Repository content cannot change governance policy:** enforcement uses the immutable rule snapshot resolved at admission.",
+			}},
+		)
+		components = appendDeclaredSummaryEvidence(components, context.Contract, ContractInvariants, summary.IncludeChangeContract)
+	}
+	if summary.Includes("verification") {
+		components = append(components,
+			Heading{Level: 4, Text: "Verification"},
+			BulletList{Items: verificationItems(result)},
+		)
+		components = appendDeclaredSummaryEvidence(components, context.Contract, ContractVerification, summary.IncludeVerificationEvidence)
+	}
+	if len(components) == 0 {
+		return nil
+	}
 	return Details{Summary: "Acceptance & verification", Components: components}
 }
 
-func releaseReadinessDetails(context ReviewContext) MarkdownComponent {
-	components := []MarkdownComponent{Heading{Level: 4, Text: "Rollout"}}
-	if evidence := declaredEvidence(context.Contract, ContractRollout); evidence != nil {
-		components = append(components, Paragraph{Text: "The rollout plan is author-declared and was not executed by this review."}, evidence)
-	} else {
-		components = append(components, Paragraph{Text: "Not declared. This review did not deploy the change or approve a traffic rollout."})
+func releaseReadinessDetails(context ReviewContext, summary domain.ReviewSummaryConfig) MarkdownComponent {
+	components := make([]MarkdownComponent, 0, 6)
+	if summary.Includes("rollout") {
+		components = append(components, Heading{Level: 4, Text: "Rollout"})
+		if evidence := declaredSummaryEvidence(context.Contract, ContractRollout, summary.IncludeChangeContract); evidence != nil {
+			components = append(components, Paragraph{Text: "The rollout plan is author-declared and was not executed by this review."}, evidence)
+		} else {
+			components = append(components, Paragraph{Text: "Not declared. This review did not deploy the change or approve a traffic rollout."})
+		}
 	}
-	components = append(components, Heading{Level: 4, Text: "Rollback"})
-	if evidence := declaredEvidence(context.Contract, ContractRollback); evidence != nil {
-		components = append(components, Paragraph{Text: "The rollback plan is author-declared and was not exercised by this review."}, evidence)
-	} else {
-		components = append(components, Paragraph{Text: "No rollback owner or data-recovery plan was supplied. Link an approved procedure before deploying changes that mutate data or infrastructure."})
+	if summary.Includes("rollback") {
+		components = append(components, Heading{Level: 4, Text: "Rollback"})
+		if evidence := declaredSummaryEvidence(context.Contract, ContractRollback, summary.IncludeChangeContract); evidence != nil {
+			components = append(components, Paragraph{Text: "The rollback plan is author-declared and was not exercised by this review."}, evidence)
+		} else {
+			components = append(components, Paragraph{Text: "No rollback owner or data-recovery plan was supplied. Link an approved procedure before deploying changes that mutate data or infrastructure."})
+		}
+	}
+	if len(components) == 0 {
+		return nil
 	}
 	return Details{Summary: "Release readiness", Components: components}
 }
 
-func provenanceDetails(job domain.ReviewJob, context ReviewContext, result ReviewResult) MarkdownComponent {
+func provenanceDetails(job domain.ReviewJob, context ReviewContext, result ReviewResult, summary domain.ReviewSummaryConfig) MarkdownComponent {
+	if !summary.Includes("provenance") {
+		return nil
+	}
 	components := []MarkdownComponent{BulletList{Items: provenanceItems(job, result)}}
-	components = appendDeclaredEvidence(components, context.Contract, ContractProvenance)
+	components = appendDeclaredSummaryEvidence(components, context.Contract, ContractProvenance, summary.IncludeChangeContract)
 	return Details{Summary: "Provenance", Components: components}
 }
 
 func completedVerdict(result ReviewResult) (title, body, badge, color string) {
 	if result.Gate.Conclusion == CheckFailure {
-		return "⛔ Merge blocked", fmt.Sprintf("%d finding(s) meet the `%s` blocking threshold. Review the inline findings before merging.", result.Gate.Blocking, result.Gate.Threshold), "blocked", "d1242f"
+		return "⛔ Review gate failed", fmt.Sprintf("%d finding(s) meet the `%s` blocking threshold. Review the inline findings. Merging is blocked only when the provider's merge policy requires this failing result.", result.Gate.Blocking, result.Gate.Threshold), "failed", "d1242f"
+	}
+	if result.Scope.AnalysisSkipped() && len(result.Findings) == 0 {
+		return "⏭️ AI analysis skipped", result.CheckSummary() + " This does not establish that the changed code is free of risk.", "no analysis", "6e7781"
 	}
 	if len(result.Findings) > 0 {
-		return "⚠️ Review completed with recommendations", fmt.Sprintf("%s None meet the `%s` blocking threshold.", ResultSummary(result.Findings), result.Gate.Threshold), "passed with findings", "bf8700"
+		return "✅ Review complete — recommendations attached", fmt.Sprintf("%s The configured merge gate passed: none meet the `%s` blocking threshold.", ResultSummary(result.Findings), result.Gate.Threshold), "passed with findings", "bf8700"
 	}
-	return "✅ Review passed", "AI analysis completed: no actionable risks were detected at the configured threshold.", "passed", "2da44e"
+	if result.SuppressedFindings > 0 {
+		return "✅ Review complete — no published findings", fmt.Sprintf("%d lower-severity finding(s) were retained in Open Review evidence but not posted to code lines. The configured merge gate passed for this revision.", result.SuppressedFindings), "passed", "2da44e"
+	}
+	return "🎉 Review passed", "AI analysis is complete: no actionable risks were detected at the configured threshold, and the configured merge gate passed for this revision.", "passed", "2da44e"
 }
 
 func riskItems(context ReviewContext, result ReviewResult) []string {
 	blastRadius := "Changed-file metadata was unavailable."
 	if context.TotalFiles > 0 {
 		blastRadius = fmt.Sprintf("Blast radius starts with %d changed file(s); runtime dependencies were not measured by this static review.", context.TotalFiles)
+	}
+	if len(result.Scope.SelectedPaths) > 0 && len(result.Scope.StaticImpactSignals) > 0 {
+		blastRadius = fmt.Sprintf("%d prioritized path(s) carry static impact signal(s): %s. Runtime dependencies were not measured by this static review.", len(result.Scope.SelectedPaths), strings.Join(result.Scope.StaticImpactSignals, "; "))
 	}
 	return []string{
 		fmt.Sprintf("**Highest observed severity:** `%s`.", highestSeverity(result.Findings)),
@@ -526,8 +717,15 @@ func riskItems(context ReviewContext, result ReviewResult) []string {
 }
 
 func verificationItems(result ReviewResult) []string {
+	analysis := fmt.Sprintf("AI/static review: **completed** with %d actionable finding(s).", len(result.Findings))
+	if result.SuppressedFindings > 0 {
+		analysis = fmt.Sprintf("AI/static review: **completed** with %d published and %d retained below the publication threshold.", len(result.Findings), result.SuppressedFindings)
+	}
+	if result.Scope.AnalysisSkipped() && len(result.Findings) == 0 {
+		analysis = "AI/static review: **not run** — all changed files were outside the configured review scope."
+	}
 	return []string{
-		fmt.Sprintf("AI/static review: **completed** with %d actionable finding(s).", len(result.Findings)),
+		analysis,
 		"Configured merge policy: **evaluated**.",
 		"Build, unit/integration tests, security scanners, performance, UI, and migration execution: **not supplied to this run**.",
 	}
@@ -549,6 +747,11 @@ func provenanceItems(job domain.ReviewJob, result ReviewResult) []string {
 		items = append(items, "Rule snapshot provenance: unavailable for this report; no claim about the active binding is made.")
 	} else {
 		items = append(items, "Rule snapshot: default engine configuration (no published binding resolved).")
+	}
+	if result.ModelRouteSHA != "" {
+		items = append(items, fmt.Sprintf("Model route: `%s/%s` (`%s`, %s)", result.ModelProvider, result.Model, shortSHA(result.ModelRouteSHA), result.ModelRouteOrigin))
+	} else {
+		items = append(items, "Model route: deployment default (no tenant route retained).")
 	}
 	return items
 }
@@ -739,9 +942,52 @@ func appendDeclaredEvidence(components []MarkdownComponent, contract ChangeContr
 	return components
 }
 
+func declaredSummaryEvidence(contract ChangeContract, section ContractSection, enabled bool) MarkdownComponent {
+	if !enabled {
+		return nil
+	}
+	return declaredEvidence(contract, section)
+}
+
+func appendDeclaredSummaryEvidence(components []MarkdownComponent, contract ChangeContract, section ContractSection, enabled bool) []MarkdownComponent {
+	if evidence := declaredSummaryEvidence(contract, section, enabled); evidence != nil {
+		components = append(components, evidence)
+	}
+	return components
+}
+
 func safeHeading(value string) string {
 	value = strings.NewReplacer("\r", " ", "\n", " ", "#", "\\#", "[", "\\[", "]", "\\]", "*", "\\*", "_", "\\_").Replace(value)
 	return strings.TrimSpace(value)
+}
+
+func renderLifecycleMessage(template string, job domain.ReviewJob) string {
+	template = strings.TrimSpace(template)
+	if template == "" {
+		return ""
+	}
+	// Newly saved templates reject provider comment markers. Escaping markup here
+	// also protects legacy snapshots that predate that schema validation.
+	template = safeLifecycleTemplate(template)
+	message := strings.NewReplacer(
+		"{{repository}}", safeLifecycleValue(job.Repository),
+		"{{review_number}}", fmt.Sprintf("%d", job.ReviewNumber),
+		"{{head_sha}}", safeLifecycleValue(job.HeadSHA),
+		"{{run_url}}", "Run evidence is available in the Open Review console.",
+	).Replace(template)
+	runes := []rune(message)
+	if len(runes) > 2000 {
+		return string(runes[:1999]) + "…"
+	}
+	return message
+}
+
+func safeLifecycleValue(value string) string {
+	return safeLifecycleTemplate(safeHeading(value))
+}
+
+func safeLifecycleTemplate(value string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(value)
 }
 
 func codeSpan(value string) string {
@@ -808,6 +1054,14 @@ func codeFence(content string) string {
 func safeProviderLink(value string) string {
 	parsed, err := url.Parse(strings.TrimSpace(value))
 	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return ""
+	}
+	return parsed.String()
+}
+
+func safeConsoleLink(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return ""
 	}
 	return parsed.String()

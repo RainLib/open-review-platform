@@ -2,11 +2,13 @@ package runner
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,6 +34,51 @@ type Checkout struct {
 	GitBinary   string
 	GitHubToken string
 	GitLabToken string
+}
+
+// maxGitCommandOutputBytes bounds diagnostics emitted by an untrusted Git
+// server or a local transport. Clone/fetch output is never part of review
+// input, and the SHA-producing commands are expected to be only a few bytes.
+// A hard cap keeps a malformed endpoint from exhausting the runner process.
+const maxGitCommandOutputBytes = 64 * 1024
+
+// boundedOutput intentionally reports every write as accepted so os/exec can
+// drain a child process even after the diagnostic budget is exhausted. stdout
+// and stderr can be copied concurrently, therefore the buffer is protected.
+type boundedOutput struct {
+	mu        sync.Mutex
+	value     []byte
+	limit     int
+	truncated bool
+}
+
+func newBoundedOutput(limit int) *boundedOutput {
+	return &boundedOutput{limit: limit}
+}
+
+func (output *boundedOutput) Write(value []byte) (int, error) {
+	originalLength := len(value)
+	output.mu.Lock()
+	defer output.mu.Unlock()
+
+	remaining := output.limit - len(output.value)
+	if remaining <= 0 {
+		output.truncated = output.truncated || originalLength > 0
+		return originalLength, nil
+	}
+	if len(value) > remaining {
+		output.value = append(output.value, value[:remaining]...)
+		output.truncated = true
+		return originalLength, nil
+	}
+	output.value = append(output.value, value...)
+	return originalLength, nil
+}
+
+func (output *boundedOutput) bytes() ([]byte, bool) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return append([]byte(nil), output.value...), output.truncated
 }
 
 func (c Checkout) Prepare(ctx context.Context, job domain.ReviewJob) (*Workspace, error) {
@@ -74,7 +121,19 @@ func (c Checkout) Prepare(ctx context.Context, job domain.ReviewJob) (*Workspace
 	if err := c.ensureMergeBase(ctx, directory, token, strings.TrimSpace(baseSHA), job.HeadSHA, job.BaseRef); err != nil {
 		return fail(err)
 	}
-	return &Workspace{Path: directory, BaseSHA: strings.TrimSpace(baseSHA), cleanup: func() error { return os.RemoveAll(directory) }}, nil
+	mergeBase, err := c.gitOutput(ctx, directory, token, "merge-base", strings.TrimSpace(baseSHA), job.HeadSHA)
+	if err != nil {
+		return fail(fmt.Errorf("resolve review diff base: %w", err))
+	}
+	mergeBase = strings.TrimSpace(mergeBase)
+	if mergeBase == "" {
+		return fail(fmt.Errorf("resolve review diff base: git returned an empty merge base"))
+	}
+	// Provider pull-request diffs use three-dot semantics. Downstream risk
+	// planning and OCR compare this common ancestor with the head commit so a
+	// base branch that advanced after the feature branched cannot introduce
+	// unrelated, base-only files into the review.
+	return &Workspace{Path: directory, BaseSHA: mergeBase, cleanup: func() error { return os.RemoveAll(directory) }}, nil
 }
 
 // GitHub webhooks commonly carry an SSH clone URL. Installation tokens only
@@ -135,28 +194,74 @@ func (c Checkout) fetchHistory(ctx context.Context, directory, token, option, ba
 }
 
 func (c Checkout) git(ctx context.Context, directory, token string, args ...string) error {
-	_, err := c.gitOutput(ctx, directory, token, args...)
+	_, err := c.runGit(ctx, directory, token, false, args...)
 	return err
 }
 
 func (c Checkout) gitOutput(ctx context.Context, directory, token string, args ...string) (string, error) {
+	return c.runGit(ctx, directory, token, true, args...)
+}
+
+func (c Checkout) runGit(ctx context.Context, directory, token string, captureStdout bool, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, c.gitBinary(), args...)
 	configureGitProcessGroup(command)
 	if directory != "" {
 		command.Dir = directory
 	}
-	if token != "" {
-		command.Env = append(os.Environ(),
+	command.Env = gitEnvironment(token)
+	output := newBoundedOutput(maxGitCommandOutputBytes)
+	// Clone/fetch/checkout do not need stdout. Leaving it disconnected avoids
+	// retaining potentially large progress output while still retaining a
+	// bounded stderr diagnostic should the command fail.
+	if captureStdout {
+		command.Stdout = output
+	}
+	command.Stderr = output
+	err := command.Run()
+	value, truncated := output.bytes()
+	if err != nil {
+		suffix := ""
+		if truncated {
+			suffix = fmt.Sprintf(" [diagnostics capped at %d bytes]", maxGitCommandOutputBytes)
+		}
+		return "", fmt.Errorf("git %s: %w: %s%s", strings.Join(args[:min(len(args), 2)], " "), err, trim(value), suffix)
+	}
+	if captureStdout && truncated {
+		return "", fmt.Errorf("git %s: output exceeded %d-byte safety limit", strings.Join(args[:min(len(args), 2)], " "), maxGitCommandOutputBytes)
+	}
+	return string(value), nil
+}
+
+// gitEnvironment makes provider authentication deterministic for unattended
+// runners. A failed or expired provider token must produce a bounded Git
+// error, not wait for an interactive username/password prompt until the
+// review checkout timeout expires. The explicit empty credential helper also
+// prevents a host-level helper from reaching outside the installation-token
+// boundary.
+func gitEnvironment(token string) []string {
+	environment := append([]string{}, os.Environ()...)
+	environment = append(environment,
+		"GIT_TERMINAL_PROMPT=0",
+		"GCM_INTERACTIVE=Never",
+	)
+	if token == "" {
+		return append(environment,
 			"GIT_CONFIG_COUNT=1",
-			"GIT_CONFIG_KEY_0=http.extraHeader",
-			"GIT_CONFIG_VALUE_0=Authorization: Bearer "+token,
+			"GIT_CONFIG_KEY_0=credential.helper",
+			"GIT_CONFIG_VALUE_0=",
 		)
 	}
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args[:min(len(args), 2)], " "), err, trim(output))
-	}
-	return string(output), nil
+	return append(environment,
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=credential.helper",
+		"GIT_CONFIG_VALUE_0=",
+		"GIT_CONFIG_KEY_1=http.extraHeader",
+		// GitHub's smart-HTTP Git endpoints authenticate installation tokens as
+		// HTTP Basic credentials. The REST API accepts Bearer tokens, but using
+		// that form for clone/fetch causes GitHub to fall back to an interactive
+		// username prompt after rejecting the request.
+		"GIT_CONFIG_VALUE_1=Authorization: Basic "+base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token)),
+	)
 }
 
 // Git can spawn SSH transport children. Keep the command in its own process

@@ -44,6 +44,9 @@ const stageLabels: Record<RunState, string> = {
   needs_attention: "Needs attention",
 };
 
+const reconnectDelay = (attempt: number) =>
+  Math.min(5_000, 500 * 2 ** Math.min(attempt, 4));
+
 function stateFromEvent(event: RunEvent): RunState | undefined {
   const candidate = event.event_type.replace(/^run\./, "");
   return states.has(candidate as RunState)
@@ -88,19 +91,54 @@ export function RunJourney({
     "connecting" | "live" | "reconnecting" | "static"
   >(streamEnabled ? "connecting" : "static");
   const latestRevision = useRef(initialRevision);
+  const reconnectAttempts = useRef(0);
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
+
+  // A route refresh can deliver a newer durable snapshot while this client
+  // component remains mounted. Merge it only when it moves the cursor forward:
+  // a delayed server render must never roll the live journey back.
+  useEffect(() => {
+    if (initialRevision <= latestRevision.current) return;
+
+    latestRevision.current = initialRevision;
+    setRevision(initialRevision);
+    setState(initialState);
+    setEvents((current) => {
+      const eventsByID = new Map(
+        [...current, ...initialEvents].map((event) => [event.id, event]),
+      );
+      return [...eventsByID.values()]
+        .sort((left, right) => left.revision - right.revision)
+        .slice(-12);
+    });
+  }, [initialEvents, initialRevision, initialState]);
 
   useEffect(() => {
     if (!streamEnabled) return;
 
+    let closed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
     const eventSource = new EventSource(
       `/api/tenants/${encodeURIComponent(org)}/runs/${encodeURIComponent(runID)}/events?afterRevision=${latestRevision.current}`,
     );
+    const scheduleReconnect = () => {
+      eventSource.close();
+      if (closed) return;
+
+      const delay = reconnectDelay(reconnectAttempts.current);
+      reconnectAttempts.current += 1;
+      setConnection("reconnecting");
+      reconnectTimer = setTimeout(() => {
+        if (!closed) setConnectionEpoch((current) => current + 1);
+      }, delay);
+    };
     const onTransition = (message: Event) => {
       try {
         const event = JSON.parse(
           (message as MessageEvent<string>).data,
         ) as RunEvent;
-        if (event.revision < latestRevision.current) return;
+        if (event.revision <= latestRevision.current) return;
         latestRevision.current = Math.max(
           latestRevision.current,
           event.revision,
@@ -115,15 +153,22 @@ export function RunJourney({
         if (nextState) setState(nextState);
         setConnection("live");
       } catch {
-        setConnection("reconnecting");
+        scheduleReconnect();
       }
     };
 
     eventSource.addEventListener("transition", onTransition);
-    eventSource.onopen = () => setConnection("live");
-    eventSource.onerror = () => setConnection("reconnecting");
-    return () => eventSource.close();
-  }, [org, runID, streamEnabled]);
+    eventSource.onopen = () => {
+      reconnectAttempts.current = 0;
+      setConnection("live");
+    };
+    eventSource.onerror = scheduleReconnect;
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      eventSource.close();
+    };
+  }, [connectionEpoch, org, runID, streamEnabled]);
 
   const activeIndex = stageOrder.indexOf(state);
   const isTerminal = [
@@ -140,27 +185,27 @@ export function RunJourney({
 
   return (
     <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.8fr)]">
-      <div className="overflow-hidden rounded-[24px] border border-white/[0.075] bg-console-surface">
-        <div className="flex flex-col gap-3 border-b border-white/[0.075] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="overflow-hidden rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
+        <div className="flex flex-col gap-3 border-b border-[var(--ls-line)] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-medium text-zinc-100">
+            <p className="text-sm font-semibold text-[var(--ls-text)]">
               Execution journey
             </p>
-            <p className="mt-1 text-xs text-zinc-500">
+            <p className="mt-1 text-xs leading-5 text-[var(--ls-text-tertiary)]">
               Only durable stages and verified signals are shown. Private model
               reasoning is never displayed.
             </p>
           </div>
           <span
             aria-live="polite"
-            className="flex items-center gap-1.5 text-xs text-zinc-500"
+            className="flex items-center gap-1.5 text-xs text-[var(--ls-text-tertiary)]"
           >
             {connection === "live" ? (
-              <Radio className="size-3.5 text-emerald-300" />
+              <Radio className="size-3.5 text-[var(--ls-success)]" />
             ) : connection === "reconnecting" ? (
-              <RotateCw className="size-3.5 text-amber-300" />
+              <RotateCw className="size-3.5 text-[var(--ls-warning)]" />
             ) : (
-              <Activity className="size-3.5 text-zinc-500" />
+              <Activity className="size-3.5 text-[var(--ls-text-tertiary)]" />
             )}
             {connection === "live"
               ? "Live updates"
@@ -182,16 +227,16 @@ export function RunJourney({
                 key={stage}
               >
                 {index !== stageOrder.length - 1 ? (
-                  <span className="absolute left-[11px] top-6 h-[calc(100%-10px)] w-px bg-white/[0.09] sm:left-7 sm:top-[11px] sm:h-px sm:w-[calc(100%-16px)] lg:left-[calc(50%+11px)] lg:w-[calc(100%-22px)]" />
+                  <span className="absolute left-[11px] top-6 h-[calc(100%-10px)] w-px bg-[var(--ls-line)] sm:left-7 sm:top-[11px] sm:h-px sm:w-[calc(100%-16px)] lg:left-[calc(50%+11px)] lg:w-[calc(100%-22px)]" />
                 ) : null}
                 <span
                   className={cn(
                     "relative z-[1] grid size-[23px] shrink-0 place-items-center rounded-full border",
                     complete
-                      ? "border-emerald-300/50 bg-emerald-300 text-console-on-success"
+                      ? "border-[var(--ls-success)] bg-[var(--ls-success)] text-white"
                       : current
-                        ? "border-cyan-300/50 bg-cyan-300/15 text-cyan-200 shadow-console-stage-current"
-                        : "border-white/10 bg-console-inset text-zinc-600",
+                        ? "border-[var(--ls-accent)] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)] shadow-[0_0_0_4px_color-mix(in_srgb,var(--ls-accent)_12%,transparent)]"
+                        : "border-[var(--ls-line-strong)] bg-[var(--ls-surface-muted)] text-[var(--ls-text-tertiary)]",
                   )}
                 >
                   {complete ? (
@@ -206,10 +251,10 @@ export function RunJourney({
                   className={cn(
                     "text-xs lg:mt-3 lg:block lg:w-full lg:truncate lg:text-center",
                     current
-                      ? "font-medium text-zinc-100"
+                      ? "font-medium text-[var(--ls-text)]"
                       : complete
-                        ? "text-emerald-200/80"
-                        : "text-zinc-500",
+                        ? "text-[var(--ls-success-text)]"
+                        : "text-[var(--ls-text-tertiary)]",
                   )}
                   title={`${stageLabels[stage]} (${displayRunState(stage)})`}
                 >
@@ -220,38 +265,38 @@ export function RunJourney({
           })}
         </ol>
         {state === "failed" || state === "needs_attention" ? (
-          <div className="mx-5 mb-5 flex gap-3 rounded-xl border border-amber-300/15 bg-amber-300/[0.05] p-3 text-xs leading-5 text-amber-100/75">
-            <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-300" />
+          <div className="mx-5 mb-5 flex gap-3 rounded-[12px] border border-[color:color-mix(in_srgb,var(--ls-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ls-warning)_8%,transparent)] p-3 text-xs leading-5 text-[var(--ls-warning-text)]">
+            <ShieldAlert className="mt-0.5 size-4 shrink-0 text-[var(--ls-warning)]" />
             This run requires a human decision. Inspect its event evidence
             before retrying or changing policy.
           </div>
         ) : null}
       </div>
 
-      <div className="rounded-[24px] border border-white/[0.075] bg-console-surface p-5">
+      <div className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)]">
         <div className="flex items-center justify-between">
-          <p className="text-sm font-medium text-zinc-100">Verified signals</p>
-          <span className="font-mono text-xs text-zinc-500">r{revision}</span>
+          <p className="text-sm font-semibold text-[var(--ls-text)]">Verified signals</p>
+          <span className="font-mono text-xs text-[var(--ls-text-tertiary)]">r{revision}</span>
         </div>
-        <div className="mt-4 space-y-0 divide-y divide-white/[0.06]">
+        <div className="mt-4 space-y-0 divide-y divide-[var(--ls-line)]">
           {orderedEvents.length === 0 ? (
-            <p className="py-8 text-center text-sm leading-6 text-zinc-500">
+            <p className="py-8 text-center text-sm leading-6 text-[var(--ls-text-tertiary)]">
               The signal stream will add durable events as this run progresses.
             </p>
           ) : (
             orderedEvents.map((event) => (
               <div className="py-3" key={event.id}>
                 <div className="flex items-center justify-between gap-3">
-                  <p className="truncate text-xs font-medium text-zinc-300">
+                  <p className="truncate text-xs font-medium text-[var(--ls-text-secondary)]">
                     {event.event_type
                       .replace(/^run\./, "")
                       .replaceAll("_", " ")}
                   </p>
-                  <span className="shrink-0 text-[11px] text-zinc-600">
+                  <span className="shrink-0 text-[11px] text-[var(--ls-text-tertiary)]">
                     {formatTime(event.created_at)}
                   </span>
                 </div>
-                <p className="mt-1 text-xs leading-5 text-zinc-500">
+                <p className="mt-1 text-xs leading-5 text-[var(--ls-text-tertiary)]">
                   {signalDescription(event)}
                 </p>
               </div>

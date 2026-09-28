@@ -267,6 +267,11 @@ relay：
 
 - 立即可重试：10s、1m、5m、30m，最多 5 次。
 - provider 明确给出 `Retry-After` 时优先使用，设置上限和 jitter。
+- terminal reporter 不直接 NACK 等待中的 provider 写入：它先保存失败的
+  status/summary receipt，再把下一次尝试作为带 `available_at` 的新 outbox
+  hand-off 提交，随后才 ACK 原消息。这样不会在 `Retry-After` 到达前耗尽
+  RabbitMQ delivery limit，也不会用 worker-local sleep 阻塞其他租户；自动
+  尝试最多 5 次，永久 4xx 或预算耗尽后 receipt 明确要求人工恢复。
 - OCR 输入/输出无效不自动重试同一执行计划。
 - 外部发布阶段重试不回退到 review 阶段。
 

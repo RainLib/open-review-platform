@@ -13,17 +13,18 @@ import (
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
+	"github.com/RainLib/open-review-platform/internal/modelroute"
 )
 
 func TestParseFindingsNormalizesOCRComments(t *testing.T) {
-	findings, err := ParseFindings([]byte(`{"comments":[{"path":"src/handler.go","content":"nil dereference","suggestion_code":"if value == nil { return }","start_line":8,"end_line":8,"severity":"high","category":"bug"},{"path":"../../etc/passwd","content":"unsafe path","severity":"unknown"}]}`))
+	findings, err := ParseFindings([]byte(`{"comments":[{"path":"src/handler.go","content":"nil dereference","suggestion_code":"if value == nil { return }","start_line":8,"end_line":8,"severity":"high","category":"bug","rule_references":[{"rule_key":"security.nil-check","source_version":"11111111-1111-1111-1111-111111111111"},{"rule_key":"security.nil-check","source_version":"11111111-1111-1111-1111-111111111111"},{"rule_key":"","source_version":"ignored"}]},{"path":"../../etc/passwd","content":"unsafe path","severity":"unknown"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(findings) != 2 {
 		t.Fatalf("got %d findings", len(findings))
 	}
-	if findings[0].Path != "src/handler.go" || findings[0].Severity != "high" || findings[0].Suggestion == "" {
+	if findings[0].Path != "src/handler.go" || findings[0].Severity != "high" || findings[0].Suggestion == "" || len(findings[0].RuleReferences) != 1 || findings[0].RuleReferences[0].RuleKey != "security.nil-check" {
 		t.Fatalf("unexpected first finding: %#v", findings[0])
 	}
 	if findings[1].Path != "" || findings[1].Severity != "medium" {
@@ -49,7 +50,7 @@ func TestReviewArgumentsIncludesConfiguredExecutionPolicy(t *testing.T) {
 		TokenBudget:    128000,
 		SubtaskTimeout: 5,
 	}
-	arguments := executor.reviewArguments("base", "head", "result.json", "rules.json", []string{"docs/**", "*_test.go"})
+	arguments := executor.reviewArguments(context.Background(), "base", "head", "result.json", "rules.json", []string{"docs/**", "*_test.go"})
 	want := []string{
 		"review", "--from", "base", "--to", "head", "--format", "json", "--output", "result.json",
 		"--concurrency", "2", "--effort", "low", "--max-tokens", "8000", "--max-tokens-budget", "128000", "--timeout", "5",
@@ -57,6 +58,21 @@ func TestReviewArgumentsIncludesConfiguredExecutionPolicy(t *testing.T) {
 	}
 	if strings.Join(arguments, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("unexpected review arguments:\n got: %#v\nwant: %#v", arguments, want)
+	}
+}
+
+func TestReviewArgumentsNeverLetPromptSettingsRaiseModelBudget(t *testing.T) {
+	executor := Executor{MaxTokens: 8000}
+	ctx := modelroute.WithPromptExecution(context.Background(), modelroute.PromptExecution{MaxPromptTokens: 12000})
+	arguments := strings.Join(executor.reviewArguments(ctx, "base", "head", "result.json", "", nil), " ")
+	if !strings.Contains(arguments, "--max-tokens 8000") {
+		t.Fatalf("prompt setting must not raise deployment max tokens: %s", arguments)
+	}
+
+	ctx = modelroute.WithPromptExecution(context.Background(), modelroute.PromptExecution{MaxPromptTokens: 3200})
+	arguments = strings.Join(executor.reviewArguments(ctx, "base", "head", "result.json", "", nil), " ")
+	if !strings.Contains(arguments, "--max-tokens 3200") {
+		t.Fatalf("prompt setting should narrow max tokens: %s", arguments)
 	}
 }
 
@@ -73,7 +89,7 @@ func TestExecutionTimeoutUsesTheShorterPlatformOrSubtaskBudget(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := test.executor.executionTimeout(); got != test.want {
+			if got := test.executor.executionTimeout(context.Background()); got != test.want {
 				t.Fatalf("execution timeout = %s, want %s", got, test.want)
 			}
 		})
@@ -176,9 +192,11 @@ func TestReviewWithSelectedPathsUsesExactSyntheticRange(t *testing.T) {
 	head := strings.TrimSpace(runGit(t, directory, "rev-parse", "HEAD"))
 
 	captured := filepath.Join(directory, "reviewed-paths.txt")
+	contextCapture := filepath.Join(directory, "deferred-context.txt")
 	t.Setenv("OCR_CAPTURED_PATHS", captured)
+	t.Setenv("OCR_CONTEXT_CAPTURE", contextCapture)
 	script := filepath.Join(directory, "recording-ocr")
-	source := "#!/bin/sh\nset -eu\nfrom=''\nto=''\noutput=''\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --from) from=\"$2\"; shift 2 ;;\n    --to) to=\"$2\"; shift 2 ;;\n    --output) output=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ngit diff --name-only \"$from\" \"$to\" > \"$OCR_CAPTURED_PATHS\"\nprintf '{\\\"comments\\\":[]}' > \"$output\"\n"
+	source := "#!/bin/sh\nset -eu\nfrom=''\nto=''\noutput=''\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --from) from=\"$2\"; shift 2 ;;\n    --to) to=\"$2\"; shift 2 ;;\n    --output) output=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ngit diff --name-only \"$from\" \"$to\" > \"$OCR_CAPTURED_PATHS\"\ngit show \"$to:deferred.go\" > \"$OCR_CONTEXT_CAPTURE\"\nprintf '{\\\"comments\\\":[]}' > \"$output\"\n"
 	if err := os.WriteFile(script, []byte(source), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -191,6 +209,13 @@ func TestReviewWithSelectedPathsUsesExactSyntheticRange(t *testing.T) {
 	}
 	if value := strings.TrimSpace(string(got)); value != "selected.go" {
 		t.Fatalf("OCR received unexpected synthetic diff paths: %q", value)
+	}
+	contextBytes, err := os.ReadFile(contextCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value := strings.TrimSpace(string(contextBytes)); value != "package scoped\n\nconst Deferred = 2" {
+		t.Fatalf("OCR synthetic head lost deferred head context: %q", value)
 	}
 }
 

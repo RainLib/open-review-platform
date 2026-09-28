@@ -98,7 +98,7 @@ Open Review Platform 是面向组织和研发团队的 AI 代码审查控制平�
 统一命令语法：
 
 ```text
-@openreview review [--mode standard|deep|security] [--rule <rule-set>]
+@openreview review [--mode=standard|deep|security] [--rule=<rule-set-id>]
 @openreview status [<task-id>]
 @openreview cancel [<task-id>]
 @openreview retry [<task-id>]

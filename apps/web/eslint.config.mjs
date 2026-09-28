@@ -5,5 +5,7 @@ import nextTypeScript from "eslint-config-next/typescript";
 export default defineConfig([
   ...nextVitals,
   ...nextTypeScript,
-  globalIgnores([".next/**", "node_modules/**"]),
+  // Local design previews use isolated Next build directories (for example
+  // `.next-issues-preview`). They are generated artifacts, never source files.
+  globalIgnores([".next*/**", "node_modules/**"]),
 ]);

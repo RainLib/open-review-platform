@@ -3,17 +3,17 @@ import { displayRunState } from "@/lib/format";
 import type { RunState } from "@/lib/control-api";
 
 const stateStyle: Record<RunState, string> = {
-  acknowledged: "border-slate-500/30 bg-slate-500/10 text-slate-300",
-  admitted: "border-sky-400/30 bg-sky-400/10 text-sky-200",
-  preparing: "border-violet-400/30 bg-violet-400/10 text-violet-200",
-  analyzing: "border-cyan-400/30 bg-cyan-400/10 text-cyan-200",
-  normalizing: "border-indigo-400/30 bg-indigo-400/10 text-indigo-200",
-  publishing: "border-blue-400/30 bg-blue-400/10 text-blue-200",
-  completed: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200",
-  failed: "border-rose-400/30 bg-rose-400/10 text-rose-200",
-  cancelled: "border-zinc-500/30 bg-zinc-500/10 text-zinc-300",
-  superseded: "border-zinc-500/30 bg-zinc-500/10 text-zinc-300",
-  needs_attention: "border-amber-400/30 bg-amber-400/10 text-amber-200",
+  acknowledged: "border-[var(--ls-line-strong)] bg-[var(--ls-surface-muted)] text-[var(--ls-text-secondary)]",
+  admitted: "border-sky-500/25 bg-sky-500/[0.08] text-sky-700 dark:text-sky-300",
+  preparing: "border-violet-500/25 bg-violet-500/[0.08] text-violet-700 dark:text-violet-300",
+  analyzing: "border-[color:color-mix(in_srgb,var(--ls-accent)_30%,transparent)] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]",
+  normalizing: "border-indigo-500/25 bg-indigo-500/[0.08] text-indigo-700 dark:text-indigo-300",
+  publishing: "border-blue-500/25 bg-blue-500/[0.08] text-blue-700 dark:text-blue-300",
+  completed: "border-[color:color-mix(in_srgb,var(--ls-success)_28%,transparent)] bg-[color:color-mix(in_srgb,var(--ls-success)_10%,transparent)] text-[var(--ls-success-text)]",
+  failed: "border-[color:color-mix(in_srgb,var(--ls-critical)_28%,transparent)] bg-[color:color-mix(in_srgb,var(--ls-critical)_9%,transparent)] text-[var(--ls-critical-text)]",
+  cancelled: "border-[var(--ls-line-strong)] bg-[var(--ls-surface-muted)] text-[var(--ls-text-secondary)]",
+  superseded: "border-[var(--ls-line-strong)] bg-[var(--ls-surface-muted)] text-[var(--ls-text-secondary)]",
+  needs_attention: "border-[color:color-mix(in_srgb,var(--ls-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ls-warning)_9%,transparent)] text-[var(--ls-warning-text)]",
 };
 
 export function StatusBadge({ state }: { state: RunState }) {

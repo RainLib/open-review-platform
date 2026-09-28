@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
+	"github.com/RainLib/open-review-platform/internal/modelroute"
 )
 
 type Executor struct {
@@ -144,17 +145,17 @@ func (e Executor) trustedRuleFile(directory string, ruleFileJSON []byte) (string
 }
 
 func (e Executor) review(ctx context.Context, directory, base, head, rulePath string, exclude []string) ([]domain.Finding, error) {
-	timeout := e.executionTimeout()
+	timeout := e.executionTimeout(ctx)
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 	output := filepath.Join(directory, "open-review-result.json")
-	arguments := e.reviewArguments(base, head, output, rulePath, exclude)
+	arguments := e.reviewArguments(ctx, base, head, output, rulePath, exclude)
 	command := exec.CommandContext(ctx, e.Binary, arguments...)
 	command.Dir = directory
-	command.Env = withGitBinaryPath(os.Environ(), e.gitBinary())
+	command.Env = modelroute.ApplyEnvironment(ctx, withGitBinaryPath(os.Environ(), e.gitBinary()))
 	configureProcessGroup(command)
 	logs, err := command.CombinedOutput()
 	if err != nil {
@@ -174,15 +175,20 @@ func (e Executor) review(ctx context.Context, directory, base, head, rulePath st
 	if err != nil {
 		return nil, fmt.Errorf("parse OCR result: %w", err)
 	}
+	e.captureFindingSourceEvidence(ctx, directory, base, head, findings)
 	return findings, nil
 }
 
-func (e Executor) executionTimeout() time.Duration {
+func (e Executor) executionTimeout(ctx context.Context) time.Duration {
 	timeout := e.Timeout
-	if e.SubtaskTimeout <= 0 {
+	subtaskMinutes := e.SubtaskTimeout
+	if execution, ok := modelroute.FromContext(ctx); ok && execution.Route.Enabled {
+		subtaskMinutes = execution.Route.SubtaskTimeoutMinutes
+	}
+	if subtaskMinutes <= 0 {
 		return timeout
 	}
-	subtaskTimeout := time.Duration(e.SubtaskTimeout) * time.Minute
+	subtaskTimeout := time.Duration(subtaskMinutes) * time.Minute
 	if timeout <= 0 || subtaskTimeout < timeout {
 		return subtaskTimeout
 	}
@@ -190,33 +196,34 @@ func (e Executor) executionTimeout() time.Duration {
 }
 
 func (e Executor) reviewSelected(ctx context.Context, directory, base, head, rulePath string, selected []string) ([]domain.Finding, error) {
-	scopedHead, cleanup, err := e.scopedHead(ctx, directory, base, head, selected)
+	scopedBase, scopedHead, cleanup, err := e.scopedRange(ctx, directory, base, head, selected)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
-	return e.review(ctx, directory, base, scopedHead, rulePath, nil)
+	return e.review(ctx, directory, scopedBase, scopedHead, rulePath, nil)
 }
 
-// scopedHead keeps the original checkout read-only. It creates an unreferenced
-// temporary commit in an attached temporary worktree, so OCR's normal
-// --from/--to range machinery still works while the diff contains only paths
-// admitted by the risk planner.
-func (e Executor) scopedHead(ctx context.Context, directory, base, head string, selected []string) (string, func(), error) {
+// scopedRange keeps the original checkout read-only and creates two
+// unreferenced commits. The synthetic head contains the complete admitted head
+// tree, so OCR tools can inspect supporting files that were deferred from the
+// review diff. Its direct parent contains that same tree with only selected
+// paths reverted to base, so the visible diff remains exactly risk-admitted.
+func (e Executor) scopedRange(ctx context.Context, directory, base, head string, selected []string) (string, string, func(), error) {
 	if len(selected) == 0 {
-		return "", nil, fmt.Errorf("selected review paths are required")
+		return "", "", nil, fmt.Errorf("selected review paths are required")
 	}
-	diffArguments := append([]string{"diff", "--binary", "--no-ext-diff", base, head, "--"}, selected...)
+	diffArguments := append([]string{"diff", "--binary", "--no-ext-diff", "--no-renames", base, head, "--"}, selected...)
 	patch, err := e.gitOutput(ctx, directory, diffArguments...)
 	if err != nil {
-		return "", nil, fmt.Errorf("build selected review patch: %w", err)
+		return "", "", nil, fmt.Errorf("build selected review patch: %w", err)
 	}
 	if len(patch) == 0 {
-		return "", nil, fmt.Errorf("selected review paths contain no diff")
+		return "", "", nil, fmt.Errorf("selected review paths contain no diff")
 	}
 	parent, err := os.MkdirTemp("", "open-review-scope-")
 	if err != nil {
-		return "", nil, fmt.Errorf("create selected review workspace: %w", err)
+		return "", "", nil, fmt.Errorf("create selected review workspace: %w", err)
 	}
 	scopedDirectory := filepath.Join(parent, "worktree")
 	cleanup := func() {
@@ -227,28 +234,47 @@ func (e Executor) scopedHead(ctx context.Context, directory, base, head string, 
 	}
 	if err := e.gitRun(ctx, directory, nil, "worktree", "add", "--detach", scopedDirectory, base); err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("create selected review worktree: %w", err)
+		return "", "", nil, fmt.Errorf("create selected review worktree: %w", err)
 	}
-	if err := e.gitRun(ctx, scopedDirectory, patch, "apply", "--index", "--binary", "-"); err != nil {
+	if err := e.gitRun(ctx, scopedDirectory, nil, "reset", "--hard", head); err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("apply selected review patch: %w", err)
+		return "", "", nil, fmt.Errorf("materialize complete review head: %w", err)
 	}
-	tree, err := e.gitOutput(ctx, scopedDirectory, "write-tree")
+	headTree, err := e.gitOutput(ctx, scopedDirectory, "rev-parse", "HEAD^{tree}")
 	if err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("write selected review tree: %w", err)
+		return "", "", nil, fmt.Errorf("resolve complete review head tree: %w", err)
 	}
-	commit, err := e.gitOutput(ctx, scopedDirectory, "-c", "user.name=Open Review", "-c", "user.email=open-review@local.invalid", "commit-tree", strings.TrimSpace(string(tree)), "-p", base)
+	if err := e.gitRun(ctx, scopedDirectory, patch, "apply", "--reverse", "--index", "--binary", "-"); err != nil {
+		cleanup()
+		return "", "", nil, fmt.Errorf("revert selected paths for scoped review base: %w", err)
+	}
+	baseTree, err := e.gitOutput(ctx, scopedDirectory, "write-tree")
 	if err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("commit selected review tree: %w", err)
+		return "", "", nil, fmt.Errorf("write scoped review base tree: %w", err)
 	}
-	scopedHead := strings.TrimSpace(string(commit))
+	scopedBaseOutput, err := e.gitOutput(ctx, scopedDirectory, "-c", "user.name=Open Review", "-c", "user.email=open-review@local.invalid", "commit-tree", strings.TrimSpace(string(baseTree)), "-p", base)
+	if err != nil {
+		cleanup()
+		return "", "", nil, fmt.Errorf("commit scoped review base tree: %w", err)
+	}
+	scopedBase := strings.TrimSpace(string(scopedBaseOutput))
+	if scopedBase == "" {
+		cleanup()
+		return "", "", nil, fmt.Errorf("commit scoped review base returned no revision")
+	}
+	scopedHeadOutput, err := e.gitOutput(ctx, scopedDirectory, "-c", "user.name=Open Review", "-c", "user.email=open-review@local.invalid", "commit-tree", strings.TrimSpace(string(headTree)), "-p", scopedBase)
+	if err != nil {
+		cleanup()
+		return "", "", nil, fmt.Errorf("commit complete scoped review head tree: %w", err)
+	}
+	scopedHead := strings.TrimSpace(string(scopedHeadOutput))
 	if scopedHead == "" {
 		cleanup()
-		return "", nil, fmt.Errorf("commit selected review tree returned no revision")
+		return "", "", nil, fmt.Errorf("commit complete scoped review head returned no revision")
 	}
-	return scopedHead, cleanup, nil
+	return scopedBase, scopedHead, cleanup, nil
 }
 
 func (e Executor) gitOutput(ctx context.Context, directory string, arguments ...string) ([]byte, error) {
@@ -277,22 +303,39 @@ func contextExhausted(logs []byte) bool {
 		strings.Contains(message, "maximum context length")
 }
 
-func (e Executor) reviewArguments(base, head, output, rulePath string, exclude []string) []string {
+func (e Executor) reviewArguments(ctx context.Context, base, head, output, rulePath string, exclude []string) []string {
 	arguments := []string{"review", "--from", base, "--to", head, "--format", "json", "--output", output}
-	if e.Concurrency > 0 {
-		arguments = append(arguments, "--concurrency", strconv.Itoa(e.Concurrency))
+	concurrency, effort, maxTokens, tokenBudget, subtaskTimeout := e.Concurrency, e.Effort, e.MaxTokens, e.TokenBudget, e.SubtaskTimeout
+	if execution, ok := modelroute.FromContext(ctx); ok && execution.Route.Enabled {
+		// Concurrency remains a deployment-level worker guardrail. Route owners
+		// may lower prompt/budget/timeout and choose effort, but cannot raise
+		// parallelism beyond the runner's configured capacity.
+		effort = execution.Route.Effort
+		maxTokens = execution.Route.MaxPromptTokens
+		tokenBudget = execution.Route.TokenBudget
+		subtaskTimeout = execution.Route.SubtaskTimeoutMinutes
 	}
-	if e.Effort != "" {
-		arguments = append(arguments, "--effort", e.Effort)
+	if prompt, ok := modelroute.PromptExecutionFromContext(ctx); ok && prompt.MaxPromptTokens > 0 {
+		// Review settings can narrow an admitted run, but never increase a
+		// deployment/model-route budget that already protects provider spend.
+		if maxTokens <= 0 || prompt.MaxPromptTokens < maxTokens {
+			maxTokens = prompt.MaxPromptTokens
+		}
 	}
-	if e.MaxTokens > 0 {
-		arguments = append(arguments, "--max-tokens", strconv.Itoa(e.MaxTokens))
+	if concurrency > 0 {
+		arguments = append(arguments, "--concurrency", strconv.Itoa(concurrency))
 	}
-	if e.TokenBudget > 0 {
-		arguments = append(arguments, "--max-tokens-budget", strconv.Itoa(e.TokenBudget))
+	if effort != "" {
+		arguments = append(arguments, "--effort", effort)
 	}
-	if e.SubtaskTimeout > 0 {
-		arguments = append(arguments, "--timeout", strconv.Itoa(e.SubtaskTimeout))
+	if maxTokens > 0 {
+		arguments = append(arguments, "--max-tokens", strconv.Itoa(maxTokens))
+	}
+	if tokenBudget > 0 {
+		arguments = append(arguments, "--max-tokens-budget", strconv.Itoa(tokenBudget))
+	}
+	if subtaskTimeout > 0 {
+		arguments = append(arguments, "--timeout", strconv.Itoa(subtaskTimeout))
 	}
 	if rulePath != "" {
 		arguments = append(arguments, "--rule", rulePath)
@@ -396,6 +439,12 @@ type comment struct {
 	EndLine        int    `json:"end_line"`
 	Severity       string `json:"severity"`
 	Category       string `json:"category"`
+	RuleKey        string `json:"rule_key"`
+	SourceVersion  string `json:"source_version"`
+	RuleReferences []struct {
+		RuleKey       string `json:"rule_key"`
+		SourceVersion string `json:"source_version"`
+	} `json:"rule_references"`
 }
 
 func normalize(comments []comment) []domain.Finding {
@@ -412,17 +461,43 @@ func normalize(comments []comment) []domain.Finding {
 		if suggestion == "" {
 			suggestion = strings.TrimSpace(item.Suggestion)
 		}
+		references := make([]domain.FindingRuleReference, 0, len(item.RuleReferences)+1)
+		if key, source := strings.TrimSpace(item.RuleKey), strings.TrimSpace(item.SourceVersion); key != "" || source != "" {
+			references = append(references, domain.FindingRuleReference{RuleKey: key, SourceVersion: source})
+		}
+		for _, reference := range item.RuleReferences {
+			references = append(references, domain.FindingRuleReference{
+				RuleKey: strings.TrimSpace(reference.RuleKey), SourceVersion: strings.TrimSpace(reference.SourceVersion),
+			})
+		}
 		findings = append(findings, domain.Finding{
-			Path:       cleanPath(item.Path),
-			StartLine:  max(item.StartLine, 0),
-			EndLine:    max(item.EndLine, 0),
-			Severity:   severity(item.Severity),
-			Category:   category(item.Category),
-			Body:       body,
-			Suggestion: suggestion,
+			Path: cleanPath(item.Path), StartLine: max(item.StartLine, 0), EndLine: max(item.EndLine, 0),
+			Severity: severity(item.Severity), Category: category(item.Category), Body: body, Suggestion: suggestion,
+			SuggestionCode: strings.TrimRight(item.SuggestionCode, "\n"),
+			RuleReferences: normalizeRuleReferences(references),
 		})
 	}
 	return findings
+}
+
+func normalizeRuleReferences(references []domain.FindingRuleReference) []domain.FindingRuleReference {
+	if len(references) == 0 {
+		return nil
+	}
+	result := make([]domain.FindingRuleReference, 0, len(references))
+	seen := make(map[string]struct{}, len(references))
+	for _, reference := range references {
+		if reference.RuleKey == "" || reference.SourceVersion == "" || len(reference.RuleKey) > 200 || len(reference.SourceVersion) > 64 {
+			continue
+		}
+		key := reference.RuleKey + "\x00" + reference.SourceVersion
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, reference)
+	}
+	return result
 }
 
 func cleanPath(path string) string {

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
+	"github.com/RainLib/open-review-platform/internal/rulecatalog"
 	"github.com/RainLib/open-review-platform/internal/rules"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -46,7 +48,7 @@ func (s *PostgresStore) CreateRuleSet(ctx context.Context, actor, tenantSlug str
 	err = tx.QueryRow(ctx, `
 		SELECT t.id FROM tenants t
 		JOIN memberships m ON m.tenant_id = t.id
-		WHERE t.slug = $1 AND m.subject = $2 AND m.role IN ('owner', 'admin', 'rule_admin')`, tenantSlug, actor).Scan(&tenantID)
+		WHERE t.slug = $1 AND m.subject = $2 AND m.active = TRUE AND m.role IN ('owner', 'admin', 'rule_admin')`, tenantSlug, actor).Scan(&tenantID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RuleSetWithDraft{}, ErrForbidden
 	}
@@ -95,8 +97,36 @@ func (s *PostgresStore) ListRuleSets(ctx context.Context, actor, tenantSlug stri
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, name, description, created_by, created_at, updated_at
-		FROM rule_sets WHERE tenant_id = $1 ORDER BY updated_at DESC, id DESC LIMIT $2`, tenantID, limit)
+		SELECT rule_set.id,
+		       rule_set.tenant_id,
+		       rule_set.name,
+		       rule_set.description,
+		       COALESCE(rule_set.catalog_id, ''),
+		       COALESCE(rule_set.catalog_version, ''),
+		       COALESCE(rule_set.catalog_content_sha256, ''),
+		       COALESCE(rule_set.catalog_origin, ''),
+		       rule_set.created_by,
+		       rule_set.created_at,
+		       rule_set.updated_at,
+		       latest.id,
+		       latest.version,
+		       latest.revision,
+		       latest.state,
+		       latest.content_sha256,
+		       latest.created_by,
+		       latest.created_at,
+		       latest.updated_at
+		FROM rule_sets rule_set
+		JOIN LATERAL (
+			SELECT id, version, revision, state, content_sha256, created_by, created_at, updated_at
+			FROM rule_versions
+			WHERE rule_set_id = rule_set.id
+			ORDER BY version DESC
+			LIMIT 1
+		) latest ON TRUE
+		WHERE rule_set.tenant_id = $1
+		ORDER BY rule_set.updated_at DESC, rule_set.id DESC
+		LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list rule sets: %w", err)
 	}
@@ -104,15 +134,584 @@ func (s *PostgresStore) ListRuleSets(ctx context.Context, actor, tenantSlug stri
 	sets := make([]domain.RuleSet, 0)
 	for rows.Next() {
 		var item domain.RuleSet
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.Name, &item.Description, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var catalogID, catalogVersion, catalogContentSHA256, catalogOrigin string
+		latest := domain.RuleVersionSummary{}
+		if err := rows.Scan(
+			&item.ID,
+			&item.TenantID,
+			&item.Name,
+			&item.Description,
+			&catalogID,
+			&catalogVersion,
+			&catalogContentSHA256,
+			&catalogOrigin,
+			&item.CreatedBy,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			&latest.ID,
+			&latest.Version,
+			&latest.Revision,
+			&latest.State,
+			&latest.ContentSHA256,
+			&latest.CreatedBy,
+			&latest.CreatedAt,
+			&latest.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan rule set: %w", err)
 		}
+		if catalogID != "" {
+			item.Catalog = &domain.RuleCatalogProvenance{ID: catalogID, Version: catalogVersion, ContentSHA256: catalogContentSHA256, Origin: catalogOrigin}
+		}
+		item.LatestVersion = &latest
 		sets = append(sets, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate rule sets: %w", err)
 	}
 	return sets, nil
+}
+
+// ListRuleCatalog returns only release-bundled templates. It deliberately does
+// not derive a recommendation from repository code, review comments, or a
+// model response: all browser-visible choices have a fixed source and digest.
+func (s *PostgresStore) ListRuleCatalog(ctx context.Context, actor, tenantSlug string) ([]domain.RuleCatalogEntry, error) {
+	tenantID, role, err := s.authorizedTenant(ctx, actor, tenantSlug)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT rule_set.catalog_id,
+		       rule_set.catalog_version,
+		       rule_set.id,
+		       rule_set.name,
+		       latest.version,
+		       latest.state
+		FROM rule_sets rule_set
+		JOIN LATERAL (
+			SELECT version, state
+			FROM rule_versions
+			WHERE rule_set_id = rule_set.id
+			ORDER BY version DESC
+			LIMIT 1
+		) latest ON TRUE
+		WHERE rule_set.tenant_id = $1
+		  AND rule_set.catalog_id IS NOT NULL
+		ORDER BY rule_set.catalog_id, rule_set.catalog_version`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list rule catalog installations: %w", err)
+	}
+	defer rows.Close()
+	installed := make(map[string]domain.RuleCatalogInstallation)
+	for rows.Next() {
+		var catalogID, catalogVersion string
+		var installation domain.RuleCatalogInstallation
+		if err := rows.Scan(&catalogID, &catalogVersion, &installation.RuleSetID, &installation.RuleSetName, &installation.RuleVersion, &installation.RuleVersionState); err != nil {
+			return nil, fmt.Errorf("scan rule catalog installation: %w", err)
+		}
+		installed[catalogIdentity(catalogID, catalogVersion)] = installation
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rule catalog installations: %w", err)
+	}
+	entries := rulecatalog.Entries()
+	result := make([]domain.RuleCatalogEntry, 0, len(entries))
+	for _, entry := range entries {
+		item := domain.RuleCatalogEntry{
+			ID:            entry.ID,
+			Version:       entry.Version,
+			Title:         entry.Title,
+			Description:   entry.Description,
+			Tags:          append([]string(nil), entry.Tags...),
+			RuleCount:     len(entry.Rules),
+			ContentSHA256: entry.ContentSHA256,
+			Origin:        rulecatalog.Origin,
+			CanInstall:    canManageRules(role),
+		}
+		if installation, ok := installed[catalogIdentity(entry.ID, entry.Version)]; ok {
+			copy := installation
+			item.Installation = &copy
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+// InstallRuleCatalogEntry creates one ordinary governed draft from an exact
+// release-pinned catalog payload. A catalog install never creates a binding or
+// publishes a version, so it cannot silently alter a future review.
+func (s *PostgresStore) InstallRuleCatalogEntry(ctx context.Context, actor, tenantSlug, catalogID string, input domain.RuleCatalogInstallInput) (domain.RuleCatalogInstallResult, error) {
+	catalogID = strings.TrimSpace(catalogID)
+	input.Version = strings.TrimSpace(input.Version)
+	input.ContentSHA256 = strings.ToLower(strings.TrimSpace(input.ContentSHA256))
+	entry, ok := rulecatalog.Find(catalogID, input.Version, input.ContentSHA256)
+	if !ok {
+		return domain.RuleCatalogInstallResult{}, fmt.Errorf("%w: catalog id, version, or content digest", ErrInvalidRuleCatalog)
+	}
+	canonicalRules, err := json.Marshal(entry.Rules)
+	if err != nil {
+		return domain.RuleCatalogInstallResult{}, fmt.Errorf("encode catalog rules: %w", err)
+	}
+	compiled, err := rules.Compile([]rules.Source{{VersionID: "draft", Precedence: 0, Rules: entry.Rules}})
+	if err != nil {
+		return domain.RuleCatalogInstallResult{}, fmt.Errorf("validate catalog rules: %w", err)
+	}
+	if _, err := rules.OCRRuleFileForSnapshot(compiled.Snapshot); err != nil {
+		return domain.RuleCatalogInstallResult{}, fmt.Errorf("validate catalog rules for OCR: %w", err)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.RuleCatalogInstallResult{}, fmt.Errorf("begin catalog installation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tenantID, role, err := authorizedTenantTx(ctx, tx, actor, tenantSlug)
+	if err != nil {
+		return domain.RuleCatalogInstallResult{}, err
+	}
+	if !canManageRules(role) {
+		return domain.RuleCatalogInstallResult{}, ErrForbidden
+	}
+
+	result := domain.RuleCatalogInstallResult{}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO rule_sets (tenant_id, name, description, catalog_id, catalog_version, catalog_content_sha256, catalog_origin, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (tenant_id, catalog_id, catalog_version) WHERE catalog_id IS NOT NULL DO NOTHING
+		RETURNING id, tenant_id, name, description, created_by, created_at, updated_at`,
+		tenantID, "Core · "+entry.Title, entry.Description, entry.ID, entry.Version, entry.ContentSHA256, rulecatalog.Origin, actor).
+		Scan(&result.RuleSet.ID, &result.RuleSet.TenantID, &result.RuleSet.Name, &result.RuleSet.Description, &result.RuleSet.CreatedBy, &result.RuleSet.CreatedAt, &result.RuleSet.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		result.Replayed = true
+		if err := scanCatalogInstallation(tx.QueryRow(ctx, `
+			SELECT rule_set.id, rule_set.tenant_id, rule_set.name, rule_set.description,
+			       rule_set.created_by, rule_set.created_at, rule_set.updated_at,
+			       version.id, version.rule_set_id, version.version, version.revision,
+			       version.state, version.rules, version.content_sha256, version.created_by,
+			       version.created_at, version.updated_at
+			FROM rule_sets rule_set
+			JOIN LATERAL (
+				SELECT id, rule_set_id, version, revision, state, rules, content_sha256, created_by, created_at, updated_at
+				FROM rule_versions
+				WHERE rule_set_id = rule_set.id
+				ORDER BY version DESC
+				LIMIT 1
+			) version ON TRUE
+			WHERE rule_set.tenant_id = $1 AND rule_set.catalog_id = $2 AND rule_set.catalog_version = $3`, tenantID, entry.ID, entry.Version), &result); err != nil {
+			return domain.RuleCatalogInstallResult{}, fmt.Errorf("load existing catalog installation: %w", err)
+		}
+		result.RuleSet.Catalog = &domain.RuleCatalogProvenance{ID: entry.ID, Version: entry.Version, ContentSHA256: entry.ContentSHA256, Origin: rulecatalog.Origin}
+		if err := tx.Commit(ctx); err != nil {
+			return domain.RuleCatalogInstallResult{}, fmt.Errorf("commit existing catalog installation: %w", err)
+		}
+		return result, nil
+	}
+	if isUniqueViolation(err) {
+		return domain.RuleCatalogInstallResult{}, ErrConflict
+	}
+	if err != nil {
+		return domain.RuleCatalogInstallResult{}, fmt.Errorf("create catalog rule set: %w", err)
+	}
+	result.RuleSet.Catalog = &domain.RuleCatalogProvenance{ID: entry.ID, Version: entry.Version, ContentSHA256: entry.ContentSHA256, Origin: rulecatalog.Origin}
+	var draftRules []byte
+	err = tx.QueryRow(ctx, `
+		INSERT INTO rule_versions (rule_set_id, version, state, rules, content_sha256, created_by)
+		VALUES ($1, 1, 'draft', $2::jsonb, $3, $4)
+		RETURNING id, rule_set_id, version, revision, state, rules, content_sha256, created_by, created_at, updated_at`,
+		result.RuleSet.ID, string(canonicalRules), compiled.SHA256, actor).
+		Scan(&result.Draft.ID, &result.Draft.RuleSetID, &result.Draft.Version, &result.Draft.Revision, &result.Draft.State, &draftRules, &result.Draft.ContentSHA256, &result.Draft.CreatedBy, &result.Draft.CreatedAt, &result.Draft.UpdatedAt)
+	if err != nil {
+		return domain.RuleCatalogInstallResult{}, fmt.Errorf("create catalog draft version: %w", err)
+	}
+	result.Draft.Rules = json.RawMessage(draftRules)
+	result.RuleSet.LatestVersion = &domain.RuleVersionSummary{
+		ID: result.Draft.ID, Version: result.Draft.Version, Revision: result.Draft.Revision,
+		State: result.Draft.State, ContentSHA256: result.Draft.ContentSHA256,
+		CreatedBy: result.Draft.CreatedBy, CreatedAt: result.Draft.CreatedAt, UpdatedAt: result.Draft.UpdatedAt,
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata)
+		VALUES ($1, $2, 'rule_catalog.installed', $3,
+		jsonb_build_object('catalog_id', $4::text, 'catalog_version', $5::text, 'catalog_content_sha256', $6::text, 'catalog_origin', $7::text, 'rule_version_id', $8::text, 'rule_version_content_sha256', $9::text))`,
+		tenantID, actor, result.RuleSet.ID.String(), entry.ID, entry.Version, entry.ContentSHA256, rulecatalog.Origin, result.Draft.ID.String(), result.Draft.ContentSHA256); err != nil {
+		return domain.RuleCatalogInstallResult{}, fmt.Errorf("audit catalog installation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.RuleCatalogInstallResult{}, fmt.Errorf("commit catalog installation: %w", err)
+	}
+	return result, nil
+}
+
+func catalogIdentity(id, version string) string { return id + "\x00" + version }
+
+func scanCatalogInstallation(row rowScanner, result *domain.RuleCatalogInstallResult) error {
+	var draftRules []byte
+	err := row.Scan(
+		&result.RuleSet.ID, &result.RuleSet.TenantID, &result.RuleSet.Name, &result.RuleSet.Description,
+		&result.RuleSet.CreatedBy, &result.RuleSet.CreatedAt, &result.RuleSet.UpdatedAt,
+		&result.Draft.ID, &result.Draft.RuleSetID, &result.Draft.Version, &result.Draft.Revision,
+		&result.Draft.State, &draftRules, &result.Draft.ContentSHA256, &result.Draft.CreatedBy,
+		&result.Draft.CreatedAt, &result.Draft.UpdatedAt,
+	)
+	if err != nil {
+		return err
+	}
+	result.Draft.Rules = json.RawMessage(draftRules)
+	result.RuleSet.LatestVersion = &domain.RuleVersionSummary{
+		ID: result.Draft.ID, Version: result.Draft.Version, Revision: result.Draft.Revision,
+		State: result.Draft.State, ContentSHA256: result.Draft.ContentSHA256,
+		CreatedBy: result.Draft.CreatedBy, CreatedAt: result.Draft.CreatedAt, UpdatedAt: result.Draft.UpdatedAt,
+	}
+	return nil
+}
+
+// ListRuleApprovalRequests returns an actor-aware governance view. The query
+// derives vote counts from immutable decisions instead of copying counters
+// onto the request, so the evidence shown in the console cannot drift.
+func (s *PostgresStore) ListRuleApprovalRequests(ctx context.Context, actor, tenantSlug string, limit int) ([]domain.RuleApprovalSummary, error) {
+	if limit < 1 || limit > 100 {
+		return nil, fmt.Errorf("rule approval limit must be from 1 to 100")
+	}
+	tenantID, role, err := s.authorizedTenant(ctx, actor, tenantSlug)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT request.id,
+		       rule_set.id,
+		       rule_set.name,
+		       rule_version.id,
+		       rule_version.version,
+		       rule_version.state,
+		       request.content_sha256,
+		       request.requested_by,
+		       request.required_approvals,
+		       COUNT(approval.id) FILTER (WHERE approval.decision = 'approved' AND approval.content_sha256 = request.content_sha256),
+		       COUNT(approval.id) FILTER (WHERE approval.decision = 'rejected' AND approval.content_sha256 = request.content_sha256),
+		       COALESCE(MAX(approval.decision) FILTER (WHERE approval.approver_subject = $2), ''),
+		       request.state,
+		       request.created_at,
+		       request.decided_at
+		FROM rule_approval_requests request
+		JOIN rule_versions rule_version ON rule_version.id = request.rule_version_id
+		JOIN rule_sets rule_set ON rule_set.id = rule_version.rule_set_id
+		LEFT JOIN rule_approvals approval ON approval.request_id = request.id
+		WHERE request.tenant_id = $1
+		GROUP BY request.id, rule_set.id, rule_set.name, rule_version.id, rule_version.version, rule_version.state
+		ORDER BY CASE request.state WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+		         request.created_at DESC,
+		         request.id DESC
+		LIMIT $3`, tenantID, actor, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list rule approval requests: %w", err)
+	}
+	defer rows.Close()
+	requests := make([]domain.RuleApprovalSummary, 0)
+	for rows.Next() {
+		var item domain.RuleApprovalSummary
+		if err := rows.Scan(
+			&item.ID,
+			&item.RuleSetID,
+			&item.RuleSetName,
+			&item.RuleVersionID,
+			&item.Version,
+			&item.VersionState,
+			&item.ContentSHA256,
+			&item.RequestedBy,
+			&item.RequiredApprovals,
+			&item.ApprovalCount,
+			&item.RejectionCount,
+			&item.ActorDecision,
+			&item.State,
+			&item.CreatedAt,
+			&item.DecidedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan rule approval request: %w", err)
+		}
+		item.CanDecide = canManageRules(role) && item.State == "pending" && item.RequestedBy != actor && item.ActorDecision == ""
+		item.CanPublish = canManageRules(role) && item.State == "approved" && item.VersionState == "approved"
+		requests = append(requests, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rule approval requests: %w", err)
+	}
+	return requests, nil
+}
+
+// PreviewRuleVersionImpact compiles a candidate against the exact active
+// control-plane bindings for a repository and branch. It is deliberately
+// read-only: no review run, provider write, snapshot row, or approval is
+// created by Test Lab.
+func (s *PostgresStore) PreviewRuleVersionImpact(ctx context.Context, actor, tenantSlug string, ruleSetID uuid.UUID, version int, input domain.RuleImpactPreviewInput) (domain.RuleImpactPreview, error) {
+	scope, scopeValid := normalizeProviderQualifiedRuleScope("repository", input.Repository, input.Provider, input.APIBaseURL)
+	input.Repository, input.Provider, input.APIBaseURL = scope.Ref, scope.Provider, scope.APIBaseURL
+	input.TargetBranch = strings.TrimSpace(input.TargetBranch)
+	if ruleSetID == uuid.Nil || version < 1 || !scopeValid || !scope.QualifiedRepository() || len(input.Repository) > 300 || input.TargetBranch == "" || len(input.TargetBranch) > 255 || input.Precedence < 0 || input.Precedence > 10_000 {
+		return domain.RuleImpactPreview{}, ErrInvalidRuleImpact
+	}
+	tenantID, _, err := s.authorizedTenant(ctx, actor, tenantSlug)
+	if err != nil {
+		return domain.RuleImpactPreview{}, err
+	}
+
+	result := domain.RuleImpactPreview{
+		RuleSetID:       ruleSetID,
+		Repository:      input.Repository,
+		Provider:        input.Provider,
+		APIBaseURL:      input.APIBaseURL,
+		TargetBranch:    input.TargetBranch,
+		Precedence:      input.Precedence,
+		AddedRuleKeys:   []string{},
+		ChangedRuleKeys: []string{},
+		RemovedRuleKeys: []string{},
+		Uncertainty: []string{
+			"Static preview only; OCR and the configured LLM were not executed.",
+			"Historical coverage summarizes the last 90 days and does not predict finding quality.",
+			"Latency and token cost require a fixture or historical replay run.",
+		},
+	}
+	var rawCandidate []byte
+	err = s.pool.QueryRow(ctx, `
+		SELECT rule_set.name,
+		       rule_version.id,
+		       rule_version.version,
+		       rule_version.state,
+		       rule_version.content_sha256,
+		       rule_version.rules
+		FROM rule_versions rule_version
+		JOIN rule_sets rule_set ON rule_set.id = rule_version.rule_set_id
+		WHERE rule_set.tenant_id = $1
+		  AND rule_set.id = $2
+		  AND rule_version.version = $3`, tenantID, ruleSetID, version).
+		Scan(&result.RuleSetName, &result.RuleVersionID, &result.Version, &result.VersionState, &result.ContentSHA256, &rawCandidate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RuleImpactPreview{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.RuleImpactPreview{}, fmt.Errorf("load candidate rule version: %w", err)
+	}
+	var candidateRules []rules.Rule
+	if err := json.Unmarshal(rawCandidate, &candidateRules); err != nil {
+		return domain.RuleImpactPreview{}, fmt.Errorf("decode candidate rule version: %w", err)
+	}
+	result.CandidateCounts = impactRuleCounts(candidateRules)
+
+	baselineSources, matchedBindings, err := s.activeRuleSourcesForPreview(ctx, tenantID, scope, input.TargetBranch)
+	if err != nil {
+		return domain.RuleImpactPreview{}, err
+	}
+	result.MatchedBindings = matchedBindings
+	baseline, err := rules.Compile(baselineSources)
+	if err != nil {
+		return domain.RuleImpactPreview{}, fmt.Errorf("compile current rule baseline: %w", err)
+	}
+	baselineExceptions, _, err := resolveApplicableRuleExceptions(ctx, s.pool, tenantID, scope, input.TargetBranch, ruleSourceVersions(baselineSources))
+	if err != nil {
+		return domain.RuleImpactPreview{}, err
+	}
+	baseline, err = rules.ApplyExceptions(baseline, baselineExceptions)
+	if err != nil {
+		return domain.RuleImpactPreview{}, fmt.Errorf("apply baseline rule exceptions: %w", err)
+	}
+	result.BaselineSHA256 = baseline.SHA256
+	result.BaselineRuleCount = len(baseline.Snapshot.Rules)
+
+	candidateSources := append(append([]rules.Source(nil), baselineSources...), rules.Source{
+		VersionID:  "candidate:" + result.RuleVersionID.String(),
+		Precedence: input.Precedence,
+		Rules:      candidateRules,
+	})
+	candidate, compileErr := rules.Compile(candidateSources)
+	if compileErr != nil {
+		result.Conflict = compileErr.Error()
+	} else {
+		candidateExceptions, _, exceptionErr := resolveApplicableRuleExceptions(ctx, s.pool, tenantID, scope, input.TargetBranch, ruleSourceVersions(candidateSources))
+		if exceptionErr != nil {
+			return domain.RuleImpactPreview{}, exceptionErr
+		}
+		candidate, exceptionErr = rules.ApplyExceptions(candidate, candidateExceptions)
+		if exceptionErr != nil {
+			return domain.RuleImpactPreview{}, fmt.Errorf("apply candidate rule exceptions: %w", exceptionErr)
+		}
+		result.Valid = true
+		result.CandidateSHA256 = candidate.SHA256
+		result.CandidateRuleCount = len(candidate.Snapshot.Rules)
+		result.AddedRuleKeys, result.ChangedRuleKeys, result.RemovedRuleKeys = diffEffectiveRuleKeys(baseline.Snapshot, candidate.Snapshot)
+	}
+
+	var oldestRunAt, newestRunAt *time.Time
+	err = s.pool.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT job.id),
+		       COUNT(finding.id),
+		       COUNT(finding.id) FILTER (WHERE finding.severity IN ('high', 'critical')),
+		       MIN(job.created_at),
+		       MAX(job.created_at)
+		FROM review_jobs job
+		LEFT JOIN review_findings finding ON finding.job_id = job.id
+		WHERE job.tenant_id = $1
+		  AND job.repository = $2
+		  AND job.provider = $3
+		  AND job.api_base_url = $4
+		  AND job.created_at >= now() - interval '90 days'`, tenantID, input.Repository, input.Provider, input.APIBaseURL).
+		Scan(
+			&result.HistoricalSample.RunCount,
+			&result.HistoricalSample.FindingCount,
+			&result.HistoricalSample.HighRiskFinding,
+			&oldestRunAt,
+			&newestRunAt,
+		)
+	if err != nil {
+		return domain.RuleImpactPreview{}, fmt.Errorf("summarize historical rule sample: %w", err)
+	}
+	result.HistoricalSample.OldestRunAt = oldestRunAt
+	result.HistoricalSample.NewestRunAt = newestRunAt
+	if result.HistoricalSample.RunCount == 0 {
+		result.Uncertainty = append(result.Uncertainty, "No historical runs were available for this repository.")
+	}
+	return result, nil
+}
+
+func ruleSourceVersions(sources []rules.Source) map[string]int {
+	versions := make(map[string]int, len(sources))
+	for _, source := range sources {
+		versions[source.VersionID] = source.Precedence
+	}
+	return versions
+}
+
+func (s *PostgresStore) activeRuleSourcesForPreview(ctx context.Context, tenantID uuid.UUID, scope domain.ReviewConfigScope, targetBranch string) ([]rules.Source, int, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT version.id,
+		       binding.precedence,
+		       version.rules,
+		       binding.target_branch_glob,
+		       binding.path_include_glob,
+		       binding.path_exclude_glob
+		FROM rule_bindings binding
+		JOIN rule_versions version ON version.id = binding.rule_version_id
+		JOIN rule_sets rule_set ON rule_set.id = version.rule_set_id
+		WHERE binding.tenant_id = $1
+		  AND binding.state = 'active'
+		  AND version.state = 'published'
+		  AND rule_set.tenant_id = $1
+		  AND (binding.starts_at IS NULL OR binding.starts_at <= now())
+		  AND (binding.ends_at IS NULL OR binding.ends_at > now())
+		  AND (binding.scope_kind = 'tenant' OR (
+			binding.scope_kind = 'repository' AND binding.scope_ref = $2
+			AND ((binding.scope_provider = $3 AND binding.scope_api_base_url = $4)
+			     OR (binding.scope_provider = '' AND binding.scope_api_base_url = ''))
+		  ))
+		ORDER BY binding.precedence ASC, version.id ASC`, tenantID, scope.Ref, scope.Provider, scope.APIBaseURL)
+	if err != nil {
+		return nil, 0, fmt.Errorf("select preview rule bindings: %w", err)
+	}
+	defer rows.Close()
+	sources := make([]rules.Source, 0)
+	seenVersion := make(map[string]int)
+	matchedBindings := 0
+	for rows.Next() {
+		var versionID uuid.UUID
+		var precedence int
+		var rawRules []byte
+		var branchGlob, includeGlob, excludeGlob string
+		if err := rows.Scan(&versionID, &precedence, &rawRules, &branchGlob, &includeGlob, &excludeGlob); err != nil {
+			return nil, 0, fmt.Errorf("scan preview rule binding: %w", err)
+		}
+		if !matchesRuleTargetBranch(branchGlob, targetBranch) {
+			continue
+		}
+		matchedBindings++
+		versionKey := versionID.String()
+		if previous, exists := seenVersion[versionKey]; exists {
+			if previous != precedence {
+				return nil, 0, fmt.Errorf("published rule version %s is bound at conflicting precedences", versionKey)
+			}
+			for index := range sources {
+				if sources[index].VersionID != versionKey {
+					continue
+				}
+				if includeGlob != "" {
+					sources[index].Include = append(sources[index].Include, includeGlob)
+				}
+				if excludeGlob != "" {
+					sources[index].Exclude = append(sources[index].Exclude, excludeGlob)
+				}
+				break
+			}
+			continue
+		}
+		var versionRules []rules.Rule
+		if err := json.Unmarshal(rawRules, &versionRules); err != nil {
+			return nil, 0, fmt.Errorf("decode preview rule version %s: %w", versionKey, err)
+		}
+		seenVersion[versionKey] = precedence
+		source := rules.Source{VersionID: versionKey, Precedence: precedence, Rules: versionRules}
+		if includeGlob != "" {
+			source.Include = []string{includeGlob}
+		}
+		if excludeGlob != "" {
+			source.Exclude = []string{excludeGlob}
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate preview rule bindings: %w", err)
+	}
+	return sources, matchedBindings, nil
+}
+
+func impactRuleCounts(candidateRules []rules.Rule) domain.RuleImpactCounts {
+	counts := domain.RuleImpactCounts{Total: len(candidateRules)}
+	for _, rule := range candidateRules {
+		if rule.Enforcement == rules.Mandatory {
+			counts.Mandatory++
+		}
+		switch strings.ToLower(strings.TrimSpace(rule.Severity)) {
+		case "critical":
+			counts.Critical++
+		case "high":
+			counts.High++
+		case "medium":
+			counts.Medium++
+		case "low":
+			counts.Low++
+		}
+	}
+	return counts
+}
+
+func diffEffectiveRuleKeys(baseline, candidate rules.Snapshot) (added, changed, removed []string) {
+	baselineSignatures := effectiveRuleSignatures(baseline)
+	candidateSignatures := effectiveRuleSignatures(candidate)
+	for key, signature := range candidateSignatures {
+		baselineSignature, exists := baselineSignatures[key]
+		if !exists {
+			added = append(added, key)
+		} else if baselineSignature != signature {
+			changed = append(changed, key)
+		}
+	}
+	for key := range baselineSignatures {
+		if _, exists := candidateSignatures[key]; !exists {
+			removed = append(removed, key)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(changed)
+	sort.Strings(removed)
+	return added, changed, removed
+}
+
+func effectiveRuleSignatures(snapshot rules.Snapshot) map[string]string {
+	grouped := make(map[string][]rules.EffectiveRule)
+	for _, rule := range snapshot.Rules {
+		grouped[rule.Key] = append(grouped[rule.Key], rule)
+	}
+	result := make(map[string]string, len(grouped))
+	for key, candidates := range grouped {
+		encoded, _ := json.Marshal(candidates)
+		result[key] = string(encoded)
+	}
+	return result
 }
 
 // RequestRuleApproval moves an immutable draft into governance review. The
@@ -329,28 +928,56 @@ func (s *PostgresStore) CreateRuleBinding(ctx context.Context, actor, tenantSlug
 	if !canManageRules(role) {
 		return domain.RuleBinding{}, ErrForbidden
 	}
-	var published bool
+	scope := domain.ReviewConfigScope{Kind: domain.ReviewConfigScopeKind(input.ScopeKind), Ref: input.ScopeRef, Provider: input.ScopeProvider, APIBaseURL: input.ScopeAPIBaseURL}
+	if err := ensureRepositoryReviewConfigScope(ctx, tx, tenantID, scope); err != nil {
+		if errors.Is(err, ErrInvalidReviewConfig) {
+			return domain.RuleBinding{}, ErrInvalidRuleBinding
+		}
+		return domain.RuleBinding{}, fmt.Errorf("authorize rule binding repository scope: %w", err)
+	}
+	var ruleSetID uuid.UUID
 	err = tx.QueryRow(ctx, `
-		SELECT TRUE
+		SELECT v.rule_set_id
 		FROM rule_versions v JOIN rule_sets rs ON rs.id = v.rule_set_id
-		WHERE v.id = $1 AND v.state = 'published' AND rs.tenant_id = $2`, input.RuleVersionID, tenantID).Scan(&published)
+		WHERE v.id = $1 AND v.state = 'published' AND rs.tenant_id = $2`, input.RuleVersionID, tenantID).Scan(&ruleSetID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RuleBinding{}, ErrNotFound
 	}
 	if err != nil {
 		return domain.RuleBinding{}, fmt.Errorf("authorize published rule version: %w", err)
 	}
+	if input.State == "active" {
+		var existingBaseline bool
+		err = tx.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM rule_bindings b
+				JOIN rule_versions v ON v.id=b.rule_version_id
+				WHERE b.tenant_id=$1 AND b.state='active' AND v.rule_set_id=$2
+				  AND b.rule_version_id<>$3 AND b.scope_kind=$4 AND b.scope_ref=$5
+				  AND b.scope_provider=$6 AND b.scope_api_base_url=$7
+				  AND b.precedence=$8 AND b.target_branch_glob=$9
+				  AND b.path_include_glob=$10 AND b.path_exclude_glob=$11)`,
+			tenantID, ruleSetID, input.RuleVersionID, input.ScopeKind, input.ScopeRef,
+			input.ScopeProvider, input.ScopeAPIBaseURL, input.Precedence, input.TargetBranchGlob,
+			input.PathIncludeGlob, input.PathExcludeGlob).Scan(&existingBaseline)
+		if err != nil {
+			return domain.RuleBinding{}, fmt.Errorf("check active binding baseline: %w", err)
+		}
+		if existingBaseline {
+			return domain.RuleBinding{}, ErrRuleRolloutRequired
+		}
+	}
 	result := domain.RuleBinding{}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO rule_bindings (tenant_id, rule_version_id, scope_kind, scope_ref, precedence, target_branch_glob, path_include_glob, path_exclude_glob, state, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, tenant_id, rule_version_id, scope_kind, scope_ref, precedence, target_branch_glob, path_include_glob, path_exclude_glob, state, created_by, created_at, updated_at`,
-		tenantID, input.RuleVersionID, input.ScopeKind, input.ScopeRef, input.Precedence, input.TargetBranchGlob, input.PathIncludeGlob, input.PathExcludeGlob, input.State, actor).
-		Scan(&result.ID, &result.TenantID, &result.RuleVersionID, &result.ScopeKind, &result.ScopeRef, &result.Precedence, &result.TargetBranchGlob, &result.PathIncludeGlob, &result.PathExcludeGlob, &result.State, &result.CreatedBy, &result.CreatedAt, &result.UpdatedAt)
+		INSERT INTO rule_bindings (tenant_id, rule_version_id, scope_kind, scope_ref, scope_provider, scope_api_base_url, precedence, target_branch_glob, path_include_glob, path_exclude_glob, state, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING id, tenant_id, rule_version_id, scope_kind, scope_ref, scope_provider, scope_api_base_url, precedence, target_branch_glob, path_include_glob, path_exclude_glob, state, created_by, created_at, updated_at`,
+		tenantID, input.RuleVersionID, input.ScopeKind, input.ScopeRef, input.ScopeProvider, input.ScopeAPIBaseURL, input.Precedence, input.TargetBranchGlob, input.PathIncludeGlob, input.PathExcludeGlob, input.State, actor).
+		Scan(&result.ID, &result.TenantID, &result.RuleVersionID, &result.ScopeKind, &result.ScopeRef, &result.ScopeProvider, &result.ScopeAPIBaseURL, &result.Precedence, &result.TargetBranchGlob, &result.PathIncludeGlob, &result.PathExcludeGlob, &result.State, &result.CreatedBy, &result.CreatedAt, &result.UpdatedAt)
 	if err != nil {
 		return domain.RuleBinding{}, fmt.Errorf("create rule binding: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_binding.created', $3, jsonb_build_object('rule_version_id', $4::text, 'scope_kind', $5::text, 'scope_ref', $6::text, 'precedence', $7::integer))`, tenantID, actor, result.ID.String(), result.RuleVersionID.String(), result.ScopeKind, result.ScopeRef, result.Precedence); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_binding.created', $3, jsonb_build_object('rule_version_id', $4::text, 'scope_kind', $5::text, 'scope_ref', $6::text, 'scope_provider', $7::text, 'scope_api_base_url', $8::text, 'precedence', $9::integer))`, tenantID, actor, result.ID.String(), result.RuleVersionID.String(), result.ScopeKind, result.ScopeRef, result.ScopeProvider, result.ScopeAPIBaseURL, result.Precedence); err != nil {
 		return domain.RuleBinding{}, fmt.Errorf("audit rule binding creation: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -379,13 +1006,61 @@ func (s *PostgresStore) UpdateRuleBinding(ctx context.Context, actor, tenantSlug
 	if !canManageRules(role) {
 		return domain.RuleBinding{}, ErrForbidden
 	}
+	var currentState string
+	err = tx.QueryRow(ctx, `SELECT state FROM rule_bindings WHERE id=$1 AND tenant_id=$2 FOR UPDATE`, bindingID, tenantID).Scan(&currentState)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RuleBinding{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.RuleBinding{}, fmt.Errorf("load rule binding state: %w", err)
+	}
+	if currentState != input.State {
+		var activeCanary bool
+		err = tx.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM rule_rollouts
+			              WHERE tenant_id=$1 AND mode='canary' AND state IN ('active','paused')
+			                AND (baseline_binding_id=$2 OR candidate_binding_id=$2))`, tenantID, bindingID).Scan(&activeCanary)
+		if err != nil {
+			return domain.RuleBinding{}, fmt.Errorf("check active Canary binding: %w", err)
+		}
+		if activeCanary {
+			return domain.RuleBinding{}, ErrActiveRuleRollout
+		}
+	}
+	if currentState == "shadow" && input.State == "active" {
+		var governedCandidate bool
+		err = tx.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM rule_rollouts WHERE tenant_id=$1 AND candidate_binding_id=$2)
+			    OR EXISTS(
+				SELECT 1 FROM rule_bindings candidate
+				JOIN rule_versions candidate_version ON candidate_version.id=candidate.rule_version_id
+				JOIN rule_bindings baseline ON baseline.tenant_id=candidate.tenant_id
+				JOIN rule_versions baseline_version ON baseline_version.id=baseline.rule_version_id
+				WHERE candidate.id=$2 AND candidate.tenant_id=$1
+				  AND baseline.id<>candidate.id AND baseline.state='active'
+				  AND baseline_version.rule_set_id=candidate_version.rule_set_id
+				  AND baseline.rule_version_id<>candidate.rule_version_id
+				  AND baseline.scope_kind=candidate.scope_kind AND baseline.scope_ref=candidate.scope_ref
+				  AND baseline.scope_provider=candidate.scope_provider AND baseline.scope_api_base_url=candidate.scope_api_base_url
+				  AND baseline.precedence=candidate.precedence
+				  AND baseline.target_branch_glob=candidate.target_branch_glob
+				  AND baseline.path_include_glob=candidate.path_include_glob
+				  AND baseline.path_exclude_glob=candidate.path_exclude_glob
+			)`, tenantID, bindingID).Scan(&governedCandidate)
+		if err != nil {
+			return domain.RuleBinding{}, fmt.Errorf("check governed binding rollout: %w", err)
+		}
+		if governedCandidate {
+			return domain.RuleBinding{}, ErrRuleRolloutRequired
+		}
+	}
 	result := domain.RuleBinding{}
 	err = tx.QueryRow(ctx, `
 		UPDATE rule_bindings
 		SET state = $3, updated_at = now()
 		WHERE id = $1 AND tenant_id = $2
-		RETURNING id, tenant_id, rule_version_id, scope_kind, scope_ref, precedence, target_branch_glob, path_include_glob, path_exclude_glob, state, created_by, created_at, updated_at`, bindingID, tenantID, input.State).
-		Scan(&result.ID, &result.TenantID, &result.RuleVersionID, &result.ScopeKind, &result.ScopeRef, &result.Precedence, &result.TargetBranchGlob, &result.PathIncludeGlob, &result.PathExcludeGlob, &result.State, &result.CreatedBy, &result.CreatedAt, &result.UpdatedAt)
+		RETURNING id, tenant_id, rule_version_id, scope_kind, scope_ref, scope_provider, scope_api_base_url, precedence, target_branch_glob, path_include_glob, path_exclude_glob, state, created_by, created_at, updated_at`, bindingID, tenantID, input.State).
+		Scan(&result.ID, &result.TenantID, &result.RuleVersionID, &result.ScopeKind, &result.ScopeRef, &result.ScopeProvider, &result.ScopeAPIBaseURL, &result.Precedence, &result.TargetBranchGlob, &result.PathIncludeGlob, &result.PathExcludeGlob, &result.State, &result.CreatedBy, &result.CreatedAt, &result.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RuleBinding{}, ErrNotFound
 	}
@@ -410,7 +1085,7 @@ func (s *PostgresStore) ListRuleBindings(ctx context.Context, actor, tenantSlug 
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, rule_version_id, scope_kind, scope_ref, precedence, target_branch_glob, path_include_glob, path_exclude_glob, state, created_by, created_at, updated_at
+		SELECT id, tenant_id, rule_version_id, scope_kind, scope_ref, scope_provider, scope_api_base_url, precedence, target_branch_glob, path_include_glob, path_exclude_glob, state, created_by, created_at, updated_at
 		FROM rule_bindings
 		WHERE tenant_id = $1
 		ORDER BY precedence ASC, created_at DESC, id DESC
@@ -422,7 +1097,7 @@ func (s *PostgresStore) ListRuleBindings(ctx context.Context, actor, tenantSlug 
 	bindings := make([]domain.RuleBinding, 0)
 	for rows.Next() {
 		var item domain.RuleBinding
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.RuleVersionID, &item.ScopeKind, &item.ScopeRef, &item.Precedence, &item.TargetBranchGlob, &item.PathIncludeGlob, &item.PathExcludeGlob, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.RuleVersionID, &item.ScopeKind, &item.ScopeRef, &item.ScopeProvider, &item.ScopeAPIBaseURL, &item.Precedence, &item.TargetBranchGlob, &item.PathIncludeGlob, &item.PathExcludeGlob, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan rule binding: %w", err)
 		}
 		bindings = append(bindings, item)
@@ -494,7 +1169,6 @@ func (s *PostgresStore) GetRuleSnapshot(ctx context.Context, actor, tenantSlug s
 	if err != nil {
 		return domain.RuleSnapshot{}, fmt.Errorf("list rule snapshot sources: %w", err)
 	}
-	defer rows.Close()
 	snapshot.Sources = make([]domain.RuleSnapshotSource, 0)
 	for rows.Next() {
 		var source domain.RuleSnapshotSource
@@ -504,31 +1178,45 @@ func (s *PostgresStore) GetRuleSnapshot(ctx context.Context, actor, tenantSlug s
 		snapshot.Sources = append(snapshot.Sources, source)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return domain.RuleSnapshot{}, fmt.Errorf("iterate rule snapshot sources: %w", err)
+	}
+	rows.Close()
+	exceptionRows, err := s.pool.Query(ctx, `
+		SELECT exception_id, rule_version_id, rule_key, expires_at
+		FROM rule_snapshot_exceptions
+		WHERE snapshot_id = $1
+		ORDER BY exception_id`, snapshot.ID)
+	if err != nil {
+		return domain.RuleSnapshot{}, fmt.Errorf("list rule snapshot exceptions: %w", err)
+	}
+	defer exceptionRows.Close()
+	snapshot.Exceptions = make([]domain.RuleSnapshotException, 0)
+	for exceptionRows.Next() {
+		var exception domain.RuleSnapshotException
+		if err := exceptionRows.Scan(&exception.ExceptionID, &exception.RuleVersionID, &exception.RuleKey, &exception.ExpiresAt); err != nil {
+			return domain.RuleSnapshot{}, fmt.Errorf("scan rule snapshot exception: %w", err)
+		}
+		snapshot.Exceptions = append(snapshot.Exceptions, exception)
+	}
+	if err := exceptionRows.Err(); err != nil {
+		return domain.RuleSnapshot{}, fmt.Errorf("iterate rule snapshot exceptions: %w", err)
 	}
 	return snapshot, nil
 }
 
 func validRuleBindingInput(input *domain.RuleBindingInput) bool {
-	input.ScopeKind = strings.ToLower(strings.TrimSpace(input.ScopeKind))
-	input.ScopeRef = strings.TrimSpace(input.ScopeRef)
+	scope, scopeValid := normalizeProviderQualifiedRuleScope(input.ScopeKind, input.ScopeRef, input.ScopeProvider, input.ScopeAPIBaseURL)
+	input.ScopeKind, input.ScopeRef = string(scope.Kind), scope.Ref
+	input.ScopeProvider, input.ScopeAPIBaseURL = scope.Provider, scope.APIBaseURL
 	input.TargetBranchGlob = strings.TrimSpace(input.TargetBranchGlob)
 	input.PathIncludeGlob = strings.TrimSpace(input.PathIncludeGlob)
 	input.PathExcludeGlob = strings.TrimSpace(input.PathExcludeGlob)
 	input.State = strings.ToLower(strings.TrimSpace(input.State))
-	if input.RuleVersionID == uuid.Nil || input.Precedence < 0 || (input.State != "active" && input.State != "shadow") {
+	if input.RuleVersionID == uuid.Nil || !scopeValid || input.Precedence < 0 || (input.State != "active" && input.State != "shadow") {
 		return false
 	}
-	switch input.ScopeKind {
-	case "tenant":
-		if input.ScopeRef != "" {
-			return false
-		}
-	case "repository":
-		if input.ScopeRef == "" || strings.ContainsAny(input.ScopeRef, "\t\n\r ") || !strings.Contains(input.ScopeRef, "/") {
-			return false
-		}
-	default:
+	if scope.Kind != domain.ReviewConfigTenantScope && scope.Kind != domain.ReviewConfigRepositoryScope {
 		return false
 	}
 	for _, pattern := range []string{input.TargetBranchGlob, input.PathIncludeGlob, input.PathExcludeGlob} {
@@ -540,6 +1228,23 @@ func validRuleBindingInput(input *domain.RuleBindingInput) bool {
 		}
 	}
 	return true
+}
+
+// normalizeProviderQualifiedRuleScope shares the control-plane repository
+// identity model with review configuration. Empty provider metadata is only a
+// compatibility form for records read from older schemas; all new repository
+// policy writes require a provider and API base URL.
+func normalizeProviderQualifiedRuleScope(kind, ref string, provider domain.Provider, apiBaseURL string) (domain.ReviewConfigScope, bool) {
+	scope, valid := (domain.ReviewConfigScope{
+		Kind:       domain.ReviewConfigScopeKind(strings.ToLower(strings.TrimSpace(kind))),
+		Ref:        strings.TrimSpace(ref),
+		Provider:   provider,
+		APIBaseURL: apiBaseURL,
+	}).Normalize()
+	if !valid || (scope.Kind == domain.ReviewConfigRepositoryScope && !scope.QualifiedRepository()) {
+		return scope, false
+	}
+	return scope, scope.Kind == domain.ReviewConfigTenantScope || scope.Kind == domain.ReviewConfigRepositoryScope
 }
 
 func canManageRules(role string) bool {

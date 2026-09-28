@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
@@ -28,6 +30,7 @@ func (p *HTTPPublisher) loadReviewContext(ctx context.Context, job domain.Review
 		review.Contract = normalizedContract(review.Contract)
 		review.Warning = "Pull-request scope metadata could not be loaded; commit provenance is still exact."
 	}
+	review.ConsoleReviewURL, review.ConsoleCommandsURL = p.consoleLinksForJob(ctx, job)
 	return review
 }
 
@@ -63,8 +66,14 @@ func (p *HTTPPublisher) loadGitHubReviewContext(ctx context.Context, job domain.
 		Truncated: pull.ChangedFiles > len(files), Contract: ParseChangeContract(pull.Body),
 	}
 	for _, file := range files {
+		fileURL := file.BlobURL
+		if file.Status == "removed" {
+			// A removed path has no blob in the reviewed head. GitHub's PR
+			// Files view retains the deletion diff and is the honest fallback.
+			fileURL = strings.TrimSuffix(pull.HTMLURL, "/") + "/files"
+		}
 		review.ChangedFiles = append(review.ChangedFiles, ChangedFile{
-			Path: file.Filename, URL: file.BlobURL, Status: file.Status, Additions: file.Additions,
+			Path: file.Filename, URL: fileURL, Status: file.Status, Additions: file.Additions,
 			Deletions: file.Deletions, Changes: file.Changes,
 		})
 	}
@@ -78,10 +87,12 @@ func (p *HTTPPublisher) loadGitLabReviewContext(ctx context.Context, job domain.
 	}
 	project := url.PathEscape(job.Repository)
 	var mergeRequest struct {
-		Title        string `json:"title"`
-		Description  string `json:"description"`
-		WebURL       string `json:"web_url"`
-		ChangesCount string `json:"changes_count"`
+		Title           string `json:"title"`
+		Description     string `json:"description"`
+		WebURL          string `json:"web_url"`
+		ChangesCount    string `json:"changes_count"`
+		SourceProjectID int64  `json:"source_project_id"`
+		TargetProjectID int64  `json:"target_project_id"`
 	}
 	endpoint := fmt.Sprintf("%s/projects/%s/merge_requests/%d", base, project, job.ReviewNumber)
 	if err := p.requestJSON(ctx, http.MethodGet, endpoint, token, nil, &mergeRequest); err != nil {
@@ -119,7 +130,7 @@ func (p *HTTPPublisher) loadGitLabReviewContext(ctx context.Context, job domain.
 		review.TotalAdditions += additions
 		review.TotalDeletions += deletions
 		review.ChangedFiles = append(review.ChangedFiles, ChangedFile{
-			Path: path, URL: strings.TrimSuffix(mergeRequest.WebURL, "/") + "/diffs", Status: status, Additions: additions, Deletions: deletions,
+			Path: path, URL: gitLabChangedFileURL(mergeRequest.WebURL, job.ReviewNumber, job.HeadSHA, path, diff.DeletedFile, mergeRequest.SourceProjectID, mergeRequest.TargetProjectID), Status: status, Additions: additions, Deletions: deletions,
 			Changes: additions + deletions,
 		})
 		if diff.TooLarge {
@@ -134,6 +145,32 @@ func (p *HTTPPublisher) loadGitLabReviewContext(ctx context.Context, job domain.
 		}
 	}
 	return review, nil
+}
+
+var gitLabCommitSHA = regexp.MustCompile(`^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$`)
+
+// A same-project MR can link directly to the file at the immutable reviewed
+// head. A fork's head may not exist in the target project, so it retains the
+// MR diff fallback; removed files likewise have no blob at the head.
+func gitLabChangedFileURL(webURL string, reviewNumber int, headSHA, filePath string, deleted bool, sourceProjectID, targetProjectID int64) string {
+	fallback := strings.TrimSuffix(webURL, "/") + "/diffs"
+	parsed, err := url.Parse(webURL)
+	suffix := "/-/merge_requests/" + strconv.Itoa(reviewNumber)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
+		!strings.HasSuffix(parsed.Path, suffix) || deleted || sourceProjectID <= 0 || sourceProjectID != targetProjectID || !gitLabCommitSHA.MatchString(headSHA) {
+		return fallback
+	}
+	parts := strings.Split(filePath, "/")
+	if filePath == "" || strings.HasPrefix(filePath, "/") {
+		return fallback
+	}
+	for index, part := range parts {
+		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "\\\r\n") {
+			return fallback
+		}
+		parts[index] = url.PathEscape(part)
+	}
+	return parsed.Scheme + "://" + parsed.Host + strings.TrimSuffix(parsed.EscapedPath(), suffix) + "/-/blob/" + headSHA + "/" + strings.Join(parts, "/")
 }
 
 func countUnifiedDiff(diff string) (additions, deletions int) {

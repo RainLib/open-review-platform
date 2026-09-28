@@ -8,9 +8,9 @@ import (
 )
 
 // MergeGateSeverity is the minimum finding severity that turns the stable
-// provider check into a merge-blocking failure. It is deliberately separate
-// from job success: a review can execute and publish findings successfully
-// while still refusing to let a protected branch merge.
+// provider check into a failure. It is deliberately separate from job success:
+// a review can execute and publish findings successfully while its provider
+// check fails. Provider merge policy decides whether that failure blocks merge.
 type MergeGateSeverity string
 
 const (
@@ -70,7 +70,7 @@ func (v MergeGateVerdict) Summary(findings []domain.Finding) string {
 		return "Merge gate is advisory (disabled).\n\n" + result
 	}
 	if v.Blocking > 0 {
-		return fmt.Sprintf("Merge gate blocked: %d finding(s) meet the %q threshold.\n\n%s", v.Blocking, v.Threshold, result)
+		return fmt.Sprintf("Review gate failed: %d finding(s) meet the %q threshold. Provider merge policy must require this result to block merging.\n\n%s", v.Blocking, v.Threshold, result)
 	}
 	return fmt.Sprintf("Merge gate passed: no findings meet the %q threshold.\n\n%s", v.Threshold, result)
 }

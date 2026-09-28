@@ -186,6 +186,25 @@ Idempotency-Key: ...
 
 仅允许服务端列出的 `allowed_retry_stages`；普通用户不能跳过失败的审查阶段直接发布。
 
+### 4.4 Issue 聚合查询
+
+当前阶段一/二实现使用 tenant slug 路由，后续统一 organization 命名时保留资源语义：
+
+```text
+GET /v1/tenants/{org}/issues?status=regressed&severity=critical&repository=RainLib/open-review-platform&limit=50
+GET /v1/tenants/{org}/issues/{issue_id}
+```
+
+Issue 是 tenant + provider instance + repository + finding fingerprint 的稳定聚合，不是单条 finding。列表返回：
+
+- `status`: `open | regressed | resolved | suppressed`；
+- `occurrence_count` 与 `active_occurrence_count`；
+- `pull_request_count`；
+- provider、API base URL、repository、path、severity、category；
+- first/last seen、resolved time 和稳定 fingerprint。
+
+详情返回历史 occurrence，其中包含 review number、head SHA、request/run、代码位置、finding 内容与 active 状态。新 head 保存结果时，同一 PR 的上一组 occurrence 先失活；没有活动 occurrence 时 issue 进入 `resolved`，已 resolved 的 fingerprint 再次出现时进入 `regressed`。`suppressed` 只允许由有效 exception 驱动，不能由普通 finding disposition 冒充。
+
 ## 5. SSE 契约
 
 ```http

@@ -70,14 +70,76 @@ type Snapshot struct {
 	// Include and Exclude use OCR's native file-filter semantics: includes are
 	// unioned and excludes always win. An empty Include means no additional
 	// include restriction.
-	Include []string `json:"include,omitempty"`
-	Exclude []string `json:"exclude,omitempty"`
+	Include           []string           `json:"include,omitempty"`
+	Exclude           []string           `json:"exclude,omitempty"`
+	AppliedExceptions []AppliedException `json:"applied_exceptions,omitempty"`
+}
+
+// AppliedException is trusted control-plane provenance embedded in the
+// canonical snapshot. It removes only the matching effective source entry;
+// an override of the same key from another version remains effective.
+type AppliedException struct {
+	ID            string `json:"id"`
+	RuleKey       string `json:"rule_key"`
+	SourceVersion string `json:"source_version"`
+	ScopeKind     string `json:"scope_kind"`
+	ScopeRef      string `json:"scope_ref,omitempty"`
+	TargetBranch  string `json:"target_branch_glob,omitempty"`
+	ExpiresAt     string `json:"expires_at"`
 }
 
 type Compiled struct {
 	Snapshot  Snapshot
 	Canonical []byte
 	SHA256    string
+}
+
+func ApplyExceptions(compiled Compiled, exceptions []AppliedException) (Compiled, error) {
+	if len(exceptions) == 0 {
+		return compiled, nil
+	}
+	exceptions = append([]AppliedException(nil), exceptions...)
+	sort.Slice(exceptions, func(i, j int) bool { return exceptions[i].ID < exceptions[j].ID })
+	seen := make(map[string]struct{}, len(exceptions))
+	for _, exception := range exceptions {
+		if strings.TrimSpace(exception.ID) == "" || strings.TrimSpace(exception.RuleKey) == "" || strings.TrimSpace(exception.SourceVersion) == "" || strings.TrimSpace(exception.ExpiresAt) == "" {
+			return Compiled{}, fmt.Errorf("applied exception identity, rule key, source version, and expiry are required")
+		}
+		if _, duplicate := seen[exception.ID]; duplicate {
+			return Compiled{}, fmt.Errorf("duplicate applied exception %q", exception.ID)
+		}
+		seen[exception.ID] = struct{}{}
+	}
+	snapshot := compiled.Snapshot
+	snapshot.Rules = append([]EffectiveRule(nil), snapshot.Rules...)
+	filtered := snapshot.Rules[:0]
+	matched := make(map[string]struct{}, len(exceptions))
+	for _, rule := range snapshot.Rules {
+		excluded := false
+		for _, exception := range exceptions {
+			if rule.Key == exception.RuleKey && rule.SourceVersion == exception.SourceVersion {
+				excluded = true
+				matched[exception.ID] = struct{}{}
+				break
+			}
+		}
+		if !excluded {
+			filtered = append(filtered, rule)
+		}
+	}
+	snapshot.Rules = filtered
+	snapshot.AppliedExceptions = make([]AppliedException, 0, len(matched))
+	for _, exception := range exceptions {
+		if _, ok := matched[exception.ID]; ok {
+			snapshot.AppliedExceptions = append(snapshot.AppliedExceptions, exception)
+		}
+	}
+	canonical, err := json.Marshal(snapshot)
+	if err != nil {
+		return Compiled{}, fmt.Errorf("marshal exception-aware rule snapshot: %w", err)
+	}
+	digest := sha256.Sum256(canonical)
+	return Compiled{Snapshot: snapshot, Canonical: canonical, SHA256: hex.EncodeToString(digest[:])}, nil
 }
 
 // Compile validates and merges trusted published rule versions. A result can

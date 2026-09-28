@@ -1,6 +1,6 @@
 import {
-  forwardDevelopmentRequest,
-  unavailableDevelopmentResponse,
+  forwardControlPlaneRequest,
+  unavailableControlPlaneResponse,
 } from "@/lib/control-plane-proxy";
 
 export const dynamic = "force-dynamic";
@@ -99,7 +99,7 @@ export async function POST(
     );
   }
 
-  const upstream = await forwardDevelopmentRequest(
+  const upstream = await forwardControlPlaneRequest(
     `/v1/tenants/${encodeURIComponent(org)}/rule-sets`,
     {
       method: "POST",
@@ -108,7 +108,7 @@ export async function POST(
       signal: request.signal,
     },
   );
-  if (!upstream) return unavailableDevelopmentResponse();
+  if (!upstream) return unavailableControlPlaneResponse();
 
   return new Response(await upstream.text(), {
     status: upstream.status,

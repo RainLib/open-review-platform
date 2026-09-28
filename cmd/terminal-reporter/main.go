@@ -36,7 +36,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer database.Close()
-	resolver, err := credentials.New(cfg)
+	resolver, err := credentials.New(cfg, database)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -45,19 +45,19 @@ func main() {
 		log.Fatal(err)
 	}
 	defer consumer.Close()
-	provider := publisher.NewHTTPWithResolver(resolver)
+	provider := publisher.NewHTTPWithResolverAndSnapshotsAndConsoleURL(resolver, database, cfg.ConsoleURL)
 	if err := consumer.Consume(ctx, terminalQueue, terminalConsumer, func(ctx context.Context, body []byte) error {
 		message, err := messaging.DecodeOutboxMessage(body)
 		if err != nil {
 			return err
 		}
 		switch message.Topic {
-		case "review.run.cancelled", "review.run.superseded", "review.run.failed":
+		case "review.run.cancelled", "review.run.superseded", "review.run.failed", "review.run.needs_attention":
 		default:
 			return fmt.Errorf("unexpected terminal review topic %q", message.Topic)
 		}
 		return messaging.HandleExactlyOnce(ctx, database, terminalConsumer, message, func(ctx context.Context, message domain.OutboxMessage) error {
-			return terminal.Publish(ctx, database, provider, provider, message)
+			return terminal.Handle(ctx, database, database, provider, provider, message)
 		})
 	}); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("terminal review reporter stopped", "error", err)
