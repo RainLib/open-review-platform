@@ -16,6 +16,8 @@ import {
   LogOut,
   Monitor,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Search,
   Settings2,
@@ -30,6 +32,7 @@ import { cn } from "@/lib/utils";
 
 type ThemePreference = "system" | "light" | "dark";
 const themeChangeEvent = "open-review-theme-change";
+const sidebarChangeEvent = "open-review-sidebar-change";
 
 function readTheme(): ThemePreference {
   const stored = window.localStorage.getItem("open-review-theme");
@@ -44,6 +47,19 @@ function subscribeToTheme(onStoreChange: () => void) {
   return () => {
     window.removeEventListener("storage", onStoreChange);
     window.removeEventListener(themeChangeEvent, onStoreChange);
+  };
+}
+
+function readSidebarExpanded() {
+  return window.localStorage.getItem("open-review-sidebar") !== "collapsed";
+}
+
+function subscribeToSidebar(onStoreChange: () => void) {
+  window.addEventListener("storage", onStoreChange);
+  window.addEventListener(sidebarChangeEvent, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStoreChange);
+    window.removeEventListener(sidebarChangeEvent, onStoreChange);
   };
 }
 
@@ -72,6 +88,11 @@ export function LuminousConsoleShell({
 }) {
   const pathname = usePathname();
   const theme = useSyncExternalStore(subscribeToTheme, readTheme, () => "system");
+  const sidebarExpanded = useSyncExternalStore(
+    subscribeToSidebar,
+    readSidebarExpanded,
+    () => true,
+  );
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const commandTriggerRef = useRef<HTMLButtonElement>(null);
@@ -101,6 +122,14 @@ export function LuminousConsoleShell({
     const next = theme === "system" ? "light" : theme === "light" ? "dark" : "system";
     window.localStorage.setItem("open-review-theme", next);
     window.dispatchEvent(new Event(themeChangeEvent));
+  }
+
+  function toggleSidebar() {
+    window.localStorage.setItem(
+      "open-review-sidebar",
+      sidebarExpanded ? "collapsed" : "expanded",
+    );
+    window.dispatchEvent(new Event(sidebarChangeEvent));
   }
 
   function openCommandPalette() {
@@ -255,33 +284,63 @@ export function LuminousConsoleShell({
         </div>
       </header>
 
-      <aside aria-hidden={commandOpen || undefined} className="luminous-frosted fixed inset-y-14 left-0 z-30 hidden w-16 border-r border-[var(--ls-line)] md:flex md:flex-col md:items-center md:gap-2 md:py-5">
-        {railItems.map((item) => {
-          const href = `/${org}/${item.key}`;
-          const active = pathname.startsWith(href) || (item.key === "issues" && pathname.startsWith(`/${org}/provider-issues`));
-          const Icon = item.icon;
-          return (
-            <Link
-              aria-current={active ? "page" : undefined}
-              aria-label={item.label}
-              className={cn(
-                "luminous-focus relative grid size-10 place-items-center rounded-[11px] transition",
-                active
-                  ? "bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]"
-                  : "text-[var(--ls-text-tertiary)] hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]",
-              )}
-              href={href}
-              key={item.key}
-              title={item.label}
-            >
-              {active ? <span className="absolute -left-3 h-5 w-0.5 rounded-full bg-[var(--ls-accent)]" /> : null}
-              <Icon className="size-[18px]" />
-            </Link>
-          );
-        })}
+      <aside
+        aria-hidden={commandOpen || undefined}
+        className={cn(
+          "luminous-frosted fixed inset-y-14 left-0 z-30 hidden border-r border-[var(--ls-line)] transition-[width] duration-200 md:flex md:flex-col md:gap-2 md:px-3 md:py-5",
+          sidebarExpanded ? "w-56" : "w-16",
+        )}
+      >
+        <button
+          aria-controls="console-sidebar-navigation"
+          aria-expanded={sidebarExpanded}
+          aria-label={sidebarExpanded ? "Collapse navigation" : "Expand navigation"}
+          className={cn(
+            "luminous-focus flex h-10 items-center rounded-[11px] text-[var(--ls-text-secondary)] transition hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]",
+            sidebarExpanded ? "justify-between px-3" : "justify-center",
+          )}
+          onClick={toggleSidebar}
+          title={sidebarExpanded ? "Collapse navigation" : "Expand navigation"}
+          type="button"
+        >
+          {sidebarExpanded ? <span className="text-xs font-semibold uppercase tracking-wider">Navigation</span> : null}
+          {sidebarExpanded ? <PanelLeftClose className="size-[18px]" /> : <PanelLeftOpen className="size-[18px]" />}
+        </button>
+        <nav aria-label="Workspace navigation" className="flex flex-col gap-2" id="console-sidebar-navigation">
+          {railItems.map((item) => {
+            const href = `/${org}/${item.key}`;
+            const active = pathname.startsWith(href) || (item.key === "issues" && pathname.startsWith(`/${org}/provider-issues`));
+            const Icon = item.icon;
+            return (
+              <Link
+                aria-current={active ? "page" : undefined}
+                aria-label={item.label}
+                className={cn(
+                  "luminous-focus relative flex h-10 items-center rounded-[11px] transition",
+                  sidebarExpanded ? "gap-3 px-3" : "justify-center",
+                  active
+                    ? "bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]"
+                    : "text-[var(--ls-text-tertiary)] hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]",
+                )}
+                href={href}
+                key={item.key}
+                title={sidebarExpanded ? undefined : item.label}
+              >
+                {active ? <span className="absolute -left-3 h-5 w-0.5 rounded-full bg-[var(--ls-accent)]" /> : null}
+                <Icon className="size-[18px] shrink-0" />
+                {sidebarExpanded ? <span className="truncate text-sm font-medium">{item.label}</span> : null}
+              </Link>
+            );
+          })}
+        </nav>
       </aside>
 
-      <main aria-hidden={commandOpen || undefined} className="pb-20 md:pl-16 md:pb-0" id="main-content" tabIndex={-1}>
+      <main
+        aria-hidden={commandOpen || undefined}
+        className={cn("pb-20 transition-[padding] duration-200 md:pb-0", sidebarExpanded ? "md:pl-56" : "md:pl-16")}
+        id="main-content"
+        tabIndex={-1}
+      >
         <div className="mx-auto max-w-[1600px] px-4 py-6 sm:px-7 lg:px-10 lg:py-8">
           {preview ? <PreviewModeNotice org={org} /> : null}
           {children}
