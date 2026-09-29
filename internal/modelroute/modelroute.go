@@ -56,6 +56,7 @@ type Execution struct {
 type PromptExecution struct {
 	SystemInstruction           string
 	RepositoryContext           string
+	ReviewLanguage              string
 	MaxPromptTokens             int
 	AllowRepositoryInstructions bool
 }

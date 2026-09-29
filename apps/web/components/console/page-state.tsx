@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import type { UiLanguage } from "@/lib/ui-language";
 
 export type PageStateKind =
   | "loading"
@@ -138,12 +139,16 @@ export function RecoveryAction({
 
 export function DataFreshness({
   detail,
+  language = "en",
   state,
 }: {
   detail?: string;
+  language?: UiLanguage;
   state: "live" | "demo" | "partial" | "stale" | "unavailable" | "unconfigured";
 }) {
-  const label = state === "live"
+  const label = language === "zh-CN"
+    ? ({ live: "控制面实时数据", demo: "只读预览", partial: "控制面数据不完整", stale: "证据已过期", unconfigured: "控制面未配置", unavailable: "控制面不可用" } as const)[state]
+    : state === "live"
     ? "Live control-plane data"
     : state === "demo"
       ? "Read-only preview"

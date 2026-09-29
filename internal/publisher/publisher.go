@@ -197,6 +197,9 @@ func (p *HTTPPublisher) PublishWithReceipts(ctx context.Context, job domain.Revi
 	if err := p.ValidateReviewRevision(job); err != nil {
 		return nil, err
 	}
+	// Publication and replay use the admitted repository policy, not a mutable
+	// caller-selected language.
+	result.Language = p.reviewLanguage(ctx, job)
 	token, err := p.resolve(ctx, job)
 	if err != nil {
 		return nil, err
@@ -309,7 +312,7 @@ func (p *HTTPPublisher) PublishStarted(ctx context.Context, job domain.ReviewJob
 		return err
 	}
 	marker := "open-review-platform:summary:" + job.ID.String()
-	body := StartedReportWithMessage(job, p.loadReviewContext(ctx, job, token), p.lifecycleMessage(ctx, job, "started"), marker)
+	body := StartedReportForLanguage(job, p.loadReviewContext(ctx, job, token), p.lifecycleMessage(ctx, job, "started"), marker, p.reviewLanguage(ctx, job))
 	switch job.Provider {
 	case domain.ProviderGitHub:
 		return p.githubUpsertSummary(ctx, githubAPIBase(job.APIBaseURL), job, token, body)
@@ -330,7 +333,7 @@ func (p *HTTPPublisher) PublishTerminal(ctx context.Context, job domain.ReviewJo
 		return err
 	}
 	marker := "open-review-platform:summary:" + job.ID.String()
-	body := TerminalReportWithMessage(job, state, p.lifecycleMessage(ctx, job, terminalMessageKey(state)), marker)
+	body := TerminalReportForLanguage(job, state, p.lifecycleMessage(ctx, job, terminalMessageKey(state)), marker, p.reviewLanguage(ctx, job))
 	switch job.Provider {
 	case domain.ProviderGitHub:
 		return p.githubUpsertSummary(ctx, githubAPIBase(job.APIBaseURL), job, token, body)
@@ -355,7 +358,7 @@ func (p *HTTPPublisher) PublishProgress(ctx context.Context, job domain.ReviewJo
 		return err
 	}
 	marker := "open-review-platform:summary:" + job.ID.String()
-	body := ProgressReportWithMessage(job, p.loadReviewContext(ctx, job, token), message, marker)
+	body := ProgressReportForLanguage(job, p.loadReviewContext(ctx, job, token), message, marker, p.reviewLanguage(ctx, job))
 	switch job.Provider {
 	case domain.ProviderGitHub:
 		return p.githubUpsertSummary(ctx, githubAPIBase(job.APIBaseURL), job, token, body)
@@ -392,6 +395,21 @@ func (p *HTTPPublisher) lifecycleMessage(ctx context.Context, job domain.ReviewJ
 		message = strings.TrimSpace(messages["completed"])
 	}
 	return message
+}
+
+func (p *HTTPPublisher) reviewLanguage(ctx context.Context, job domain.ReviewJob) string {
+	if p.snapshots == nil || job.ID == uuid.Nil {
+		return "en"
+	}
+	snapshot, err := p.snapshots.ReviewConfigSnapshotForJob(ctx, job.ID, domain.ReviewConfigGeneral)
+	if err != nil {
+		return "en"
+	}
+	general, err := domain.DecodeReviewGeneralConfig(snapshot.Content)
+	if err != nil {
+		return "en"
+	}
+	return general.ReviewLanguage
 }
 
 func (p *HTTPPublisher) summaryConfig(ctx context.Context, job domain.ReviewJob) domain.ReviewSummaryConfig {
@@ -754,13 +772,13 @@ func (p *HTTPPublisher) publishGitHubWithReceipts(ctx context.Context, job domai
 	var inline []githubPendingFinding
 	for _, finding := range findings {
 		marker := findingMarker(job, finding)
-		receipt := publicationReceipt("inline_finding", marker, FindingReport(job, finding, marker))
+		receipt := publicationReceipt("inline_finding", marker, FindingReportForLanguage(job, finding, marker, result.Language))
 		if existing[marker] {
 			receipts = append(receipts, receipt)
 			continue
 		}
 		if canInline(job, finding) {
-			inline = append(inline, githubPendingFinding{comment: githubInlineComment{Path: finding.Path, Line: finding.EndLine, Side: "RIGHT", Body: FindingReport(job, finding, marker)}, receipt: receipt})
+			inline = append(inline, githubPendingFinding{comment: githubInlineComment{Path: finding.Path, Line: finding.EndLine, Side: "RIGHT", Body: FindingReportForLanguage(job, finding, marker, result.Language)}, receipt: receipt})
 		}
 	}
 	for start := 0; start < len(inline); start += 25 {
@@ -776,7 +794,7 @@ func (p *HTTPPublisher) publishGitHubWithReceipts(ctx context.Context, job domai
 			Event    string                `json:"event"`
 			Comments []githubInlineComment `json:"comments"`
 		}{
-			Body:     "## Open Review findings\n\n" + ResultSummary(findings) + " Detailed analysis and fixes are attached to the relevant lines.\n\n<!-- open-review-platform:review:" + job.ID.String() + " -->",
+			Body:     localizedInlineReviewSummary(findings, result.Language) + "\n\n<!-- open-review-platform:review:" + job.ID.String() + " -->",
 			CommitID: job.HeadSHA,
 			Event:    "COMMENT",
 			Comments: comments,
@@ -843,7 +861,7 @@ func (p *HTTPPublisher) publishGitLabWithReceipts(ctx context.Context, job domai
 	receipts := make([]domain.PublicationReceipt, 0, len(findings)+1)
 	for _, finding := range findings {
 		marker := findingMarker(job, finding)
-		body := FindingReport(job, finding, marker)
+		body := FindingReportForLanguage(job, finding, marker, result.Language)
 		receipt := publicationReceipt("inline_finding", marker, body)
 		if existing[marker] {
 			receipts = append(receipts, receipt)

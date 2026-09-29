@@ -16,6 +16,8 @@ import {
 } from "@/components/console/page-state";
 import { getConsoleData, getPullRequestData } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
+import { getUiLanguage } from "@/lib/ui-language-server";
+import { uiText } from "@/lib/ui-language";
 import {
   formatTime,
   shortSHA,
@@ -26,7 +28,8 @@ export default async function HomePage({
 }: {
   params: Promise<{ org: string }>;
 }) {
-  const { org } = await params;
+  const [{ org }, language] = await Promise.all([params, getUiLanguage()]);
+  const t = (key: Parameters<typeof uiText>[1]) => uiText(language, key);
   const [data, pullRequests] = await Promise.all([
     getConsoleData(org),
     getPullRequestData(org, { view: "all", limit: 6 }),
@@ -44,17 +47,17 @@ export default async function HomePage({
       <header className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">
-            Evidence-first operations
+            {t("evidenceOperations")}
           </p>
           <h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
-            Review cockpit
+            {t("reviewCockpit")}
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            Decide where attention belongs next. Counts are resolved from one
-            current durable review per pull request, never a slice of retries.
+            {t("cockpitIntro")}
           </p>
         </div>
         <DataFreshness
+          language={language}
           detail={reviewIndexLive && !governanceAvailable
             ? data.detail ?? "Review counts are current, but connection and policy inventory could not be verified."
             : pullRequests.detail}
@@ -70,23 +73,23 @@ export default async function HomePage({
 
       <section className="grid gap-3 md:grid-cols-3">
         <Metric
-          detail="Current pull requests that are queued, running, or awaiting a durable transition"
+          detail={t("activeReviewsDetail")}
           icon={Clock3}
-          label="Active reviews"
+          label={t("activeReviews")}
           tone="accent"
           value={reviewIndexLive ? pullRequests.counts.active : undefined}
         />
         <Metric
-          detail="Current pull requests whose latest review needs an explicit decision"
+          detail={t("needsAttentionDetail")}
           icon={CircleAlert}
-          label="Needs attention"
+          label={t("needsAttention")}
           tone="warning"
           value={reviewIndexLive ? pullRequests.counts.attention : undefined}
         />
         <Metric
-          detail="Current pull requests with a terminal review state"
+          detail={t("closedReviewsDetail")}
           icon={ShieldCheck}
-          label="Closed reviews"
+          label={t("closedReviews")}
           tone="success"
           value={reviewIndexLive ? pullRequests.counts.completed : undefined}
         />
@@ -98,17 +101,17 @@ export default async function HomePage({
             <div className="flex items-center justify-between gap-4 border-b border-[var(--ls-line)] px-5 py-4">
               <div>
                 <h2 className="text-sm font-semibold text-[var(--ls-text)]">
-                  Review pulse
+                  {t("reviewPulse")}
                 </h2>
                 <p className="mt-1 text-xs text-[var(--ls-text-tertiary)]">
-                  One current review per pull request, ordered by control-plane time.
+                  {t("reviewPulseDetail")}
                 </p>
               </div>
               <Link
                 className="luminous-focus inline-flex min-h-6 shrink-0 items-center gap-1 rounded text-xs font-medium text-[var(--ls-accent)]"
                 href={`/${encodeURIComponent(org)}/reviews`}
               >
-                All reviews <ArrowRight className="size-3.5" />
+                {t("allReviews")} <ArrowRight className="size-3.5" />
               </Link>
             </div>
             <div className="divide-y divide-[var(--ls-line)]">
@@ -133,7 +136,7 @@ export default async function HomePage({
                         {shortSHA(run.base_sha)} → {shortSHA(run.head_sha)}
                       </span>
                       <span>{run.trigger_kind.replaceAll("_", " ")}</span>
-                      <span>{formatTime(run.created_at)}</span>
+                      <span>{formatTime(run.created_at, language)}</span>
                     </div>
                   </div>
                   <StatusBadge state={run.state} />
@@ -145,37 +148,36 @@ export default async function HomePage({
           <section className="luminous-frosted rounded-[20px] border border-[var(--ls-line-strong)] p-5 shadow-[var(--ls-shadow-float)]">
             <div className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]">
               <Sparkles className="size-4 text-[var(--ls-accent)]" />
-              Governance signal
+              {t("governanceSignal")}
             </div>
             <p className="mt-3 text-sm leading-6 text-[var(--ls-text-secondary)]">
-              Policy resolves into an immutable snapshot at admission. A pull
-              request cannot rewrite its governance from the branch under review.
+              {t("governanceDetail")}
             </p>
             <div className="mt-6 space-y-3">
               {governanceAvailable ? (
                 <Signal
-                  detail="Rules are versioned and require explicit publication."
+                  detail={t("policyVersionDetail")}
                   icon={ShieldCheck}
                   label={`${data.ruleSets.length} policy set${data.ruleSets.length === 1 ? "" : "s"} visible`}
                   tone="success"
                 />
               ) : (
                 <Signal
-                  detail="The policy inventory could not be verified. No rule-set count is inferred."
+                  detail={t("policyUnavailableDetail")}
                   icon={CircleAlert}
-                  label="Policy inventory unavailable"
+                  label={t("policyUnavailable")}
                   tone="warning"
                 />
               )}
               <Signal
-                detail="Only the exact reviewed revision is authoritative."
+                detail={t("revisionHistoryDetail")}
                 icon={Clock3}
-                label="Revision-aware history"
+                label={t("revisionHistory")}
                 tone="accent"
               />
               {reviewIndexLive && pullRequests.counts.attention ? (
                 <Signal
-                  detail="Review exact run evidence before changing policy."
+                  detail={t("followUpDetail")}
                   icon={CircleAlert}
                   label={`${pullRequests.counts.attention} follow-up${pullRequests.counts.attention === 1 ? "" : "s"} need attention`}
                   tone="warning"
@@ -186,13 +188,13 @@ export default async function HomePage({
               className="luminous-focus mt-6 inline-flex min-h-6 items-center gap-1 rounded text-sm font-medium text-[var(--ls-accent)]"
               href={`/${encodeURIComponent(org)}/tasks?tab=needs-attention`}
             >
-              Open work queue <ArrowRight className="size-4" />
+              {t("openWorkQueue")} <ArrowRight className="size-4" />
             </Link>
           </section>
         </div>
       ) : reviewIndexLive && !governanceAvailable ? (
         <PageState
-          action={<RecoveryAction href={`/${encodeURIComponent(org)}/connect?tab=installations`}>Check connections</RecoveryAction>}
+          action={<RecoveryAction href={`/${encodeURIComponent(org)}/connect?tab=installations`}>{t("checkConnections")}</RecoveryAction>}
           detail="The pull-request index has no current review runs, but connection and policy status could not be verified. No first-use state is inferred."
           kind="partial"
           title="Review index loaded; setup status unavailable"
@@ -204,21 +206,21 @@ export default async function HomePage({
               href={`/${encodeURIComponent(org)}/connect?tab=installations`}
               variant="primary"
             >
-              {hasVerifiedInstallation ? "Open connections" : "Connect source control"}
+              {hasVerifiedInstallation ? t("openConnections") : t("connectSource")}
             </RecoveryAction>
           }
           detail={`${hasVerifiedInstallation
             ? "Your connection is verified. Open or update an eligible pull request to create the first durable review run."
             : "Connect a provider and admit a pull request to see durable review state here."} The cockpit does not synthesize placeholder activity.`}
           kind="first-use-empty"
-          title="No review activity is available"
+          title={t("noReviewActivity")}
         />
       ) : (
         <PageState
-          action={<RecoveryAction href={`/${encodeURIComponent(org)}/reviews?view=all`}>Open pull requests</RecoveryAction>}
+          action={<RecoveryAction href={`/${encodeURIComponent(org)}/reviews?view=all`}>{t("pullRequests")}</RecoveryAction>}
           detail={pullRequests.detail ?? "The current pull-request index could not be loaded. No review counts are shown until the control-plane read succeeds."}
           kind="unavailable"
-          title="Review index is unavailable"
+          title={t("reviewIndexUnavailable")}
         />
       )}
     </div>

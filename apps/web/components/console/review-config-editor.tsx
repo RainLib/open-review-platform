@@ -37,6 +37,7 @@ import type {
 import { TabStateRouter } from "@/components/console/tab-state-router";
 import { ReviewConfigVersionHistory } from "@/components/console/review-config-version-history";
 import { cn } from "@/lib/utils";
+import { useUiLanguage, useUiText } from "@/components/console/ui-language-context";
 
 const sections: Array<{
   key: ReviewConfigSection;
@@ -52,6 +53,17 @@ const sections: Array<{
   { key: "summary", label: "PR summary", summary: "Evidence sections and output budget", icon: FileText },
   { key: "messages", label: "Custom messages", summary: "Lifecycle comments shown in the provider", icon: MessageSquareText },
 ];
+
+const reviewSectionChinese: Record<ReviewConfigSection, { label: string; summary: string }> = {
+  general: { label: "常规", summary: "审核频率、草稿、语言及合并门控" },
+  categories: { label: "问题类别", summary: "检测类别和发布阈值" },
+  filters: { label: "审核筛选", summary: "路径、作者、标签与目标分支" },
+  prompts: { label: "自定义提示词", summary: "可信指令与仓库上下文" },
+  models: { label: "模型", summary: "审核模型路由与配置" },
+  "issue-triage": { label: "Issue 分析", summary: "Issue 模板、回复格式及仓库覆盖配置" },
+  summary: { label: "PR 摘要", summary: "证据章节与输出长度预算" },
+  messages: { label: "自定义消息", summary: "发布到代码平台的审核状态评论" },
+};
 
 type Notice = { tone: "success" | "error"; text: string } | undefined;
 type SelectOption = string | { value: string; label: string };
@@ -111,6 +123,8 @@ function ReviewConfigEditorDraft({
   source,
 }: ReviewConfigEditorProps) {
   const router = useRouter();
+  const zh = useUiLanguage() === "zh-CN";
+  const tr = (en: string, chinese: string) => zh ? chinese : en;
   const active = sections.find((item) => item.key === section) ?? sections[0];
   const initialContent = config?.content ?? {};
   const [content, setContent] = useState<Record<string, unknown>>(initialContent);
@@ -133,7 +147,7 @@ function ReviewConfigEditorDraft({
       return;
     }
     if (!repository.trim() || !scopeAPIBaseURL.trim()) {
-      setNotice({ tone: "error", text: "Choose a provider, its API base URL, and an owner/repository reference before opening repository scope." });
+      setNotice({ tone: "error", text: tr("Choose a provider, its API base URL, and an owner/repository reference before opening repository scope.", "打开仓库范围前，请选择平台、API 地址并填写 owner/repository。") });
       return;
     }
     router.push(`/${org}/review-config/${section}${scopeQuery(repository.trim(), scopeProvider, scopeAPIBaseURL.trim())}`);
@@ -172,12 +186,12 @@ function ReviewConfigEditorDraft({
       setView(body);
       setContent(body.content);
       setBaseline(stableJSON(body.content));
-      setNotice({ tone: "success", text: `Saved immutable revision ${body.revision}.` });
+      setNotice({ tone: "success", text: tr(`Saved immutable revision ${body.revision}.`, `已保存不可变版本 ${body.revision}。`) });
       router.replace(body.requested_scope_kind === "repository"
         ? `/${org}/review-config/${section}${scopeQuery(body.requested_scope_ref ?? "", body.requested_scope_provider, body.requested_scope_api_base_url)}`
         : `/${org}/review-config/${section}`);
     } catch (error) {
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "Review settings could not be saved." });
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : tr("Review settings could not be saved.", "无法保存审核设置。") });
     } finally {
       setPending(undefined);
     }
@@ -206,12 +220,12 @@ function ReviewConfigEditorDraft({
       setView(body);
       setContent(body.content);
       setBaseline(stableJSON(body.content));
-      setNotice({ tone: "success", text: "Repository override removed. This scope now inherits again." });
+      setNotice({ tone: "success", text: tr("Repository override removed. This scope now inherits again.", "已移除仓库覆盖配置，此范围重新继承上级设置。") });
       router.replace(body.requested_scope_kind === "repository"
         ? `/${org}/review-config/${section}${scopeQuery(body.requested_scope_ref ?? "", body.requested_scope_provider, body.requested_scope_api_base_url)}`
         : `/${org}/review-config/${section}`);
     } catch (error) {
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "Inheritance could not be restored." });
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : tr("Inheritance could not be restored.", "无法恢复继承设置。") });
     } finally {
       setPending(undefined);
     }
@@ -221,17 +235,17 @@ function ReviewConfigEditorDraft({
     <div className="space-y-6">
       <header className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">Policy studio</p>
-          <h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">Review settings</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--ls-text-secondary)]">Tune what the reviewer analyzes and how evidence is published. Repository settings inherit until you create an explicit override.</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">{tr("Policy studio", "策略中心")}</p>
+          <h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">{tr("Review settings", "审核设置")}</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--ls-text-secondary)]">{tr("Tune what the reviewer analyzes and how evidence is published. Repository settings inherit until you create an explicit override.", "配置审核范围和证据发布方式。仓库默认继承工作空间设置，直到创建单独的覆盖配置。")}</p>
         </div>
         <span className={cn("inline-flex w-fit items-center gap-2 rounded-full px-3 py-1.5 text-xs", source === "live" ? "bg-emerald-500/10 text-[var(--ls-success-text)]" : "bg-amber-500/10 text-[var(--ls-warning-text)]")}>
           <span className="size-1.5 rounded-full bg-current" />
-          {source === "live" ? "Live control-plane data" : source.replaceAll("_", " ")}
+          {source === "live" ? tr("Live control-plane data", "实时控制面数据") : source.replaceAll("_", " ")}
         </span>
       </header>
 
-      <TabStateRouter className="flex gap-1 overflow-x-auto border-b border-[var(--ls-line)]" label="Review settings sections">
+      <TabStateRouter className="flex gap-1 overflow-x-auto border-b border-[var(--ls-line)]" label={tr("Review settings sections", "审核设置分类")}>
         {sections.map((item) => {
           const Icon = item.icon;
           return (
@@ -244,7 +258,7 @@ function ReviewConfigEditorDraft({
               role="tab"
               tabIndex={item.key === section ? 0 : -1}
             >
-              <Icon className="size-4" /> {item.label}
+              <Icon className="size-4" /> {tr(item.label, reviewSectionChinese[item.key].label)}
               {item.key === section ? <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--ls-accent)]" /> : null}
             </Link>
           );
@@ -255,19 +269,19 @@ function ReviewConfigEditorDraft({
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-[var(--ls-accent-soft)] px-2.5 py-1 text-xs font-semibold text-[var(--ls-accent)]">{view?.requested_scope_kind === "repository" ? "Repository" : "Workspace"}</span>
+              <span className="rounded-full bg-[var(--ls-accent-soft)] px-2.5 py-1 text-xs font-semibold text-[var(--ls-accent)]">{view?.requested_scope_kind === "repository" ? tr("Repository", "仓库") : tr("Workspace", "工作空间")}</span>
               <ChevronRight className="size-3.5 text-[var(--ls-text-tertiary)]" />
               <span className="text-sm font-medium text-[var(--ls-text)]">{view?.requested_scope_ref || org}</span>
               {view?.requested_scope_provider ? <span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 font-mono text-[11px] text-[var(--ls-text-secondary)]">{view.requested_scope_provider} · {providerHost(view.requested_scope_api_base_url)}</span> : null}
-              {view?.inherited ? <span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">Inherited from {view.origin_scope_kind}</span> : null}
-              {dirty ? <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-[var(--ls-warning-text)]">Unsaved changes</span> : <span className="inline-flex items-center gap-1 text-xs text-[var(--ls-text-tertiary)]"><Check className="size-3.5" /> Up to date</span>}
+              {view?.inherited ? <span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">{tr(`Inherited from ${view.origin_scope_kind}`, `继承自 ${view.origin_scope_kind}`)}</span> : null}
+              {dirty ? <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-[var(--ls-warning-text)]">{tr("Unsaved changes", "有未保存的更改")}</span> : <span className="inline-flex items-center gap-1 text-xs text-[var(--ls-text-tertiary)]"><Check className="size-3.5" /> {tr("Up to date", "已是最新")}</span>}
             </div>
             <p className="mt-2 font-mono text-[11px] text-[var(--ls-text-tertiary)]">origin {view?.origin_scope_kind ?? "unavailable"}{view?.origin_scope_provider ? `/${view.origin_scope_provider}@${providerHost(view.origin_scope_api_base_url)}` : ""} · revision {view?.revision ?? 0} · {view?.content_sha256?.slice(0, 12) ?? "no hash"}</p>
           </div>
           <div className="flex flex-col gap-2 sm:items-center">
             <div className="inline-flex rounded-[10px] bg-[var(--ls-surface-muted)] p-1">
-              <button className={scopeButton(view?.requested_scope_kind !== "repository")} onClick={() => openScope("tenant")} type="button">Workspace</button>
-              <button className={scopeButton(view?.requested_scope_kind === "repository")} onClick={() => openScope("repository")} type="button">Repository</button>
+              <button className={scopeButton(view?.requested_scope_kind !== "repository")} onClick={() => openScope("tenant")} type="button">{tr("Workspace", "工作空间")}</button>
+              <button className={scopeButton(view?.requested_scope_kind === "repository")} onClick={() => openScope("repository")} type="button">{tr("Repository", "仓库")}</button>
             </div>
             <div className="grid gap-2 sm:grid-cols-[112px_minmax(190px,1fr)_minmax(180px,1fr)]">
               <select aria-label="Repository provider" className="luminous-focus h-9 rounded-[9px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)]" onChange={(event) => {
@@ -283,21 +297,21 @@ function ReviewConfigEditorDraft({
             </div>
           </div>
         </div>
-        {view?.requested_scope_kind === "repository" ? <p className="mt-3 text-xs leading-5 text-[var(--ls-text-secondary)]">Repository overrides are isolated by provider and API base URL. A self-managed GitLab URL must match an active, verified connection that includes this repository.</p> : null}
+        {view?.requested_scope_kind === "repository" ? <p className="mt-3 text-xs leading-5 text-[var(--ls-text-secondary)]">{tr("Repository overrides are isolated by provider and API base URL. A self-managed GitLab URL must match an active, verified connection that includes this repository.", "仓库覆盖配置按平台与 API 地址隔离。自建 GitLab 地址必须与已验证且包含该仓库的连接一致。")}</p> : null}
       </section>
 
       {!view || (source !== "live" && source !== "demo") ? (
         <section className="grid min-h-72 place-items-center rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-8 text-center">
-          <div><CircleAlert className="mx-auto size-7 text-[var(--ls-warning-text)]" /><h2 className="mt-4 text-lg font-semibold text-[var(--ls-text)]">Settings are unavailable</h2><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-[var(--ls-text-secondary)]">{detail ?? "The control plane did not return a configuration."}</p></div>
+          <div><CircleAlert className="mx-auto size-7 text-[var(--ls-warning-text)]" /><h2 className="mt-4 text-lg font-semibold text-[var(--ls-text)]">{tr("Settings are unavailable", "设置不可用")}</h2><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-[var(--ls-text-secondary)]">{detail ?? tr("The control plane did not return a configuration.", "控制面未返回配置。")}</p></div>
         </section>
       ) : (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <section className="rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6">
             <div className="mb-6">
-              <h2 className="text-xl font-semibold tracking-[-0.03em] text-[var(--ls-text)]">{active.label}</h2>
-              <p className="mt-1 text-sm text-[var(--ls-text-secondary)]">{active.summary}</p>
+              <h2 className="text-xl font-semibold tracking-[-0.03em] text-[var(--ls-text)]">{tr(active.label, reviewSectionChinese[active.key].label)}</h2>
+              <p className="mt-1 text-sm text-[var(--ls-text-secondary)]">{tr(active.summary, reviewSectionChinese[active.key].summary)}</p>
             </div>
-            {readOnly ? <p className="mb-5 rounded-[12px] border border-amber-500/20 bg-amber-500/[0.07] px-3.5 py-3 text-xs leading-5 text-[var(--ls-warning-text)]" id="review-config-demo-boundary">Demo preview uses fixture policy data. Editing and publishing are disabled; version provenance remains read-only.</p> : null}
+            {readOnly ? <p className="mb-5 rounded-[12px] border border-amber-500/20 bg-amber-500/[0.07] px-3.5 py-3 text-xs leading-5 text-[var(--ls-warning-text)]" id="review-config-demo-boundary">{tr("Demo preview uses fixture policy data. Editing and publishing are disabled; version provenance remains read-only.", "演示预览使用模拟策略数据，无法编辑或发布；版本来源仅供查看。")}</p> : null}
             <fieldset aria-describedby={readOnly ? "review-config-demo-boundary" : undefined} className="min-w-0 disabled:opacity-70" disabled={readOnly}>
               <SectionFields
                 content={content}
@@ -315,15 +329,15 @@ function ReviewConfigEditorDraft({
 
           <aside className="space-y-4 xl:sticky xl:top-20 xl:self-start">
             <section className="rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface-raised)] p-5 shadow-[var(--ls-shadow-control)]">
-              <h2 className="text-sm font-semibold text-[var(--ls-text)]">Publish configuration</h2>
-              <p className="mt-2 text-xs leading-5 text-[var(--ls-text-secondary)]">Saving creates a new immutable revision guarded by the revision shown above. A stale editor is rejected rather than overwriting another administrator.</p>
+              <h2 className="text-sm font-semibold text-[var(--ls-text)]">{tr("Publish configuration", "发布配置")}</h2>
+              <p className="mt-2 text-xs leading-5 text-[var(--ls-text-secondary)]">{tr("Saving creates a new immutable revision guarded by the revision shown above. A stale editor is rejected rather than overwriting another administrator.", "保存将创建新的不可变版本，并依据上方版本号校验。过期编辑器会被拒绝，不会覆盖其他管理员的修改。")}</p>
               {notice ? <p className={cn("mt-4 rounded-[10px] px-3 py-2.5 text-xs leading-5", notice.tone === "success" ? "bg-emerald-500/10 text-[var(--ls-success-text)]" : "bg-red-500/10 text-[var(--ls-critical-text)]")}>{notice.text}</p> : null}
-              <button className="luminous-focus mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--ls-accent)] px-4 text-sm font-medium text-white transition hover:bg-[var(--ls-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45" disabled={readOnly || !dirty || Boolean(pending)} onClick={save} type="button">{pending === "save" ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />} Save new revision</button>
-              {view.requested_scope_kind === "repository" && !view.inherited ? <button className="luminous-focus mt-2 inline-flex h-10 w-full items-center justify-center gap-2 rounded-[10px] border border-[var(--ls-line-strong)] text-sm font-medium text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)] disabled:opacity-45" disabled={readOnly || Boolean(pending)} onClick={restoreInheritance} type="button">{pending === "restore" ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />} Restore inheritance</button> : null}
+              <button className="luminous-focus mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--ls-accent)] px-4 text-sm font-medium text-white transition hover:bg-[var(--ls-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45" disabled={readOnly || !dirty || Boolean(pending)} onClick={save} type="button">{pending === "save" ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />} {tr("Save new revision", "保存新版本")}</button>
+              {view.requested_scope_kind === "repository" && !view.inherited ? <button className="luminous-focus mt-2 inline-flex h-10 w-full items-center justify-center gap-2 rounded-[10px] border border-[var(--ls-line-strong)] text-sm font-medium text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)] disabled:opacity-45" disabled={readOnly || Boolean(pending)} onClick={restoreInheritance} type="button">{pending === "restore" ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />} {tr("Restore inheritance", "恢复继承")}</button> : null}
             </section>
             <section className="rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5">
-              <div className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]"><Sparkles className="size-4 text-[var(--ls-accent)]" /> Effective behavior</div>
-              <p className="mt-2 text-xs leading-5 text-[var(--ls-text-secondary)]">{view.inherited ? `This repository currently uses ${view.origin_scope_kind} revision ${view.revision}. Editing and saving creates its first explicit override.` : `This scope owns revision ${view.revision || "default"}. All new review runs resolve and snapshot this content at admission.`}</p>
+              <div className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]"><Sparkles className="size-4 text-[var(--ls-accent)]" /> {tr("Effective behavior", "生效方式")}</div>
+              <p className="mt-2 text-xs leading-5 text-[var(--ls-text-secondary)]">{view.inherited ? tr(`This repository currently uses ${view.origin_scope_kind} revision ${view.revision}. Editing and saving creates its first explicit override.`, `该仓库当前使用 ${view.origin_scope_kind} 的版本 ${view.revision}。编辑并保存后将创建第一份独立覆盖配置。`) : tr(`This scope owns revision ${view.revision || "default"}. All new review runs resolve and snapshot this content at admission.`, `该范围当前版本为 ${view.revision || "default"}。新的审核任务在准入时会解析并固化此配置。`)}</p>
             </section>
             <ReviewConfigVersionHistory history={history} historyDetail={historyDetail} org={org} section={section} source={source} view={view} />
           </aside>
@@ -349,22 +363,42 @@ function providerHost(value?: string) {
 }
 
 function MergeGateEnforcementNotice() {
+  const zh = useUiLanguage() === "zh-CN";
   return <details className="rounded-[14px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4 text-xs leading-5 text-[var(--ls-text-secondary)]">
-    <summary className="luminous-focus cursor-pointer text-sm font-medium text-[var(--ls-text)]">How to enforce merge blocking</summary>
+    <summary className="luminous-focus cursor-pointer text-sm font-medium text-[var(--ls-text)]">{zh ? "如何真正阻止合并" : "How to enforce merge blocking"}</summary>
     <div className="mt-3 space-y-2">
-      <p><strong className="text-[var(--ls-text)]">GitHub:</strong> Require the <code>Open Review / Analysis</code> check from this App on every PR target branch. Protecting <code>main</code> does not protect PRs targeting other branches.</p>
-      <p><strong className="text-[var(--ls-text)]">GitLab:</strong> Open Review publishes an external commit status. Enable <em>Pipelines must succeed</em> and confirm that the status appears in the pipeline GitLab evaluates for the MR; a status on a different pipeline cannot enforce the gate.</p>
-      <p>After setup, verify a failing review against a test PR or MR before relying on the gate.</p>
+      <p><strong className="text-[var(--ls-text)]">GitHub:</strong> {zh ? <>在每个 PR 目标分支上，将本 App 的 <code>Open Review / Analysis</code> 检查设为必需。只保护 <code>main</code> 并不能阻止合并到其他分支。</> : <>Require the <code>Open Review / Analysis</code> check from this App on every PR target branch. Protecting <code>main</code> does not protect PRs targeting other branches.</>}</p>
+      <p><strong className="text-[var(--ls-text)]">GitLab:</strong> {zh ? <>Open Review 发布外部提交状态。请启用 <em>Pipelines must succeed</em>，并确认该状态出现在 GitLab 用于判断 MR 的流水线中；其他流水线上的状态不会触发门控。</> : <>Open Review publishes an external commit status. Enable <em>Pipelines must succeed</em> and confirm that the status appears in the pipeline GitLab evaluates for the MR; a status on a different pipeline cannot enforce the gate.</>}</p>
+      <p>{zh ? "配置完成后，请用一个审核失败的测试 PR/MR 验证门控，再依赖它控制合并。" : "After setup, verify a failing review against a test PR or MR before relying on the gate."}</p>
     </div>
   </details>;
 }
 
 function SectionFields({ content, issueFormatDetail, issueFormatSource, issueFormatTemplates, onCatalogChanged, org, section, setContent, source }: { content: Record<string, unknown>; issueFormatDetail?: string; issueFormatSource: DataSource; issueFormatTemplates: IssueFormatTemplate[]; onCatalogChanged: () => void; org: string; section: ReviewConfigSection; setContent: (next: Record<string, unknown>) => void; source: DataSource }) {
+  const t = useUiText();
+  const zh = useUiLanguage() === "zh-CN";
+  const tr = (en: string, chinese: string) => zh ? chinese : en;
   const update = (key: string, value: unknown) => setContent({ ...content, [key]: value });
   if (section === "general") {
     const triggerMode = asString(content.trigger_mode, asBool(content.automatic_review, true) ? "automatic" : "manual");
     const setTriggerMode = (value: string) => setContent({ ...content, trigger_mode: value, automatic_review: value === "automatic" });
-    return <div className="space-y-3"><SelectField help="Off rejects new review work. Manual accepts only explicit CLI and @openreview commands. Automatic also admits eligible provider pull requests." label="Review trigger" onChange={setTriggerMode} options={["off", "manual", "automatic"]} value={triggerMode} /><ToggleRow checked={asBool(content.review_drafts)} description="Admit draft pull requests before the author marks them ready; disabled drafts are acknowledged as a policy skip without creating a run." label="Review drafts" onChange={(value) => update("review_drafts", value)} /><ToggleRow checked={asBool(content.rereview_on_push, true)} description="When enabled, a new provider head supersedes stale work. When disabled, synchronize/update events are policy-skipped." label="Re-review on push" onChange={(value) => update("rereview_on_push", value)} /><ToggleRow checked={asBool(content.merge_gate_enabled, true)} description="Publish a pass/fail review check. This setting alone does not enforce a provider merge block." label="Merge gate" onChange={(value) => update("merge_gate_enabled", value)} /><MergeGateEnforcementNotice /><div className="grid gap-4 pt-3 sm:grid-cols-2"><SelectField help="Used for automatic reviews and commands without --mode. The resolved mode is stored on the run, so later policy changes never rewrite queued work." label="Default review depth" onChange={(value) => update("default_review_mode", value)} options={["standard", "deep", "security"]} value={asString(content.default_review_mode, "standard")} /><SelectField label="Review language" onChange={(value) => update("review_language", value)} options={reviewLanguageOptions} value={asString(content.review_language, "en")} /><SelectField label="Minimum blocking severity" onChange={(value) => update("minimum_blocking_severity", value)} options={["low", "medium", "high", "critical"]} value={asString(content.minimum_blocking_severity, "high")} /></div></div>;
+    return <div className="space-y-3">
+      <SelectField help={tr("Off rejects new review work. Manual accepts only explicit CLI and @openreview commands. Automatic also admits eligible provider pull requests.", "关闭时不接收新审核；手动模式只接收明确的 CLI 和 @openreview 命令；自动模式还会接收符合条件的 PR。")}
+        label={tr("Review trigger", "审核触发方式")} onChange={setTriggerMode} options={["off", "manual", "automatic"]} value={triggerMode} />
+      <ToggleRow checked={asBool(content.review_drafts)} description={tr("Admit draft pull requests before the author marks them ready; disabled drafts are acknowledged as a policy skip without creating a run.", "作者标记就绪前也审核草稿 PR；关闭时草稿会被记为策略跳过，不创建运行。")}
+        label={tr("Review drafts", "审核草稿 PR")} onChange={(value) => update("review_drafts", value)} />
+      <ToggleRow checked={asBool(content.rereview_on_push, true)} description={tr("When enabled, a new provider head supersedes stale work. When disabled, synchronize/update events are policy-skipped.", "启用后新提交会取代旧版本的审核；关闭时同步事件按策略跳过。")}
+        label={tr("Re-review on push", "提交后重新审核")} onChange={(value) => update("rereview_on_push", value)} />
+      <ToggleRow checked={asBool(content.merge_gate_enabled, true)} description={tr("Publish a pass/fail review check. This setting alone does not enforce a provider merge block.", "发布通过/失败检查。仅启用此项不会自动在 Git 平台阻止合并。")}
+        label={tr("Merge gate", "合并门控")} onChange={(value) => update("merge_gate_enabled", value)} />
+      <MergeGateEnforcementNotice />
+      <div className="grid gap-4 pt-3 sm:grid-cols-2">
+        <SelectField help={tr("Used for automatic reviews and commands without --mode. The resolved mode is stored on the run, so later policy changes never rewrite queued work.", "供自动审核及未指定 --mode 的命令使用。任务准入时会固化模式，之后的策略变更不会改写排队中的任务。")}
+          label={tr("Default review depth", "默认审核深度")} onChange={(value) => update("default_review_mode", value)} options={["standard", "deep", "security"]} value={asString(content.default_review_mode, "standard")} />
+        <SelectField help={t("reviewLanguageHelp")} label={t("reviewLanguage")} onChange={(value) => update("review_language", value)} options={reviewLanguageOptions} value={asString(content.review_language, "en")} />
+        <SelectField label={tr("Minimum blocking severity", "最低阻塞级别")} onChange={(value) => update("minimum_blocking_severity", value)} options={["low", "medium", "high", "critical"]} value={asString(content.minimum_blocking_severity, "high")} />
+      </div>
+    </div>;
   }
   if (section === "categories") {
     return <div className="grid gap-3 sm:grid-cols-2">{["bug", "security", "performance", "maintainability"].map((category) => { const value = asCategory(content[category]); return <article className="rounded-[14px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4" key={category}><Toggle checked={value.enabled} label={titleCase(category)} onChange={(enabled) => update(category, { ...value, enabled })} /><div className="mt-4"><SelectField label="Publish from" onChange={(minimumSeverity) => update(category, { ...value, minimum_severity: minimumSeverity })} options={["low", "medium", "high", "critical"]} value={value.minimum_severity} /></div></article>; })}</div>;
@@ -435,6 +469,7 @@ function issueTemplateLanguage(value: string): "en" | "zh-CN" | "ja" | "es" {
 }
 
 function IssueTriageFields({ content, formatDetail, formatSource, formatTemplates, onCatalogChanged, org, setContent }: { content: Record<string, unknown>; formatDetail?: string; formatSource: DataSource; formatTemplates: IssueFormatTemplate[]; onCatalogChanged: () => void; org: string; setContent: (next: Record<string, unknown>) => void; source: DataSource }) {
+  const t = useUiText();
   const [copied, setCopied] = useState(false);
   const [downloaded, setDownloaded] = useState<"github" | "gitlab">();
   const required = asStringArray(content.required_issue_sections);
@@ -491,7 +526,7 @@ function IssueTriageFields({ content, formatDetail, formatSource, formatTemplate
     <div><p className="text-sm font-semibold text-[var(--ls-text)]">Format preset</p><p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">Each preset applies a complete required-section, response-section, collapse and item-budget contract. Refining any field turns it into a repository-owned custom format.</p><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{Object.entries(issueTriagePresets).map(([key, preset]) => { const active = asString(content.preset, "engineering") === key; return <button aria-pressed={active} className={cn("luminous-focus rounded-[14px] border p-4 text-left transition", active ? "border-[var(--ls-accent)] bg-[var(--ls-accent-soft)]" : "border-[var(--ls-line)] bg-[var(--ls-surface-muted)] hover:border-[var(--ls-line-strong)]")} key={key} onClick={() => choosePreset(key as keyof typeof issueTriagePresets)} type="button"><span className="flex items-center justify-between gap-2 text-sm font-semibold text-[var(--ls-text)]">{preset.label}{active ? <Check className="size-4 text-[var(--ls-accent)]" /> : null}</span><span className="mt-1 block text-xs leading-5 text-[var(--ls-text-secondary)]">{preset.detail}</span></button>; })}</div></div>
     <ChoiceGrid description="The analyzer reports absent sections as context gaps. It never rejects or rewrites the Issue." label="Required Issue sections" onToggle={(value) => toggle("required_issue_sections", required, value)} options={issueRequirementOptions} selected={required} />
     <ChoiceGrid description="The verdict table remains visible. Select which structured details appear below it." label="Analysis response sections" onToggle={(value) => toggle("response_sections", responses, value)} options={issueResponseOptions} selected={responses} />
-    <div className="grid gap-4 lg:grid-cols-2"><SelectField help="Controls the stable report framework and the model response. Following the Issue language uses a conservative framework fallback when its natural language is ambiguous." label="Response language" onChange={(value) => update("language", value)} options={issueResponseLanguageOptions} value={asString(content.language, "inherit")} /><NumberField label="Maximum items per section" max={10} min={1} onChange={(value) => update("max_items_per_section", value)} value={asNumber(content.max_items_per_section, 6)} /></div>
+    <div className="grid gap-4 lg:grid-cols-2"><SelectField help={t("issueResponseLanguageHelp")} label={t("issueResponseLanguage")} onChange={(value) => update("language", value)} options={issueResponseLanguageOptions} value={asString(content.language, "inherit")} /><NumberField label="Maximum items per section" max={10} min={1} onChange={(value) => update("max_items_per_section", value)} value={asNumber(content.max_items_per_section, 6)} /></div>
     <div className="grid gap-3 sm:grid-cols-2"><ToggleRow checked={asBool(content.collapse_secondary, true)} description="Keep detailed risk, next steps and provenance in expandable blocks." label="Collapse secondary detail" onChange={(value) => update("collapse_secondary", value)} /><ToggleRow checked={asBool(content.link_file_references, true)} description="Turn evidence-backed repository paths into provider file links. Generic component names remain plain text." label="Link file references" onChange={(value) => update("link_file_references", value)} /><ToggleRow checked={asBool(content.reaction_feedback, true)} description="Invite 👍 or 👎 feedback when the provider can deliver it. Reactions never retrigger analysis; GitHub requires a polling integration rather than an App event." label="Reaction feedback" onChange={(value) => update("reaction_feedback", value)} /></div>
     <TextAreaField help="Trusted repository formatting requirements are appended to the Issue analyzer prompt. Use this for terminology, evidence expectations, risk conventions, and response constraints; Issue body text always remains untrusted input." label="Repository formatting requirements" maxLength={4000} onChange={(value) => updateCustomFormat("custom_guidance", value)} rows={5} value={asString(content.custom_guidance)} />
     <section className="rounded-[14px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">

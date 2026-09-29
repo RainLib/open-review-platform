@@ -4,6 +4,7 @@ import { ProviderMark } from "@/components/providers/provider-icons";
 import type { IssueDetail, IssueOccurrence, ReviewIssue } from "@/lib/control-api";
 import { providerFileTarget, providerReviewTarget } from "@/lib/provider-review-url";
 import { cn } from "@/lib/utils";
+import type { UiLanguage } from "@/lib/ui-language";
 
 const severityStyles = {
   critical: "text-[var(--ls-critical-text)]",
@@ -12,16 +13,18 @@ const severityStyles = {
   low: "text-[var(--ls-success-text)]",
 } satisfies Record<ReviewIssue["severity"], string>;
 
-export function SeverityBadge({ severity }: { severity: ReviewIssue["severity"] }) {
+export function SeverityBadge({ severity, language = "en" }: { severity: ReviewIssue["severity"]; language?: UiLanguage }) {
+  const label = language === "zh-CN" ? ({ critical: "严重", high: "高", medium: "中", low: "低" } as const)[severity] : severity;
   return (
     <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium capitalize", severityStyles[severity])}>
       <TriangleAlert aria-hidden="true" className="size-4" fill="currentColor" fillOpacity={0.12} />
-      {severity}
+      {label}
     </span>
   );
 }
 
-export function IssueStatusBadge({ status }: { status: ReviewIssue["status"] }) {
+export function IssueStatusBadge({ status, language = "en" }: { status: ReviewIssue["status"]; language?: UiLanguage }) {
+  const label = language === "zh-CN" ? ({ open: "待处理", regressed: "再次出现", resolved: "已解决", suppressed: "已忽略" } as const)[status] : status;
   const statusClass =
     status === "regressed"
       ? "text-[var(--ls-critical-text)]"
@@ -33,7 +36,7 @@ export function IssueStatusBadge({ status }: { status: ReviewIssue["status"] }) 
   return (
     <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium capitalize", statusClass)}>
       <Circle aria-hidden="true" className="size-2" fill="currentColor" />
-      {status}
+      {label}
     </span>
   );
 }
@@ -113,18 +116,18 @@ export function issuePrompt(issue: IssueDetail, occurrence: IssueOccurrence) {
     .join("\n\n");
 }
 
-export function formatIssueTime(value: string) {
-  return new Intl.DateTimeFormat("en", {
+export function formatIssueTime(value: string, language: UiLanguage = "en") {
+  return new Intl.DateTimeFormat(language, {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "UTC",
   }).format(new Date(value));
 }
 
-export function formatIssueAge(value: string) {
+export function formatIssueAge(value: string, language: UiLanguage = "en") {
   const difference = new Date(value).getTime() - Date.now();
   const absolute = Math.abs(difference);
-  const formatter = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+  const formatter = new Intl.RelativeTimeFormat(language, { numeric: "auto" });
   if (absolute < 60 * 60 * 1000) return formatter.format(Math.round(difference / (60 * 1000)), "minute");
   if (absolute < 24 * 60 * 60 * 1000) return formatter.format(Math.round(difference / (60 * 60 * 1000)), "hour");
   if (absolute < 30 * 24 * 60 * 60 * 1000) return formatter.format(Math.round(difference / (24 * 60 * 60 * 1000)), "day");

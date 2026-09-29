@@ -11,6 +11,7 @@ import {
   CircleGauge,
   Crosshair,
   GitPullRequest,
+  Languages,
   ListChecks,
   MessagesSquare,
   LogOut,
@@ -30,6 +31,8 @@ import {
 import type { AccessibleWorkspace } from "@/lib/control-api";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { uiLanguageCookie, type UiLanguage } from "@/lib/ui-language";
+import { useUiLanguage, useUiText } from "@/components/console/ui-language-context";
 
 type ThemePreference = "system" | "light" | "dark";
 const themeChangeEvent = "open-review-theme-change";
@@ -65,13 +68,13 @@ function subscribeToSidebar(onStoreChange: () => void) {
 }
 
 const railItems = [
-  { key: "home", label: "Cockpit", icon: CircleGauge },
-  { key: "issues", label: "Issues", icon: ListChecks },
-  { key: "reviews", label: "Pull requests", icon: GitPullRequest },
-  { key: "agent-work", label: "Agent work", icon: SquareTerminal },
-  { key: "rules", label: "Policy studio", icon: ShieldCheck },
-  { key: "connect", label: "Operate", icon: Settings2 },
-  { key: "settings/members", label: "Enterprise", icon: Building2 },
+  { key: "home", label: "cockpit", icon: CircleGauge },
+  { key: "issues", label: "issues", icon: ListChecks },
+  { key: "reviews", label: "pullRequests", icon: GitPullRequest },
+  { key: "agent-work", label: "agentWork", icon: SquareTerminal },
+  { key: "rules", label: "policyStudio", icon: ShieldCheck },
+  { key: "connect", label: "operate", icon: Settings2 },
+  { key: "settings/members", label: "enterprise", icon: Building2 },
 ] as const;
 
 const mobileItems = [railItems[2], railItems[1], railItems[3], railItems[4], railItems[5]];
@@ -88,6 +91,8 @@ export function LuminousConsoleShell({
   workspaces: AccessibleWorkspace[];
 }) {
   const pathname = usePathname();
+  const language = useUiLanguage();
+  const t = useUiText();
   const theme = useSyncExternalStore(subscribeToTheme, readTheme, () => "system");
   const sidebarExpanded = useSyncExternalStore(
     subscribeToSidebar,
@@ -102,7 +107,7 @@ export function LuminousConsoleShell({
   const visibleWorkspaces = workspaces.some((workspace) => workspace.slug === org)
     ? workspaces
     : [{ name: title, role: "member", slug: org }, ...workspaces];
-  const commandItems = useMemo(() => commandItemsFor(org), [org]);
+  const commandItems = useMemo(() => commandItemsFor(org, language), [org, language]);
   const visibleCommandItems = commandItems.filter((item) =>
     `${item.label} ${item.description}`.toLocaleLowerCase().includes(commandQuery.trim().toLocaleLowerCase()),
   );
@@ -133,6 +138,12 @@ export function LuminousConsoleShell({
     window.dispatchEvent(new Event(sidebarChangeEvent));
   }
 
+  function changeLanguage(next: string) {
+    if (next !== "en" && next !== "zh-CN") return;
+    document.cookie = `${uiLanguageCookie}=${encodeURIComponent(next)}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
+    window.location.reload();
+  }
+
   function openCommandPalette() {
     const active = document.activeElement;
     commandReturnFocusRef.current = active instanceof HTMLElement ? active : null;
@@ -158,7 +169,7 @@ export function LuminousConsoleShell({
         className="luminous-focus fixed left-3 top-3 z-[100] -translate-y-24 rounded-[10px] bg-[var(--ls-accent)] px-4 py-2 text-sm font-semibold text-white shadow-[var(--ls-shadow-float)] transition-transform focus:translate-y-0"
         href="#main-content"
       >
-        Skip to main content
+        {t("skip")}
       </a>
       <header aria-hidden={commandOpen || undefined} className="luminous-frosted sticky top-0 z-40 flex h-14 items-center border-b border-[var(--ls-line)] px-3 sm:px-5">
         <Link
@@ -182,7 +193,7 @@ export function LuminousConsoleShell({
           </summary>
           <div className="luminous-frosted absolute left-0 top-[calc(100%+12px)] z-50 w-72 overflow-hidden rounded-[14px] border border-[var(--ls-line-strong)] p-1.5 shadow-[var(--ls-shadow-float)]">
             <p className="px-2.5 pb-2 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ls-text-tertiary)]">
-              Workspaces
+              {t("workspaces")}
             </p>
             {visibleWorkspaces.map((workspace) => {
               const current = workspace.slug === org;
@@ -215,13 +226,13 @@ export function LuminousConsoleShell({
                 className="luminous-focus flex items-center gap-3 rounded-[10px] px-2.5 py-2.5 text-sm text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]"
                 href="/workspaces"
               >
-                <Building2 className="size-4" /> All workspaces
+                <Building2 className="size-4" /> {t("allWorkspaces")}
               </Link>
               <Link
                 className="luminous-focus flex items-center gap-3 rounded-[10px] px-2.5 py-2.5 text-sm font-medium text-[var(--ls-accent)] hover:bg-[var(--ls-accent-soft)]"
                 href="/workspaces/new"
               >
-                <Plus className="size-4" /> Create workspace
+                <Plus className="size-4" /> {t("createWorkspace")}
               </Link>
             </div>
           </div>
@@ -229,43 +240,56 @@ export function LuminousConsoleShell({
 
         <nav aria-label="Primary domains" className="ml-6 hidden rounded-[10px] bg-[var(--ls-surface-muted)] p-1 lg:flex">
           <DomainLink active={pathname.startsWith(`/${org}/issues`) || pathname.startsWith(`/${org}/provider-issues`) || pathname.startsWith(`/${org}/findings`) || pathname.startsWith(`/${org}/reviews`) || pathname.startsWith(`/${org}/tasks`) || pathname.startsWith(`/${org}/cli-reviews`)} href={`/${org}/issues`}>
-            Review
+            {t("review")}
           </DomainLink>
           <DomainLink active={pathname.startsWith(`/${org}/rules`) || pathname.startsWith(`/${org}/review-config`)} href={`/${org}/review-config/general`}>
-            Policy
+            {t("policy")}
           </DomainLink>
           <DomainLink active={pathname.startsWith(`/${org}/connect`) || pathname.startsWith(`/${org}/notifications`) || pathname.startsWith(`/${org}/audit`) || pathname.startsWith(`/${org}/settings`) || pathname.startsWith(`/${org}/agent-work`)} href={`/${org}/connect`}>
-            Operate
+            {t("operate")}
           </DomainLink>
         </nav>
 
         <div className="ml-auto flex items-center gap-1.5">
+          <label className="luminous-focus flex h-9 items-center gap-1 rounded-[10px] px-2 text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]" title={t("language")}>
+            <Languages aria-hidden="true" className="size-4" />
+            <span className="sr-only">{t("language")}</span>
+            <select
+              aria-label={t("language")}
+              className="max-w-16 cursor-pointer bg-transparent text-xs font-medium text-[var(--ls-text)] outline-none"
+              onChange={(event) => changeLanguage(event.target.value)}
+              value={language}
+            >
+              <option value="en">EN</option>
+              <option value="zh-CN">中文</option>
+            </select>
+          </label>
           <button
             aria-haspopup="dialog"
-            aria-label="Open command palette"
+            aria-label={t("search")}
             className="luminous-focus hidden h-9 w-[min(34vw,360px)] items-center gap-2 rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text-tertiary)] shadow-[var(--ls-shadow-control)] md:flex"
             onClick={openCommandPalette}
             ref={commandTriggerRef}
             type="button"
           >
             <Search className="size-4" />
-            <span className="truncate">Jump to a page or workspace…</span>
+            <span className="truncate">{t("search")}</span>
             <kbd className="ml-auto rounded border border-[var(--ls-line)] px-1.5 py-0.5 text-[10px]">⌘ K</kbd>
           </button>
           <button
-            aria-label={`Theme: ${theme}. Activate to change theme.`}
+            aria-label={`${t("theme")}: ${theme}`}
             className="luminous-focus grid size-9 place-items-center rounded-[10px] text-[var(--ls-text-secondary)] transition hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]"
             onClick={cycleTheme}
-            title={`Theme: ${theme}`}
+            title={`${t("theme")}: ${theme}`}
             type="button"
           >
             <ThemeIcon className="size-4" />
           </button>
           <Link
-            aria-label="Notifications"
+            aria-label={t("notifications")}
             className="luminous-focus grid size-9 place-items-center rounded-[10px] text-[var(--ls-text-secondary)] transition hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]"
             href={`/${org}/notifications`}
-            title="Notifications"
+            title={t("notifications")}
           >
             <Bell className="size-4" />
           </Link>
@@ -275,7 +299,7 @@ export function LuminousConsoleShell({
           <form action="/api/auth/logout" method="post">
             <input name="next" type="hidden" value="/" />
             <button
-              aria-label="Sign out"
+              aria-label={t("signOut")}
               className="luminous-focus grid size-9 place-items-center rounded-[10px] text-[var(--ls-text-tertiary)] transition hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]"
               type="submit"
             >
@@ -297,7 +321,7 @@ export function LuminousConsoleShell({
             <button
               aria-controls="console-sidebar-navigation"
               aria-expanded={sidebarExpanded}
-              aria-label={sidebarExpanded ? "Collapse navigation" : "Expand navigation"}
+              aria-label={sidebarExpanded ? t("collapse") : t("expand")}
               className={cn(
                 "luminous-focus flex h-10 items-center rounded-[11px] text-[var(--ls-text-secondary)] transition hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]",
                 sidebarExpanded ? "justify-between px-3" : "justify-center",
@@ -305,11 +329,11 @@ export function LuminousConsoleShell({
               onClick={toggleSidebar}
               type="button"
             >
-              {sidebarExpanded ? <span className="text-xs font-semibold uppercase tracking-wider">Navigation</span> : null}
+              {sidebarExpanded ? <span className="text-xs font-semibold uppercase tracking-wider">{t("navigation")}</span> : null}
               {sidebarExpanded ? <PanelLeftClose className="size-[18px]" /> : <PanelLeftOpen className="size-[18px]" />}
             </button>
           </TooltipTrigger>
-          <TooltipContent side="right" sideOffset={12}>Expand navigation</TooltipContent>
+          <TooltipContent side="right" sideOffset={12}>{t("expand")}</TooltipContent>
         </Tooltip>
         <nav aria-label="Workspace navigation" className="flex flex-col gap-2" id="console-sidebar-navigation">
           {railItems.map((item) => {
@@ -321,7 +345,7 @@ export function LuminousConsoleShell({
                 <TooltipTrigger asChild>
                   <Link
                     aria-current={active ? "page" : undefined}
-                    aria-label={item.label}
+                    aria-label={t(item.label)}
                     className={cn(
                       "luminous-focus relative flex h-10 items-center rounded-[11px] transition",
                       sidebarExpanded ? "gap-3 px-3" : "justify-center",
@@ -333,10 +357,10 @@ export function LuminousConsoleShell({
                   >
                     {active ? <span className="absolute -left-3 h-5 w-0.5 rounded-full bg-[var(--ls-accent)]" /> : null}
                     <Icon className="size-[18px] shrink-0" />
-                    {sidebarExpanded ? <span className="truncate text-sm font-medium">{item.label}</span> : null}
+                    {sidebarExpanded ? <span className="truncate text-sm font-medium">{t(item.label)}</span> : null}
                   </Link>
                 </TooltipTrigger>
-                <TooltipContent side="right" sideOffset={12}>{item.label}</TooltipContent>
+                <TooltipContent side="right" sideOffset={12}>{t(item.label)}</TooltipContent>
               </Tooltip>
             );
           })}
@@ -358,6 +382,7 @@ export function LuminousConsoleShell({
       {commandOpen ? (
         <CommandPalette
           items={visibleCommandItems}
+          language={language}
           onClose={closeCommandPalette}
           onQueryChange={setCommandQuery}
           query={commandQuery}
@@ -381,7 +406,7 @@ export function LuminousConsoleShell({
               key={item.key}
             >
               <Icon className="size-[18px]" />
-              {item.key === "reviews" ? "Review" : item.label}
+              {item.key === "reviews" ? t("review") : t(item.label)}
             </Link>
           );
         })}
@@ -391,6 +416,7 @@ export function LuminousConsoleShell({
 }
 
 function PreviewModeNotice({ org }: { org: string }) {
+  const t = useUiText();
   return (
     <aside
       className="mb-5 flex flex-col gap-3 rounded-[14px] border border-amber-500/25 bg-amber-500/[0.055] px-4 py-3.5 text-sm text-[var(--ls-text-secondary)] shadow-[var(--ls-shadow-control)] sm:flex-row sm:items-center sm:justify-between"
@@ -399,15 +425,15 @@ function PreviewModeNotice({ org }: { org: string }) {
       <div className="flex min-w-0 items-start gap-3">
         <CircleAlert className="mt-0.5 size-4 shrink-0 text-[var(--ls-warning-text)]" />
         <p className="leading-5">
-          <span className="font-semibold text-[var(--ls-text)]">Preview environment.</span>{" "}
-          Pull requests, Issues, checks, and findings shown here are sample records. This deployment does not read from or write to GitHub or GitLab.
+          <span className="font-semibold text-[var(--ls-text)]">{t("preview")}</span>{" "}
+          {t("previewDetail")}
         </p>
       </div>
       <Link
         className="luminous-focus inline-flex shrink-0 items-center justify-center rounded-[9px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 py-1.5 text-xs font-semibold text-[var(--ls-text)] transition hover:bg-[var(--ls-surface-muted)]"
         href={`/${encodeURIComponent(org)}/connect`}
       >
-        Open connections
+        {t("openConnections")}
       </Link>
     </aside>
   );
@@ -424,43 +450,47 @@ type CommandChoice = CommandItem & {
   group: "Pages" | "Workspaces" | "Workspace actions";
 };
 
-function commandItemsFor(org: string): CommandItem[] {
+function commandItemsFor(org: string, language: UiLanguage): CommandItem[] {
   const route = (path: string) => `/${encodeURIComponent(org)}${path}`;
+  const label = (en: string, zh: string) => language === "zh-CN" ? zh : en;
   return [
-    { label: "Review cockpit", description: "Prioritize current review operations", href: route("/home"), icon: CircleGauge },
-    { label: "Issues", description: "Open, regressed, critical, and assigned issue evidence", href: route("/issues"), icon: ListChecks },
-    { label: "Provider Issue triage", description: "AI analysis for user-authored GitHub and GitLab Issues", href: route("/provider-issues"), icon: MessagesSquare },
-    { label: "Finding explorer", description: "Cross-run finding feedback and trends", href: route("/findings"), icon: Crosshair },
-    { label: "Pull requests", description: "Review decisions and revision-bound evidence", href: route("/reviews"), icon: GitPullRequest },
-    { label: "Work queue", description: "Running and needs-attention review runs", href: route("/tasks?tab=running"), icon: CircleGauge },
-		{ label: "Agent work", description: "Issue-to-PR admission, classification, plans, and approvals", href: route("/agent-work"), icon: SquareTerminal },
-		{ label: "CLI reviews", description: "Review admission and reproducible CLI evidence", href: route("/cli-reviews"), icon: SquareTerminal },
-		{ label: "Review commands", description: "Provider comment commands and Console shortcuts", href: route("/review-commands"), icon: SquareTerminal },
-		{ label: "Review settings", description: "Scope, prompts, summaries, and lifecycle messages", href: route("/review-config/general"), icon: ShieldCheck },
-    { label: "Policy library", description: "Published policies, drafts, and provenance", href: route("/rules"), icon: ShieldCheck },
-    { label: "Policy approvals", description: "Independently decide immutable content changes", href: route("/rules/approvals"), icon: ShieldCheck },
-    { label: "Policy exceptions", description: "Time-bounded governed risk acceptance", href: route("/rules/exceptions"), icon: ShieldCheck },
-    { label: "Connections", description: "Git provider installations and verification", href: route("/connect"), icon: Settings2 },
-    { label: "Notifications", description: "Destinations, routes, and delivery receipts", href: route("/notifications"), icon: Bell },
-    { label: "Audit", description: "Immutable workspace control-plane events", href: route("/audit"), icon: Settings2 },
-    { label: "Usage", description: "Reservation, settlement, and reconciliation", href: route("/usage"), icon: CircleGauge },
-    { label: "Enterprise settings", description: "Members, SSO, models, keys, data, and health", href: route("/settings/members"), icon: Building2 },
+    { label: label("Review cockpit", "审核概览"), description: label("Prioritize current review operations", "优先处理当前审核任务"), href: route("/home"), icon: CircleGauge },
+    { label: label("Issues", "问题"), description: label("Open, regressed, critical, and assigned issue evidence", "待处理、复发、严重及分配给我的问题"), href: route("/issues"), icon: ListChecks },
+    { label: label("Provider Issue triage", "Issue 分析"), description: label("AI analysis for user-authored GitHub and GitLab Issues", "分析用户创建的 GitHub 和 GitLab Issue"), href: route("/provider-issues"), icon: MessagesSquare },
+    { label: label("Finding explorer", "发现项"), description: label("Cross-run finding feedback and trends", "跨运行查看发现项与反馈趋势"), href: route("/findings"), icon: Crosshair },
+    { label: label("Pull requests", "合并请求"), description: label("Review decisions and revision-bound evidence", "审核结论和版本关联证据"), href: route("/reviews"), icon: GitPullRequest },
+    { label: label("Work queue", "工作队列"), description: label("Running and needs-attention review runs", "执行中及需要人工处理的审核"), href: route("/tasks?tab=running"), icon: CircleGauge },
+    { label: label("Agent work", "Agent 任务"), description: label("Issue-to-PR admission, classification, plans, and approvals", "Issue 到 PR 的准入、分类、计划与审批"), href: route("/agent-work"), icon: SquareTerminal },
+    { label: label("CLI reviews", "CLI 审核"), description: label("Review admission and reproducible CLI evidence", "CLI 审核准入与可复现证据"), href: route("/cli-reviews"), icon: SquareTerminal },
+    { label: label("Review commands", "审核命令"), description: label("Provider comment commands and Console shortcuts", "平台评论命令和控制台快捷操作"), href: route("/review-commands"), icon: SquareTerminal },
+    { label: label("Review settings", "审核设置"), description: label("Scope, prompts, summaries, and lifecycle messages", "审核范围、提示词、摘要和状态消息"), href: route("/review-config/general"), icon: ShieldCheck },
+    { label: label("Policy library", "策略库"), description: label("Published policies, drafts, and provenance", "已发布策略、草稿和来源"), href: route("/rules"), icon: ShieldCheck },
+    { label: label("Policy approvals", "策略审批"), description: label("Independently decide immutable content changes", "独立审批不可变内容变更"), href: route("/rules/approvals"), icon: ShieldCheck },
+    { label: label("Policy exceptions", "策略例外"), description: label("Time-bounded governed risk acceptance", "有期限的风险接受"), href: route("/rules/exceptions"), icon: ShieldCheck },
+    { label: label("Connections", "连接"), description: label("Git provider installations and verification", "Git 平台安装与验证"), href: route("/connect"), icon: Settings2 },
+    { label: label("Notifications", "通知"), description: label("Destinations, routes, and delivery receipts", "通知目标、路由和送达回执"), href: route("/notifications"), icon: Bell },
+    { label: label("Audit", "审计"), description: label("Immutable workspace control-plane events", "工作空间不可变控制事件"), href: route("/audit"), icon: Settings2 },
+    { label: label("Usage", "用量"), description: label("Reservation, settlement, and reconciliation", "预留、结算与对账"), href: route("/usage"), icon: CircleGauge },
+    { label: label("Enterprise settings", "企业设置"), description: label("Members, SSO, models, keys, data, and health", "成员、单点登录、模型、密钥、数据及健康状态"), href: route("/settings/members"), icon: Building2 },
   ];
 }
 
 function CommandPalette({
   items,
+  language,
   onClose,
   onQueryChange,
   query,
   workspaces,
 }: {
   items: CommandItem[];
+  language: UiLanguage;
   onClose: () => void;
   onQueryChange: (query: string) => void;
   query: string;
   workspaces: AccessibleWorkspace[];
 }) {
+  const zh = language === "zh-CN";
   const dialogRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const workspaceItems = useMemo<CommandItem[]>(
@@ -469,26 +499,26 @@ function CommandPalette({
         description: `${workspace.slug} · ${workspace.role}`,
         href: `/${encodeURIComponent(workspace.slug)}/home`,
         icon: Building2,
-        label: `Switch to ${workspace.name}`,
+        label: zh ? `切换到 ${workspace.name}` : `Switch to ${workspace.name}`,
       })),
-    [workspaces],
+    [workspaces, zh],
   );
   const workspaceActions = useMemo<CommandItem[]>(
     () => [
       {
-        description: "See every workspace you can access",
+        description: zh ? "查看可以访问的全部工作空间" : "See every workspace you can access",
         href: "/workspaces",
         icon: Building2,
-        label: "All workspaces",
+        label: zh ? "全部工作空间" : "All workspaces",
       },
       {
-        description: "Create a separate workspace boundary",
+        description: zh ? "创建独立的工作空间" : "Create a separate workspace boundary",
         href: "/workspaces/new",
         icon: Plus,
-        label: "Create workspace",
+        label: zh ? "创建工作空间" : "Create workspace",
       },
     ],
-    [],
+    [zh],
   );
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visibleWorkspaces = workspaceItems.filter((workspace) =>
@@ -590,7 +620,7 @@ function CommandPalette({
   return (
     <div className="fixed inset-0 z-50 bg-black/20 p-4 backdrop-blur-sm" role="presentation" onMouseDown={onClose}>
       <section
-        aria-label="Workspace command palette"
+        aria-label={zh ? "工作空间命令面板" : "Workspace command palette"}
         aria-modal="true"
         className="luminous-frosted mx-auto mt-[max(8vh,4rem)] w-full max-w-2xl overflow-hidden rounded-[20px] border border-[var(--ls-line-strong)] shadow-[var(--ls-shadow-float)]"
         onKeyDown={trapFocus}
@@ -600,7 +630,7 @@ function CommandPalette({
       >
         <div className="flex items-center gap-3 border-b border-[var(--ls-line)] px-4 py-3">
           <Search className="size-4 shrink-0 text-[var(--ls-text-tertiary)]" />
-          <label className="sr-only" htmlFor="workspace-command-search">Search pages and workspaces</label>
+          <label className="sr-only" htmlFor="workspace-command-search">{zh ? "搜索页面和工作空间" : "Search pages and workspaces"}</label>
           <input
             aria-activedescendant={
               choices[highlightedIndex]
@@ -618,7 +648,7 @@ function CommandPalette({
               onQueryChange(event.target.value);
             }}
             onKeyDown={onSearchKeyDown}
-            placeholder="Search pages and workspaces…"
+            placeholder={zh ? "搜索页面和工作空间…" : "Search pages and workspaces…"}
             ref={searchRef}
             role="combobox"
             value={query}
@@ -629,7 +659,7 @@ function CommandPalette({
           {choices.length ? (
             <>
               {pageChoices.length ? (
-                <CommandGroup label="Pages">
+                <CommandGroup label={zh ? "页面" : "Pages"}>
                   {pageChoices.map((item) => (
                     <CommandPaletteLink
                       active={choices.indexOf(item) === highlightedIndex}
@@ -641,7 +671,7 @@ function CommandPalette({
                 </CommandGroup>
               ) : null}
               {workspaceChoices.length ? (
-                <CommandGroup label="Workspaces">
+                <CommandGroup label={zh ? "工作空间" : "Workspaces"}>
                   {workspaceChoices.map((item) => (
                     <CommandPaletteLink
                       active={choices.indexOf(item) === highlightedIndex}
@@ -653,7 +683,7 @@ function CommandPalette({
                 </CommandGroup>
               ) : null}
               {workspaceActionChoices.length ? (
-                <CommandGroup label="Workspace actions">
+                <CommandGroup label={zh ? "工作空间操作" : "Workspace actions"}>
                   {workspaceActionChoices.map((item) => (
                     <CommandPaletteLink
                       active={choices.indexOf(item) === highlightedIndex}
@@ -667,7 +697,7 @@ function CommandPalette({
             </>
           ) : (
             <p className="px-3 py-7 text-center text-sm text-[var(--ls-text-secondary)]">
-              No pages or workspaces match this search.
+              {zh ? "没有匹配的页面或工作空间。" : "No pages or workspaces match this search."}
             </p>
           )}
         </div>

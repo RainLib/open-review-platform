@@ -19,6 +19,7 @@ const (
 // being inferred by the model.
 type ReviewResult struct {
 	Findings           []domain.Finding
+	Language           string
 	SuppressedFindings int
 	Gate               MergeGateVerdict
 	Scope              ReviewScope
@@ -51,6 +52,9 @@ func (s ReviewScope) AnalysisSkipped() bool {
 }
 
 func (r ReviewResult) CheckSummary() string {
+	if copy, ok := localizedReviewCopy(r.Language); ok {
+		return localizedCheckSummary(r, copy)
+	}
 	if r.Scope.AnalysisSkipped() && len(r.Findings) == 0 {
 		return fmt.Sprintf("AI analysis skipped: all %d changed file(s) were outside the configured review scope. No findings were evaluated by the merge gate.", r.Scope.DeferredFiles)
 	}
@@ -308,6 +312,9 @@ func CompletedReportWithMessage(job domain.ReviewJob, context ReviewContext, res
 // optional evidence detail. The top-level gate, scope table, and finding index
 // remain canonical so no configuration can conceal a blocked merge decision.
 func CompletedReportWithSummary(job domain.ReviewJob, context ReviewContext, result ReviewResult, summary domain.ReviewSummaryConfig, message, marker string) string {
+	if copy, ok := localizedReviewCopy(result.Language); ok {
+		return localizedCompletedReport(job, context, result, summary, message, marker, copy)
+	}
 	if !summary.Valid() {
 		summary = domain.DefaultReviewSummaryConfig()
 	}
@@ -413,6 +420,13 @@ func TerminalReportWithMessage(job domain.ReviewJob, state LifecycleState, messa
 }
 
 func FindingReport(job domain.ReviewJob, finding domain.Finding, marker string) string {
+	return FindingReportForLanguage(job, finding, marker, "en")
+}
+
+func FindingReportForLanguage(job domain.ReviewJob, finding domain.Finding, marker, language string) string {
+	if copy, ok := localizedReviewCopy(language); ok {
+		return localizedFindingReport(job, finding, marker, copy)
+	}
 	severity := normalizedSeverity(finding.Severity)
 	components := []MarkdownComponent{
 		BadgeRow{Badges: []Badge{

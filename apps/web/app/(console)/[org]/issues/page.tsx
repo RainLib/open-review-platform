@@ -41,6 +41,8 @@ import {
   type WorkspaceMember,
 } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
+import { getUiLanguage } from "@/lib/ui-language-server";
+import { type UiLanguage, uiText } from "@/lib/ui-language";
 import { issueDefinitionFromQuery, issueDisplaySummary, issueDisplayTitle, issueFilterAnchor, type IssueQuery, type IssueView, type IssueViewDefinition } from "@/lib/issue-filters";
 
 export default async function IssuesPage({
@@ -50,7 +52,8 @@ export default async function IssuesPage({
   params: Promise<{ org: string }>;
   searchParams: Promise<IssueQuery>;
 }) {
-  const [{ org }, query] = await Promise.all([params, searchParams]);
+  const [{ org }, query, language] = await Promise.all([params, searchParams, getUiLanguage()]);
+  const t = (key: Parameters<typeof uiText>[1]) => uiText(language, key);
   let definition: IssueViewDefinition | undefined;
   let invalidFilter: string | undefined;
   let filterTime: string | undefined;
@@ -86,7 +89,7 @@ export default async function IssuesPage({
         <div>
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
-              Issue inbox
+              {t("issueInbox")}
             </h1>
             <span className="text-sm text-[var(--ls-text-secondary)]">
               {readable ? data.totalCount === undefined ? viewSummary.countLabel : `${data.totalCount} matching issues` : "Issue aggregate unavailable"}
@@ -97,25 +100,25 @@ export default async function IssuesPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <DataFreshness state={data.source === "live" ? "live" : data.source === "demo" ? "demo" : "unavailable"} />
+          <DataFreshness language={language} state={data.source === "live" ? "live" : data.source === "demo" ? "demo" : "unavailable"} />
           {readable ? <IssueAutoCreatePolicyEditor enabled={data.source === "live"} org={org} policy={policyData.policy} /> : null}
           <Link
             className="luminous-focus inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-4 text-sm font-medium text-[var(--ls-text)] shadow-[var(--ls-shadow-control)] transition hover:bg-[var(--ls-surface-muted)]"
             href={issueTriageHref(org)}
           >
-            <ClipboardCheck className="size-4 text-[var(--ls-accent)]" /> Configure Issue format
+            <ClipboardCheck className="size-4 text-[var(--ls-accent)]" /> {t("configureIssueFormat")}
           </Link>
           <Link
             className="luminous-focus inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-4 text-sm font-medium text-[var(--ls-text)] shadow-[var(--ls-shadow-control)] transition hover:bg-[var(--ls-surface-muted)]"
             href={`/${encodeURIComponent(org)}/provider-issues`}
           >
-            <MessagesSquare className="size-4 text-[var(--ls-accent)]" /> Provider triage
+            <MessagesSquare className="size-4 text-[var(--ls-accent)]" /> {t("providerTriage")}
           </Link>
           <Link
             className="luminous-focus inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-4 text-sm font-medium text-[var(--ls-text)] shadow-[var(--ls-shadow-control)] transition hover:bg-[var(--ls-surface-muted)]"
             href={`/${encodeURIComponent(org)}/findings`}
           >
-            <Sparkles className="size-4 text-[var(--ls-accent)]" /> Explore findings
+            <Sparkles className="size-4 text-[var(--ls-accent)]" /> {t("exploreFindings")}
           </Link>
         </div>
       </div>
@@ -125,14 +128,14 @@ export default async function IssuesPage({
       {readable ? (
         <>
           {preview ? <div className="flex items-start gap-3 rounded-[14px] border border-sky-500/20 bg-sky-500/[0.06] px-4 py-3 text-sm text-[var(--ls-text-secondary)]"><CircleAlert className="mt-0.5 size-4 shrink-0 text-[var(--ls-accent)]" /><p>Illustrative issue aggregates for design review. Filters and retained evidence are available in this preview; changing status, assigning owners, and creating provider Issues require a live workspace.</p></div> : null}
-          <TabStateRouter className="flex gap-1 overflow-x-auto border-b border-[var(--ls-line)]" dismissSelection={Boolean(query.selected && data.selectedInView === false)} label="Issue views">
-            <ViewTab href={issueHref(org, query, { view: "all", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={FolderGit2} label="All" selected={view === "all"} />
-            <ViewTab count={counts.open} href={issueHref(org, query, { view: "open", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={Clock3} label="Open" selected={view === "open"} />
-            <ViewTab count={counts.regressed} href={issueHref(org, query, { view: "regressed", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={Activity} label="Regressed" selected={view === "regressed"} />
-            <ViewTab count={counts.critical} href={issueHref(org, query, { view: "critical", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={CircleAlert} label="Critical" selected={view === "critical"} />
-            <ViewTab count={counts.assigned} href={issueHref(org, query, { view: "assigned", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={FolderGit2} label="Assigned to me" selected={view === "assigned"} />
-            <ViewTab count={counts.resolved} href={issueHref(org, query, { view: "resolved", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={CheckCircle2} label="Resolved" selected={view === "resolved"} />
-            <ViewTab count={counts.suppressed} href={issueHref(org, query, { view: "suppressed", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={ShieldOff} label="Suppressed" selected={view === "suppressed"} />
+          <TabStateRouter className="flex gap-1 overflow-x-auto border-b border-[var(--ls-line)]" dismissSelection={Boolean(query.selected && data.selectedInView === false)} label={t("issueInbox")}>
+            <ViewTab href={issueHref(org, query, { view: "all", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={FolderGit2} label={t("all")} selected={view === "all"} />
+            <ViewTab count={counts.open} href={issueHref(org, query, { view: "open", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={Clock3} label={t("open")} selected={view === "open"} />
+            <ViewTab count={counts.regressed} href={issueHref(org, query, { view: "regressed", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={Activity} label={t("regressed")} selected={view === "regressed"} />
+            <ViewTab count={counts.critical} critical href={issueHref(org, query, { view: "critical", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={CircleAlert} label={t("critical")} selected={view === "critical"} />
+            <ViewTab count={counts.assigned} href={issueHref(org, query, { view: "assigned", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={FolderGit2} label={t("assignedToMe")} selected={view === "assigned"} />
+            <ViewTab count={counts.resolved} href={issueHref(org, query, { view: "resolved", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={CheckCircle2} label={t("resolved")} selected={view === "resolved"} />
+            <ViewTab count={counts.suppressed} href={issueHref(org, query, { view: "suppressed", status: undefined, cursor: undefined, direction: undefined, since: undefined })} icon={ShieldOff} label={t("suppressed")} selected={view === "suppressed"} />
           </TabStateRouter>
 
           {!query.filters ? <form key={JSON.stringify(query)} className="grid gap-2 rounded-[14px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-2 shadow-[var(--ls-shadow-control)] sm:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_132px_150px_180px_120px_110px_auto]" method="get">
@@ -140,28 +143,28 @@ export default async function IssuesPage({
             {query.saved_view ? <input name="saved_view" type="hidden" value={query.saved_view} /> : null}
             {(["provider", "api_base_url", "path", "assignee", "rule"] as const).map((field) => query[field] ? <input key={field} name={field} type="hidden" value={query[field]} /> : null)}
             <label className="relative block">
-              <span className="sr-only">Search issues</span>
+              <span className="sr-only">{t("searchIssues")}</span>
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--ls-text-tertiary)]" />
               <input
                 className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] pl-9 pr-3 text-sm text-[var(--ls-text)] placeholder:text-[var(--ls-text-tertiary)]"
                 defaultValue={query.query}
                 id="issue-search"
                 name="query"
-                placeholder="Search issues…"
+                placeholder={t("searchIssues")}
               />
             </label>
             <input name="since" type="hidden" value="" />
-            <FilterSelect defaultValue={query.severity} label="Severity" name="severity" options={["critical", "high", "medium", "low"]} />
-            <FilterText defaultValue={query.category} label="Category" name="category" options={categories} />
-            <FilterText defaultValue={query.repository} label="Repository" name="repository" options={repositories} />
-            <FilterSelect defaultValue={query.status} label="Status" name="status" options={["open", "regressed", "resolved", "suppressed"]} />
-            <FilterSelect defaultValue={query.age} label="Age" name="age" options={["24h", "7d", "30d"]} />
+            <FilterSelect defaultValue={query.severity} label={t("severity")} name="severity" options={["critical", "high", "medium", "low"]} />
+            <FilterText defaultValue={query.category} label={t("category")} name="category" options={categories} />
+            <FilterText defaultValue={query.repository} label={t("repository")} name="repository" options={repositories} />
+            <FilterSelect defaultValue={query.status} label={t("status")} name="status" options={["open", "regressed", "resolved", "suppressed"]} />
+            <FilterSelect defaultValue={query.age} label={t("age")} name="age" options={["24h", "7d", "30d"]} />
             <div className="flex gap-2">
               <button className="luminous-focus inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-[10px] bg-[var(--ls-accent)] px-3 text-sm font-medium text-white hover:bg-[var(--ls-accent-hover)]" type="submit">
-                <Filter className="size-4" /> Apply
+                <Filter className="size-4" /> {t("apply")}
               </button>
               {hasIssueFilters(query) ? (
-                <Link aria-label="Clear filters" className="luminous-focus grid size-10 place-items-center rounded-[10px] border border-[var(--ls-line-strong)] text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]" href={`/${encodeURIComponent(org)}/issues?view=${view}`} title="Clear filters">
+                <Link aria-label={t("clearFilters")} className="luminous-focus grid size-10 place-items-center rounded-[10px] border border-[var(--ls-line-strong)] text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]" href={`/${encodeURIComponent(org)}/issues?view=${view}`} title={t("clearFilters")}>
                   <SlidersHorizontal className="size-4" />
                 </Link>
               ) : null}
@@ -176,28 +179,28 @@ export default async function IssuesPage({
                 <table className="w-full border-collapse text-left">
                   <thead>
                     <tr className="h-10 border-b border-[var(--ls-line)] text-[11px] font-medium text-[var(--ls-text-tertiary)]">
-                      <th className="w-28 px-4">Severity</th>
-                      <th className="px-3">Issue</th>
-                      <th className="px-3">Repository / file</th>
-                      <th className="w-24 px-3 text-center">Occurrences</th>
-                      <th className="w-24 px-3">Age</th>
-                      <th className="w-24 px-3">Status</th>
+                      <th className="w-28 px-4">{t("severity")}</th>
+                      <th className="px-3">{t("issues")}</th>
+                      <th className="px-3">{t("repositoryFile")}</th>
+                      <th className="w-24 px-3 text-center">{t("occurrences")}</th>
+                      <th className="w-24 px-3">{t("age")}</th>
+                      <th className="w-24 px-3">{t("status")}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {issues.map((issue) => (
-                      <IssueTableRow allowSelection={readable} issue={issue} key={issue.id} org={org} query={navigationQuery} selected={selectedIssue?.id === issue.id} />
+                      <IssueTableRow allowSelection={readable} issue={issue} key={issue.id} language={language} org={org} query={navigationQuery} selected={selectedIssue?.id === issue.id} />
                     ))}
                   </tbody>
                 </table>
               </div>
               <div className="divide-y divide-[var(--ls-line)] md:hidden">
-                {issues.map((issue) => <IssueCard allowSelection={readable} issue={issue} key={issue.id} org={org} />)}
+                {issues.map((issue) => <IssueCard allowSelection={readable} issue={issue} key={issue.id} language={language} org={org} />)}
               </div>
             </>
               ) : firstUseEmpty ? <PageState action={<RecoveryAction href={`/${encodeURIComponent(org)}/findings`} variant="primary">Explore review findings</RecoveryAction>} detail="No review findings have been aggregated yet. This inbox tracks durable findings from Open Review runs; it does not mirror historical GitHub or GitLab Issues. Configure the auto-create policy above to open a provider Issue only for future matching aggregates." kind="first-use-empty" title="No review issues yet" /> : <PageState action={<RecoveryAction href={`/${encodeURIComponent(org)}/issues?view=${hasIssueFilters(query) ? view : "all"}`}>{hasIssueFilters(query) ? "Clear filters" : "View all issues"}</RecoveryAction>} detail={hasContradictoryStatusFilter(view, query.status) ? "The selected status conflicts with this inbox view. Clear the status filter or choose the matching tab." : hasIssueFilters(query) ? "No issue aggregates match this view and its current filters." : "No issues match this view. Open All to inspect other statuses."} kind="filtered-empty" title="No matching issues" />}
             </section>
-            {selectedIssue ? <IssueInspector issue={selectedIssue} members={memberData.members} org={org} query={navigationQuery} readOnly={preview} /> : null}
+            {selectedIssue ? <IssueInspector issue={selectedIssue} language={language} members={memberData.members} org={org} query={navigationQuery} readOnly={preview} /> : null}
           </div>
           <IssuePager data={data} issues={issues} org={org} query={navigationQuery} seenAfter={preview ? seenAfter : undefined} />
         </>
@@ -208,10 +211,10 @@ export default async function IssuesPage({
   );
 }
 
-function IssueTableRow({ allowSelection, issue, org, query, selected }: { allowSelection: boolean; issue: ReviewIssue; org: string; query: IssueQuery; selected: boolean }) {
+function IssueTableRow({ allowSelection, issue, language, org, query, selected }: { allowSelection: boolean; issue: ReviewIssue; language: UiLanguage; org: string; query: IssueQuery; selected: boolean }) {
   return (
     <tr className={cn("h-[58px] border-b border-[var(--ls-line)] last:border-0 hover:bg-[var(--ls-surface-muted)]", selected && "bg-[var(--ls-surface-selected)]")}>
-      <td className={cn("border-l-2 px-4", selected ? "border-l-[var(--ls-accent)]" : "border-l-transparent")}><SeverityBadge severity={issue.severity} /></td>
+      <td className={cn("border-l-2 px-4", selected ? "border-l-[var(--ls-accent)]" : "border-l-transparent")}><SeverityBadge language={language} severity={issue.severity} /></td>
       <td className="max-w-80 px-3">
         {allowSelection ? <Link className="luminous-focus block rounded" href={issueHref(org, query, { selected: issue.id })}>
           <span className="block truncate text-sm font-medium text-[var(--ls-text)]">{issueDisplayTitle(issue.body_preview)}</span>
@@ -223,23 +226,23 @@ function IssueTableRow({ allowSelection, issue, org, query, selected }: { allowS
         <span className="mt-0.5 block truncate font-mono text-[11px] text-[var(--ls-text-tertiary)]">{issue.path}</span>
       </td>
       <td className="px-3 text-center text-xs tabular-nums text-[var(--ls-text-secondary)]">{issue.occurrence_count}</td>
-      <td className="whitespace-nowrap px-3 text-xs text-[var(--ls-text-secondary)]">{formatIssueAge(issue.last_seen_at)}</td>
-      <td className="px-3"><IssueStatusBadge status={issue.status} /></td>
+      <td className="whitespace-nowrap px-3 text-xs text-[var(--ls-text-secondary)]">{formatIssueAge(issue.last_seen_at, language)}</td>
+      <td className="px-3"><IssueStatusBadge language={language} status={issue.status} /></td>
     </tr>
   );
 }
 
-function IssueCard({ allowSelection, issue, org }: { allowSelection: boolean; issue: ReviewIssue; org: string }) {
+function IssueCard({ allowSelection, issue, language, org }: { allowSelection: boolean; issue: ReviewIssue; language: UiLanguage; org: string }) {
   const content = <>
-      <div className="flex items-start justify-between gap-3"><SeverityBadge severity={issue.severity} /><IssueStatusBadge status={issue.status} /></div>
+      <div className="flex items-start justify-between gap-3"><SeverityBadge language={language} severity={issue.severity} /><IssueStatusBadge language={language} status={issue.status} /></div>
       <h2 className="mt-3 line-clamp-2 text-sm font-semibold text-[var(--ls-text)]">{issueDisplayTitle(issue.body_preview)}</h2>
       <p className="mt-1 truncate font-mono text-xs text-[var(--ls-text-tertiary)]">{issue.repository} · {issue.path}</p>
-      <p className="mt-3 text-xs text-[var(--ls-text-secondary)]">{issue.occurrence_count} occurrences · last seen {formatIssueAge(issue.last_seen_at)}</p>
+      <p className="mt-3 text-xs text-[var(--ls-text-secondary)]">{language === "zh-CN" ? `出现 ${issue.occurrence_count} 次 · 最近 ${formatIssueAge(issue.last_seen_at, language)}` : `${issue.occurrence_count} occurrences · last seen ${formatIssueAge(issue.last_seen_at, language)}`}</p>
     </>;
   return allowSelection ? <Link className="luminous-focus block p-4 hover:bg-[var(--ls-surface-muted)]" href={`/${org}/issues/${issue.id}`}>{content}</Link> : <article className="p-4">{content}</article>;
 }
 
-function IssueInspector({ issue, members, org, query, readOnly }: { issue: IssueDetail; members: WorkspaceMember[]; org: string; query: IssueQuery; readOnly: boolean }) {
+function IssueInspector({ issue, language, members, org, query, readOnly }: { issue: IssueDetail; language: UiLanguage; members: WorkspaceMember[]; org: string; query: IssueQuery; readOnly: boolean }) {
   const latest = issue.occurrences[0];
   const pullRequests = unique(issue.occurrences.map((occurrence) => String(occurrence.review_number))).slice(0, 3);
   return (
@@ -251,7 +254,7 @@ function IssueInspector({ issue, members, org, query, readOnly }: { issue: Issue
         </div>
         <Link aria-label="Close issue inspector" className="luminous-focus grid size-8 shrink-0 place-items-center rounded-[9px] text-[var(--ls-text-tertiary)] hover:bg-[var(--ls-surface-muted)]" href={issueHref(org, query, { selected: undefined })}><X className="size-4" /></Link>
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-3"><SeverityBadge severity={issue.severity} /><span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">{issue.category}</span><IssueStatusBadge status={issue.status} /></div>
+      <div className="mt-3 flex flex-wrap items-center gap-3"><SeverityBadge language={language} severity={issue.severity} /><span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">{issue.category}</span><IssueStatusBadge language={language} status={issue.status} /></div>
       <Link className="luminous-focus mt-3 inline-flex min-h-7 items-center gap-1.5 rounded-[8px] text-xs font-medium text-[var(--ls-accent)] hover:text-[var(--ls-accent-hover)]" href={issueTriageHref(org, issue)}>
         <ClipboardCheck className="size-3.5" /> Configure format for {issue.repository}
       </Link>
@@ -288,8 +291,8 @@ function FilterText({ defaultValue, label, name, options }: { defaultValue?: str
   return <label><span className="sr-only">{label}</span><input className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text-secondary)] placeholder:text-[var(--ls-text-secondary)]" defaultValue={defaultValue ?? ""} list={listID} name={name} placeholder={label} type="text" /><datalist id={listID}>{options.map((option) => <option key={option} value={option} />)}</datalist></label>;
 }
 
-function ViewTab({ count, href, icon: Icon, label, selected }: { count?: number; href: string; icon: typeof Clock3; label: string; selected: boolean }) {
-  return <Link aria-current={selected ? "page" : undefined} aria-selected={selected} className={cn("luminous-focus relative inline-flex h-11 shrink-0 items-center gap-2 rounded-t-[10px] px-4 text-sm font-medium", selected ? "text-[var(--ls-text)]" : "text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]")} href={href} role="tab" tabIndex={selected ? 0 : -1}><Icon className={cn("size-4", label === "Critical" && "text-[var(--ls-critical-text)]")} />{label}<span className={selected ? "text-[var(--ls-accent)]" : "text-[var(--ls-text-tertiary)]"}>{count}</span>{selected ? <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--ls-accent)]" /> : null}</Link>;
+function ViewTab({ count, critical = false, href, icon: Icon, label, selected }: { count?: number; critical?: boolean; href: string; icon: typeof Clock3; label: string; selected: boolean }) {
+  return <Link aria-current={selected ? "page" : undefined} aria-selected={selected} className={cn("luminous-focus relative inline-flex h-11 shrink-0 items-center gap-2 rounded-t-[10px] px-4 text-sm font-medium", selected ? "text-[var(--ls-text)]" : "text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]")} href={href} role="tab" tabIndex={selected ? 0 : -1}><Icon className={cn("size-4", critical && "text-[var(--ls-critical-text)]")} />{label}<span className={selected ? "text-[var(--ls-accent)]" : "text-[var(--ls-text-tertiary)]"}>{count}</span>{selected ? <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--ls-accent)]" /> : null}</Link>;
 }
 
 

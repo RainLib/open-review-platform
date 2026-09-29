@@ -1,6 +1,9 @@
+"use client";
+
 import { cn } from "@/lib/utils";
 import { displayRunState } from "@/lib/format";
 import type { RunState } from "@/lib/control-api";
+import { useUiLanguage } from "@/components/console/ui-language-context";
 
 const stateStyle: Record<RunState, string> = {
   acknowledged: "border-[var(--ls-line-strong)] bg-[var(--ls-surface-muted)] text-[var(--ls-text-secondary)]",
@@ -17,6 +20,7 @@ const stateStyle: Record<RunState, string> = {
 };
 
 export function StatusBadge({ state }: { state: RunState }) {
+  const language = useUiLanguage();
   return (
     <span
       className={cn(
@@ -25,7 +29,7 @@ export function StatusBadge({ state }: { state: RunState }) {
       )}
     >
       <span className="size-1.5 rounded-full bg-current" />
-      {displayRunState(state)}
+      {displayRunState(state, language)}
     </span>
   );
 }

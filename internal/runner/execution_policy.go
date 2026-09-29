@@ -84,9 +84,29 @@ func (p ExecutionPolicy) WithModelRoute(ctx context.Context, jobID uuid.UUID) (c
 }
 
 func (p ExecutionPolicy) WithReviewPrompts(ctx context.Context, jobID uuid.UUID) (context.Context, error) {
+	generalSnapshot, hasGeneral, err := p.configuration(ctx, jobID, domain.ReviewConfigGeneral)
+	if err != nil {
+		return nil, err
+	}
+	// Legacy jobs without an admitted general snapshot retain the historical
+	// executor path. Only a frozen source policy may introduce a language rule.
+	language := domain.DefaultReviewGeneralConfig().ReviewLanguage
+	if hasGeneral {
+		general, decodeErr := domain.DecodeReviewGeneralConfig(generalSnapshot.Content)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("decode review general snapshot: %w", decodeErr)
+		}
+		language = general.ReviewLanguage
+	}
 	snapshot, found, err := p.configuration(ctx, jobID, domain.ReviewConfigPrompts)
-	if err != nil || !found {
-		return ctx, err
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		if !hasGeneral {
+			return ctx, nil
+		}
+		return modelroute.WithPromptExecution(ctx, modelroute.PromptExecution{ReviewLanguage: language}), nil
 	}
 	prompts, err := domain.DecodeReviewPromptConfig(snapshot.Content)
 	if err != nil {
@@ -97,6 +117,7 @@ func (p ExecutionPolicy) WithReviewPrompts(ctx context.Context, jobID uuid.UUID)
 	}
 	return modelroute.WithPromptExecution(ctx, modelroute.PromptExecution{
 		SystemInstruction: prompts.SystemInstruction, RepositoryContext: prompts.RepositoryContext,
+		ReviewLanguage:  language,
 		MaxPromptTokens: prompts.MaxPromptTokens, AllowRepositoryInstructions: prompts.AllowRepositoryInstructions,
 	}), nil
 }

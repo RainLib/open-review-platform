@@ -112,6 +112,7 @@ func TestProcessorUsesExactScopedRuleExecutionWithoutPublisherSurface(t *testing
 		plan:  domain.ReviewExecutionPlan{Mode: "focused", SelectedPaths: []string{"internal/api/server.go"}, DeferredFiles: 1},
 		model: immutableSnapshot(t, domain.ReviewConfigModels, `{"enabled":true,"provider":"openai-compatible","protocol":"openai-chat","base_url":"https://models.example/v1/chat/completions","model":"deepseek-v4-flash","credential_ref":"env://OPEN_REVIEW_MODEL_SECRET_PRIMARY","effort":"low","max_prompt_tokens":8000,"token_budget":128000,"subtask_timeout_minutes":5}`),
 		configurations: map[domain.ReviewConfigSection]domain.ReviewConfigSnapshot{
+			domain.ReviewConfigGeneral:    immutableSnapshot(t, domain.ReviewConfigGeneral, `{"review_language":"en"}`),
 			domain.ReviewConfigPrompts:    immutableSnapshot(t, domain.ReviewConfigPrompts, `{"system_instruction":"Review the selected changes.","repository_context":"","max_prompt_tokens":12000,"allow_repository_instructions":false}`),
 			domain.ReviewConfigCategories: immutableSnapshot(t, domain.ReviewConfigCategories, `{"security":{"enabled":true,"minimum_severity":"high"}}`),
 		},
@@ -154,6 +155,7 @@ func TestProcessorCancelsWorkWhenItsAttemptLosesTheLease(t *testing.T) {
 		plan:  domain.ReviewExecutionPlan{Mode: "focused", SelectedPaths: []string{"internal/api/server.go"}},
 		model: immutableSnapshot(t, domain.ReviewConfigModels, `{"enabled":true,"provider":"openai-compatible","protocol":"openai-chat","base_url":"https://models.example/v1/chat/completions","model":"deepseek-v4-flash","credential_ref":"env://OPEN_REVIEW_MODEL_SECRET_PRIMARY","effort":"low","max_prompt_tokens":8000,"token_budget":128000,"subtask_timeout_minutes":5}`),
 		configurations: map[domain.ReviewConfigSection]domain.ReviewConfigSnapshot{
+			domain.ReviewConfigGeneral:    immutableSnapshot(t, domain.ReviewConfigGeneral, `{"review_language":"en"}`),
 			domain.ReviewConfigPrompts:    immutableSnapshot(t, domain.ReviewConfigPrompts, `{"system_instruction":"Review the selected changes.","repository_context":"","max_prompt_tokens":12000,"allow_repository_instructions":false}`),
 			domain.ReviewConfigCategories: immutableSnapshot(t, domain.ReviewConfigCategories, `{"security":{"enabled":true,"minimum_severity":"high"}}`),
 		},
