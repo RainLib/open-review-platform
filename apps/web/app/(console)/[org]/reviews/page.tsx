@@ -1,0 +1,94 @@
+import Link from "next/link";
+import { ArrowLeft, ArrowRight, ArrowUpRight, GitCommitHorizontal, Search } from "lucide-react";
+
+import { ProviderMark } from "@/components/providers/provider-icons";
+import { ManualReviewGuide } from "@/components/console/manual-review-guide";
+import { DataFreshness, PageState, RecoveryAction } from "@/components/console/page-state";
+import { TabStateRouter } from "@/components/console/tab-state-router";
+import { getPullRequestData, type PullRequestView, type ReviewRun } from "@/lib/control-api";
+import { displayRunState, formatTime, shortSHA } from "@/lib/format";
+import { providerReviewTarget } from "@/lib/provider-review-url";
+import { reviewEmptyState } from "@/lib/review-empty-state";
+import { cn } from "@/lib/utils";
+import { getUiLanguage } from "@/lib/ui-language-server";
+import { type UiLanguage, uiText } from "@/lib/ui-language";
+
+type ReviewQuery = { q?: string; view?: string; cursor?: string; direction?: string };
+
+export default async function ReviewsPage({ params, searchParams }: { params: Promise<{ org: string }>; searchParams: Promise<ReviewQuery> }) {
+  const [{ org }, query, language] = await Promise.all([params, searchParams, getUiLanguage()]);
+  const t = (key: Parameters<typeof uiText>[1]) => uiText(language, key);
+  const view = validView(query.view);
+  const data = await getPullRequestData(org, {
+    view,
+    query: query.q,
+    cursor: query.cursor,
+    direction: query.direction === "after" || query.direction === "before" ? query.direction : undefined,
+  });
+  const empty = reviewEmptyState(org, view, query, data);
+  const countsAvailable = data.source === "live" || data.source === "demo";
+
+  return <div className="space-y-5">
+    <header className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">{t("reviewWorkspace")}</p><h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">{t("pullRequests")}</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--ls-text-secondary)]">{t("reviewsIntro")}</p></div><DataFreshness detail={data.detail} language={language} state={data.source === "live" ? "live" : data.source === "demo" ? "demo" : "unavailable"} /></header>
+
+    <div className="flex flex-col gap-3 border-b border-[var(--ls-line)] lg:flex-row lg:items-end lg:justify-between"><TabStateRouter className="flex gap-1 overflow-x-auto" label={t("pullRequests")}><ReviewViewLink count={countsAvailable ? data.counts.active : undefined} href={reviewHref(org, "active", query)} label={t("active")} selected={view === "active"} /><ReviewViewLink count={countsAvailable ? data.counts.attention : undefined} href={reviewHref(org, "attention", query)} label={t("needsAttention")} selected={view === "attention"} /><ReviewViewLink count={countsAvailable ? data.counts.completed : undefined} href={reviewHref(org, "completed", query)} label={t("completed")} selected={view === "completed"} /><ReviewViewLink count={countsAvailable ? data.counts.all : undefined} href={reviewHref(org, "all", query)} label={t("all")} selected={view === "all"} /></TabStateRouter><ReviewSearchForm language={language} query={query} view={view} /></div>
+
+    <ManualReviewGuide org={org} />
+
+    {data.runs.length === 0 ? (
+      <PageState
+        action={<RecoveryAction href={empty.action.href} variant={empty.action.primary ? "primary" : "secondary"}>{empty.action.label}</RecoveryAction>}
+        detail={data.detail ?? empty.detail}
+        kind={empty.kind}
+        title={empty.title}
+      />
+    ) : <>
+      <p className="text-xs text-[var(--ls-text-tertiary)]">
+        {language === "zh-CN" ? `显示 ${data.runs.length} / ${data.counts[view]} ${t("currentReviews")}` : `Showing ${data.runs.length} of ${data.counts[view]} ${t("currentReviews")}.`}
+      </p>
+      <div className="hidden overflow-x-auto rounded-[14px] border border-[var(--ls-line)] bg-[var(--ls-surface)] md:block">
+        <table className="w-full min-w-[860px] text-left text-sm">
+          <thead className="border-b border-[var(--ls-line)] bg-[var(--ls-surface-muted)] text-xs font-medium text-[var(--ls-text-tertiary)]">
+            <tr>
+              <th className="px-5 py-3 font-medium">{t("pullRequests")}</th>
+              <th className="px-4 py-3 font-medium">{t("currentRevision")}</th>
+              <th className="px-4 py-3 font-medium">{t("trigger")}</th>
+              <th className="px-4 py-3 font-medium">{t("updated")}</th>
+              <th className="px-5 py-3 text-right font-medium">{t("reviewState")}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--ls-line)]">
+            {data.runs.map((run) => <ReviewRow key={run.id} language={language} org={org} run={run} />)}
+          </tbody>
+        </table>
+      </div>
+      <div className="grid gap-3 md:hidden">{data.runs.map((run) => <ReviewCard key={run.id} language={language} org={org} run={run} />)}</div>
+      <ReviewPager data={data} language={language} org={org} query={query} view={view} />
+    </>}
+  </div>;
+}
+
+function ReviewRow({ language, org, run }: { language: UiLanguage; org: string; run: ReviewRun }) {
+  const provider = providerReviewTarget(run);
+  const t = (key: Parameters<typeof uiText>[1]) => uiText(language, key);
+  return <tr className="transition hover:bg-[var(--ls-surface-muted)]">
+    <td className="px-5 py-4"><div className="flex items-start gap-3"><ProviderMark className="mt-0.5 size-4 shrink-0" provider={run.provider} /><div className="min-w-0">
+      <Link className="luminous-focus rounded font-medium text-[var(--ls-text)] hover:text-[var(--ls-accent)]" href={`/${encodeURIComponent(org)}/reviews/${encodeURIComponent(run.id)}`}>{run.title || `${run.repository} #${run.review_number}`}</Link>
+      <p className="mt-1 truncate text-xs text-[var(--ls-text-tertiary)]">{run.repository} <span>#{run.review_number}</span>{run.author ? <span> · {t("openedBy")} {run.author}</span> : null}</p>
+      {provider ? <a className="luminous-focus mt-1 flex w-fit items-center gap-1 rounded text-xs text-[var(--ls-text-tertiary)] hover:text-[var(--ls-accent)]" href={provider.url} rel="noreferrer" target="_blank">{t("openIn")} {provider.label}<ArrowUpRight className="size-3" /></a> : null}
+    </div></div></td>
+    <td className="px-4 py-4"><p className="font-mono text-xs text-[var(--ls-text)]">{shortSHA(run.head_sha)}</p><p className="mt-1 text-xs text-[var(--ls-text-tertiary)]">{t("run")} r{run.revision}</p></td>
+    <td className="px-4 py-4 capitalize text-[var(--ls-text-secondary)]">{run.trigger_kind.replaceAll("_", " ")}</td>
+    <td className="px-4 py-4 text-[var(--ls-text-secondary)]">{formatTime(run.finished_at ?? run.started_at ?? run.created_at, language)}</td>
+    <td className="px-5 py-4 text-right"><ReviewState language={language} state={run.state} /></td>
+  </tr>;
+}
+function ReviewCard({ language, org, run }: { language: UiLanguage; org: string; run: ReviewRun }) {
+  return <Link className="luminous-focus box-border block min-w-0 w-full rounded-[14px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-4 shadow-[var(--ls-shadow-control)]" href={`/${encodeURIComponent(org)}/reviews/${encodeURIComponent(run.id)}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex items-center gap-2"><ProviderMark className="size-4 shrink-0" provider={run.provider} /><p className="truncate text-sm font-semibold text-[var(--ls-text)]">{run.title || `${run.repository} #${run.review_number}`}</p></div><p className="mt-1 truncate text-xs text-[var(--ls-text-tertiary)]">{run.repository} #{run.review_number}{run.author ? ` · ${run.author}` : ""}</p></div><ReviewState language={language} state={run.state} /></div><div className="mt-4 flex items-center justify-between gap-3 text-xs text-[var(--ls-text-tertiary)]"><span className="flex items-center gap-1.5 font-mono"><GitCommitHorizontal className="size-3.5" />{shortSHA(run.head_sha)}</span><span>{formatTime(run.finished_at ?? run.started_at ?? run.created_at, language)}</span></div></Link>;
+}
+function ReviewState({ language, state }: { language: UiLanguage; state: ReviewRun["state"] }) { const tone = state === "completed" ? "text-[var(--ls-success-text)] bg-emerald-500/10" : state === "failed" || state === "needs_attention" ? "text-[var(--ls-critical-text)] bg-red-500/10" : state === "superseded" || state === "cancelled" ? "text-[var(--ls-text-tertiary)] bg-[var(--ls-surface-muted)]" : "text-[var(--ls-accent)] bg-violet-500/10"; return <span className={cn("inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium capitalize", tone)}><span className="size-1.5 rounded-full bg-current" />{displayRunState(state, language)}</span>; }
+function ReviewSearchForm({ language, query, view }: { language: UiLanguage; query: ReviewQuery; view: PullRequestView }) { return <form className="mb-2 flex h-9 w-full items-center gap-2 rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 shadow-[var(--ls-shadow-control)] lg:w-80" method="get"><Search aria-hidden="true" className="size-4 text-[var(--ls-text-tertiary)]" /><input aria-label={uiText(language, "searchPullRequests")} className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--ls-text)] outline-none placeholder:text-[var(--ls-text-tertiary)]" defaultValue={query.q} name="q" placeholder={uiText(language, "searchPullRequestsHint")} /><input name="view" type="hidden" value={view} /><input name="cursor" type="hidden" value="" /><input name="direction" type="hidden" value="" /></form>; }
+function ReviewPager({ data, language, org, query, view }: { data: Awaited<ReturnType<typeof getPullRequestData>>; language: UiLanguage; org: string; query: ReviewQuery; view: PullRequestView }) { if (!data.previousCursor && !data.nextCursor) return null; return <nav aria-label={uiText(language, "pullRequests")} className="flex items-center justify-between gap-3 border-t border-[var(--ls-line)] pt-4"><span className="text-xs text-[var(--ls-text-tertiary)]">{uiText(language, "paginationAnchor")}</span><div className="flex gap-2">{data.previousCursor ? <Link className="luminous-focus inline-flex h-9 items-center gap-1.5 rounded-[10px] border border-[var(--ls-line-strong)] px-3 text-sm font-medium text-[var(--ls-text)] hover:bg-[var(--ls-surface-muted)]" href={reviewHref(org, view, query, data.previousCursor, "before")}><ArrowLeft className="size-4" />{uiText(language, "previous")}</Link> : null}{data.nextCursor ? <Link className="luminous-focus inline-flex h-9 items-center gap-1.5 rounded-[10px] border border-[var(--ls-line-strong)] px-3 text-sm font-medium text-[var(--ls-text)] hover:bg-[var(--ls-surface-muted)]" href={reviewHref(org, view, query, data.nextCursor, "after")}>{uiText(language, "next")}<ArrowRight className="size-4" /></Link> : null}</div></nav>; }
+function ReviewViewLink({ count, href, label, selected }: { count?: number; href: string; label: string; selected: boolean }) { return <Link aria-current={selected ? "page" : undefined} aria-selected={selected} className={cn("luminous-focus relative inline-flex h-11 shrink-0 items-center gap-2 rounded-t-[10px] px-4 text-sm font-medium", selected ? "text-[var(--ls-text)]" : "text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]")} href={href} role="tab" tabIndex={selected ? 0 : -1}>{label}{count !== undefined ? <span className="rounded-full bg-[var(--ls-surface-muted)] px-1.5 py-0.5 text-[10px] text-[var(--ls-text-tertiary)]">{count}</span> : null}{selected ? <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--ls-accent)]" /> : null}</Link>; }
+function validView(value?: string): PullRequestView { return value === "attention" || value === "completed" || value === "all" ? value : "active"; }
+function reviewHref(org: string, view: PullRequestView, query: ReviewQuery, cursor?: string, direction?: "after" | "before") { const params = new URLSearchParams({ view }); if (query.q?.trim()) params.set("q", query.q.trim()); if (cursor) params.set("cursor", cursor); if (direction) params.set("direction", direction); return `/${encodeURIComponent(org)}/reviews?${params.toString()}`; }

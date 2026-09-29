@@ -76,6 +76,7 @@ flowchart LR
 | `workspace-worker` | checkout、diff、输入清单和缓存 | 否 | 准备时长/IO |
 | `review-worker` | OCR/agent 执行与 finding 规范化 | 否 | CPU/内存/LLM 并发 |
 | `publisher-worker` | GitHub/GitLab 幂等写入 | 否 | provider queue lag/rate limit |
+| `notifier` | 按租户/仓库/分支路由钉钉、飞书与 Webhook 通知 | 否 | notification queue lag/provider latency |
 | `usage-worker` | 汇总用量、预算结算 | 否 | usage lag |
 | `scheduler/reaper` | 延迟任务、超时、租约回收、补偿 | 否，单主或锁 | 扫描时延 |
 
@@ -201,7 +202,7 @@ flowchart LR
 
 - webhook-edge/control-api 无状态，多副本。
 - relay 用 `FOR UPDATE SKIP LOCKED` 或 advisory lock 分片扫描 outbox。
-- worker 按 queue 与 tenant fairness 扩缩；单租户不能占满全局并发。
+- worker 按 queue 与 tenant fairness 扩缩；broker 消费按队列优先级和低 prefetch 处理，恢复扫描只从每个 tenant 的最早可领 job 中轮转；单租户不能占满全局并发。
 - LLM provider/model 设置 semaphore 和 circuit breaker。
 - SSE 使用数据库事件序号 + pub/sub 加速；pub/sub 丢失时从事件表补偿。
 

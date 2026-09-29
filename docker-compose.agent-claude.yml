@@ -1,0 +1,9 @@
+# Opt-in Claude Code profile. Build agent-sandbox-claude first and set its
+# immutable image ID in AGENT_ADAPTER_SANDBOX_IMAGE_ID before starting this.
+services:
+  agent-task-adapter:
+    build:
+      target: adapter-claude
+      network: host
+    environment:
+      AGENT_ADAPTER_EXECUTOR: claude

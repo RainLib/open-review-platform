@@ -1,0 +1,117 @@
+# Local-only acceptance overlay. It avoids rebuilding production images while
+# exercising the current source against the disposable GitLab CE instance.
+# Set GITLAB_E2E_BIN_DIR to a directory containing the cross-compiled binaries.
+x-gitlab-e2e-http: &gitlab-e2e-http
+  # This overlay is the only profile allowed to opt into plain HTTP. The base
+  # Compose configuration continues to reject it outside development.
+  GITLAB_ALLOW_HTTP: "true"
+  # New installations persist this exact API base. Keeping the default public
+  # GitLab.com value here would make a valid local OAuth receipt fail its first
+  # read-only inventory probe against the wrong provider host.
+  GITLAB_API_URL: ${GITLAB_E2E_API_URL:-http://gitlab:8929/api/v4}
+
+x-gitlab-e2e-worker-oauth: &gitlab-e2e-worker-oauth
+  <<: *gitlab-e2e-http
+  # A browser reaches the published host port, but workers must exchange and
+  # refresh OAuth tokens through the private Docker bridge.
+  GITLAB_OAUTH_INTERNAL_BASE_URL: ${GITLAB_E2E_OAUTH_WORKER_BASE_URL:-http://gitlab:8929}
+
+services:
+  console:
+    environment:
+      <<: *gitlab-e2e-http
+      # Explicitly opt in only for the disposable local acceptance stack. The
+      # production Next image correctly retains NODE_ENV=production.
+      OPEN_REVIEW_LOCAL_PREVIEW: "true"
+      # Authorization redirects are opened by the host browser. Server-side
+      # token exchange uses the internal URL above rather than this address.
+      GITLAB_OAUTH_BASE_URL: ${GITLAB_E2E_OAUTH_PUBLIC_BASE_URL:-http://127.0.0.1:8929}
+      GITLAB_OAUTH_INTERNAL_BASE_URL: ${GITLAB_E2E_OAUTH_WORKER_BASE_URL:-http://gitlab:8929}
+  control-api:
+    environment:
+      <<: *gitlab-e2e-http
+      AGENT_GITLAB_PUBLIC_BASE_URL: ${GITLAB_E2E_OAUTH_PUBLIC_BASE_URL:-http://127.0.0.1:8929}
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/control-api:/app/control-api:ro
+  # Agent source capture must resolve the same private CE API/OAuth origin as
+  # the review workers. It remains provider-read-only and never receives the
+  # coding adapter's HMAC, model key, or write credential.
+  agent-task-source-admitter:
+    environment:
+      <<: *gitlab-e2e-worker-oauth
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/agent-task-source-admitter:/app/agent-task-source-admitter:ro
+  agent-task-runner:
+    environment:
+      # The adapter URL is still an explicit opt-in from .env. Only this
+      # disposable local overlay permits an HTTP handoff and callback.
+      AGENT_TASK_ADAPTER_ALLOW_HTTP: "true"
+      AGENT_TASK_CALLBACK_URL: http://control-api:8080/v1/agent-adapter/events
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/agent-task-runner:/app/agent-task-runner:ro
+  agent-task-adapter:
+    environment:
+      AGENT_TASK_ADAPTER_ALLOW_HTTP: "true"
+      AGENT_TASK_CALLBACK_URL: http://control-api:8080/v1/agent-adapter/events
+      AGENT_ADAPTER_GITLAB_ALLOW_HTTP: "true"
+      AGENT_ADAPTER_GITLAB_CLONE_BASE_URL: ${GITLAB_E2E_OAUTH_WORKER_BASE_URL:-http://gitlab:8929}
+      AGENT_GITLAB_PUBLIC_BASE_URL: ${GITLAB_E2E_OAUTH_PUBLIC_BASE_URL:-http://127.0.0.1:8929}
+      AGENT_GITLAB_PUBLIC_FOR_API_BASE_URL: ${GITLAB_E2E_API_URL:-http://gitlab:8929/api/v4}
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/agent-task-adapter:/app/agent-task-adapter:ro
+  provider-prober:
+    environment:
+      <<: *gitlab-e2e-worker-oauth
+      # The disposable GitLab CE hostname resolves only on the Docker bridge.
+      # These two exemptions are deliberately scoped to this acceptance overlay.
+      PROVIDER_PROBE_ALLOW_HTTP: "true"
+      PROVIDER_PROBE_ALLOW_PRIVATE_NETWORKS: "true"
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/provider-prober:/app/provider-prober:ro
+  interaction-admitter:
+    environment:
+      <<: *gitlab-e2e-worker-oauth
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/interaction-admitter:/app/interaction-admitter:ro
+  interaction-responder:
+    environment:
+      <<: *gitlab-e2e-worker-oauth
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/interaction-responder:/app/interaction-responder:ro
+  runner:
+    environment:
+      <<: *gitlab-e2e-worker-oauth
+      # Keep evidence reports and GitLab merge-status targets on the local
+      # Console during disposable offline acceptance.
+      OPEN_REVIEW_APP_URL: "http://127.0.0.1:3110"
+      # This fixture validates a GitLab-only deployment. A host GitHub App key
+      # is deliberately not mounted into the disposable runner, so clear an
+      # otherwise inherited GitHub App pair rather than masking a missing key
+      # in the normal Compose topology.
+      GITHUB_APP_ID: ""
+      GITHUB_APP_PRIVATE_KEY_PATH: ""
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/runner:/app/runner:ro
+  terminal-reporter:
+    environment:
+      <<: *gitlab-e2e-worker-oauth
+      # Provider-visible links must resolve in the operator browser, not on
+      # the Docker bridge. This is only the disposable host-side preview.
+      OPEN_REVIEW_APP_URL: "http://127.0.0.1:3110"
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/terminal-reporter:/app/terminal-reporter:ro
+  issue-publisher:
+    environment:
+      <<: *gitlab-e2e-worker-oauth
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/issue-publisher:/app/issue-publisher:ro
+  issue-triager:
+    environment:
+      <<: *gitlab-e2e-worker-oauth
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/issue-triager:/app/issue-triager:ro
+  provider-feedback-poller:
+    environment:
+      <<: *gitlab-e2e-worker-oauth
+    volumes:
+      - ${GITLAB_E2E_BIN_DIR:?set the local Linux binary directory}/provider-feedback-poller:/app/provider-feedback-poller:ro

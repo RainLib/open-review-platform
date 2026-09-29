@@ -1,0 +1,9 @@
+# Optional deployment-owned repository verification catalog. Compose fails
+# before startup unless a private host file path is provided. Combine this
+# override with the base file and an opt-in coding adapter profile.
+services:
+  agent-task-adapter:
+    environment:
+      AGENT_ADAPTER_VERIFICATION_PROFILES_FILE: /run/secrets/agent-verification-profiles.json
+    volumes:
+      - ${AGENT_ADAPTER_VERIFICATION_PROFILES_HOST_PATH:?set a private 0600 verification profile JSON file}:/run/secrets/agent-verification-profiles.json:ro

@@ -1,0 +1,436 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* Keep the self-hosted Console renderable with no runtime font download.
+     On macOS this resolves to San Francisco; other platforms use their native
+     UI font, while the final generic fallback preserves readable deployment
+     and air-gapped environments. */
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  --font-heading: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --color-console-canvas: var(--console-canvas);
+  --color-console-rail: var(--console-rail);
+  --color-console-surface: var(--console-surface);
+  --color-console-surface-hover: var(--console-surface-hover);
+  --color-console-inset: var(--console-inset);
+  --color-console-on-accent: var(--console-on-accent);
+  --color-console-on-success: var(--console-on-success);
+  --shadow-console-surface: var(--console-surface-shadow);
+  --shadow-console-active: var(--console-active-shadow);
+  --shadow-console-success: var(--console-success-shadow);
+  --shadow-console-stage-current: var(--console-stage-current-shadow);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  color-scheme: dark;
+  --console-canvas: #090b10;
+  --console-rail: #0c0f15;
+  --console-surface: #0d1119;
+  --console-surface-hover: #0f141e;
+  --console-inset: #111620;
+  --console-on-accent: #071015;
+  --console-on-success: #092017;
+  --console-accent-glow: rgb(34 211 238 / 10%);
+  --console-surface-shadow: 0 18px 45px -35px rgb(0 0 0 / 85%);
+  --console-active-shadow: inset 0 1px 0 rgb(255 255 255 / 5%);
+  --console-success-shadow: 0 0 12px rgb(110 231 183 / 90%);
+  --console-stage-current-shadow: 0 0 0 5px rgb(34 211 238 / 5%);
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+* {
+  border-color: rgb(39 39 42);
+}
+
+body {
+  min-height: 100vh;
+  background: var(--console-canvas);
+  color: var(--foreground);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* Console V2 — Luminous Spatial tokens are intentionally scoped so the
+   remaining legacy console routes can migrate without a global theme flash. */
+.luminous-console,
+.luminous-theme-light {
+  color-scheme: light;
+  --ls-canvas: #f3f4fa;
+  --ls-canvas-tint: #eeeffc;
+  --ls-surface: #fcfcfe;
+  --ls-surface-raised: rgb(255 255 255 / 82%);
+  --ls-surface-selected: #f0ecff;
+  --ls-surface-muted: #f6f6fa;
+  --ls-line: rgb(35 31 55 / 10%);
+  --ls-line-strong: rgb(35 31 55 / 18%);
+  --ls-text: #171525;
+  --ls-text-secondary: #5f5a72;
+  --ls-text-tertiary: #8b869a;
+  --ls-accent: #6e49f6;
+  --ls-accent-hover: #5d3bdd;
+  --ls-accent-soft: #eae4ff;
+  --ls-on-accent: #ffffff;
+  --ls-critical: #e5484d;
+  --ls-critical-text: #c83239;
+  --ls-warning: #d88700;
+  --ls-warning-text: #a95e00;
+  --ls-success: #1f9d6a;
+  --ls-success-text: #167a52;
+  --ls-info: #5f66c9;
+  --ls-shadow-float: 0 20px 60px rgb(36 29 71 / 12%),
+    0 2px 10px rgb(36 29 71 / 6%);
+  --ls-shadow-control: 0 1px 2px rgb(36 29 71 / 8%);
+}
+
+.luminous-theme-dark {
+  color-scheme: dark;
+  --ls-canvas: #0e1016;
+  --ls-canvas-tint: #111727;
+  --ls-surface: #151821;
+  --ls-surface-raised: rgb(25 30 43 / 88%);
+  --ls-surface-selected: #262344;
+  --ls-surface-muted: #1b1f2a;
+  --ls-line: rgb(220 224 245 / 10%);
+  --ls-line-strong: rgb(220 224 245 / 18%);
+  --ls-text: #f2f1f7;
+  --ls-text-secondary: #b8b5c8;
+  --ls-text-tertiary: #9693a8;
+  --ls-accent: #9b81ff;
+  --ls-accent-hover: #aa95ff;
+  --ls-accent-soft: #282447;
+  --ls-on-accent: #171525;
+  --ls-critical: #ff6268;
+  --ls-critical-text: #ff6268;
+  --ls-warning: #f3a81f;
+  --ls-warning-text: #f3a81f;
+  --ls-success: #45d69b;
+  --ls-success-text: #45d69b;
+  --ls-info: #9298f4;
+  --ls-shadow-float: 0 24px 72px rgb(0 0 0 / 34%),
+    inset 0 1px rgb(255 255 255 / 3.5%);
+  --ls-shadow-control: 0 1px 2px rgb(0 0 0 / 28%),
+    inset 0 1px rgb(255 255 255 / 2.5%);
+}
+
+@media (prefers-color-scheme: dark) {
+  .luminous-theme-system {
+    color-scheme: dark;
+    --ls-canvas: #0e1016;
+    --ls-canvas-tint: #111727;
+    --ls-surface: #151821;
+    --ls-surface-raised: rgb(25 30 43 / 88%);
+    --ls-surface-selected: #262344;
+    --ls-surface-muted: #1b1f2a;
+    --ls-line: rgb(220 224 245 / 10%);
+    --ls-line-strong: rgb(220 224 245 / 18%);
+    --ls-text: #f2f1f7;
+    --ls-text-secondary: #b8b5c8;
+    --ls-text-tertiary: #9693a8;
+    --ls-accent: #9b81ff;
+    --ls-accent-hover: #aa95ff;
+    --ls-accent-soft: #282447;
+    --ls-on-accent: #171525;
+    --ls-critical: #ff6268;
+    --ls-critical-text: #ff6268;
+    --ls-warning: #f3a81f;
+    --ls-warning-text: #f3a81f;
+    --ls-success: #45d69b;
+    --ls-success-text: #45d69b;
+    --ls-info: #9298f4;
+    --ls-shadow-float: 0 24px 72px rgb(0 0 0 / 34%),
+      inset 0 1px rgb(255 255 255 / 3.5%);
+    --ls-shadow-control: 0 1px 2px rgb(0 0 0 / 28%),
+      inset 0 1px rgb(255 255 255 / 2.5%);
+  }
+}
+
+.luminous-console {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 76% -12%, var(--ls-canvas-tint), transparent 38rem),
+    var(--ls-canvas);
+  color: var(--ls-text);
+}
+
+.luminous-frosted {
+  background: var(--ls-surface-raised);
+  -webkit-backdrop-filter: blur(20px) saturate(125%);
+  backdrop-filter: blur(20px) saturate(125%);
+}
+
+.luminous-public-hero-glow {
+  background:
+    radial-gradient(circle at 18% 0%, var(--ls-accent-soft), transparent 34%),
+    radial-gradient(circle at 86% 18%, var(--ls-canvas-tint), transparent 30%);
+  opacity: 0.72;
+}
+
+/* Public entry and setup routes use the same theme preference as the Console.
+   These selectors are a bounded bridge for the existing setup primitives while
+   they are incrementally converted from the original dark-only utility set.
+   They apply only inside `.luminous-public`, never to dashboard content. */
+.luminous-public [class*="bg-[#071"],
+.luminous-public [class*="bg-[#0a"],
+.luminous-public [class*="bg-[#0b"],
+.luminous-public [class*="bg-[#0d"],
+.luminous-public [class*="bg-[#10"],
+.luminous-public [class*="bg-black/"] {
+  background-color: var(--ls-surface) !important;
+}
+
+.luminous-public [class*="border-slate-"],
+.luminous-public [class*="border-white/"] {
+  border-color: var(--ls-line) !important;
+}
+
+.luminous-public .text-white,
+.luminous-public .text-slate-100,
+.luminous-public .text-slate-200,
+.luminous-public .text-slate-300 {
+  color: var(--ls-text) !important;
+}
+
+.luminous-public .text-slate-400,
+.luminous-public .text-slate-500 {
+  color: var(--ls-text-secondary) !important;
+}
+
+.luminous-public .text-slate-600,
+.luminous-public .text-slate-700 {
+  color: var(--ls-text-tertiary) !important;
+}
+
+.luminous-public [class*="text-cyan-100"],
+.luminous-public [class*="text-cyan-200"] {
+  color: var(--ls-accent) !important;
+}
+
+.luminous-public [class*="bg-cyan-200"] {
+  background-color: var(--ls-accent) !important;
+}
+
+.luminous-public [class*="text-amber-100"],
+.luminous-public [class*="text-amber-200"] {
+  color: var(--ls-warning-text) !important;
+}
+
+.luminous-focus:focus-visible {
+  outline: 2px solid var(--ls-accent);
+  outline-offset: 2px;
+}
+
+/* Accent is intentionally brighter in dark mode so links, labels and focus
+   rings meet text contrast. Filled controls therefore use a theme-specific
+   foreground instead of assuming white is readable on every accent token. */
+.luminous-console [class~="bg-[var(--ls-accent)]"],
+.luminous-public [class~="bg-[var(--ls-accent)]"] {
+  color: var(--ls-on-accent) !important;
+}
+
+.policy-input {
+  width: 100%;
+  min-height: 2.5rem;
+  border: 1px solid var(--ls-line-strong);
+  border-radius: 0.625rem;
+  background: var(--ls-surface);
+  color: var(--ls-text);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.policy-input:focus-visible {
+  outline: 2px solid var(--ls-accent);
+  outline-offset: 2px;
+}
+
+.policy-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Transitional token bridge for governed surfaces while legacy components are
+   moved into the Luminous shell. This keeps both color schemes readable without
+   inventing a second information architecture. */
+.luminous-console .bg-console-surface,
+.luminous-console [class*="bg-black/"] {
+  background-color: var(--ls-surface) !important;
+}
+
+.luminous-console input.text-white,
+.luminous-console select.text-white,
+.luminous-console textarea.text-white,
+.luminous-console select[class*="bg-[#0d1219]"] {
+  background-color: var(--ls-surface) !important;
+  color: var(--ls-text) !important;
+}
+
+.luminous-console [class*="border-white/"] {
+  border-color: var(--ls-line) !important;
+}
+
+.luminous-console [class*="divide-white/"] > :not(:last-child) {
+  border-color: var(--ls-line) !important;
+}
+
+.luminous-console .text-zinc-100,
+.luminous-console .text-zinc-200 {
+  color: var(--ls-text) !important;
+}
+
+.luminous-console .text-zinc-300,
+.luminous-console .text-zinc-400,
+.luminous-console .text-zinc-500 {
+  color: var(--ls-text-secondary) !important;
+}
+
+.luminous-console .text-zinc-600,
+.luminous-console .text-zinc-700 {
+  color: var(--ls-text-tertiary) !important;
+}
+
+.luminous-console [class*="text-cyan-100"],
+.luminous-console [class*="text-cyan-200"] {
+  color: var(--ls-accent) !important;
+}
+
+.luminous-console [class*="text-amber-100"],
+.luminous-console [class*="text-amber-200"] {
+  color: var(--ls-warning-text) !important;
+}
+
+.luminous-console [class*="text-emerald-100"],
+.luminous-console [class*="text-emerald-200"] {
+  color: var(--ls-success-text) !important;
+}
+
+.luminous-console [class*="text-rose-100"],
+.luminous-console [class*="text-rose-200"] {
+  color: var(--ls-critical-text) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .luminous-console *,
+  .luminous-console *::before,
+  .luminous-console *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

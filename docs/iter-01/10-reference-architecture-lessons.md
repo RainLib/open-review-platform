@@ -51,7 +51,7 @@ OCR 是审查引擎，不负责 SaaS 的租户、身份、计费、审计和 pro
 - [OCR rule skill](https://github.com/alibaba/open-code-review/blob/main/plugins/open-code-review/skills/open-code-review/SKILL.md)
 - [OCR GitHub Action](https://github.com/alibaba/open-code-review/blob/main/action.yml)
 
-本项目通过固定版本 CLI/容器、结构化结果、可信 `--rule` 文件和 adapter contract 使用 OCR。若未来更换引擎，task、rule snapshot、finding 和 publisher 的外部契约保持不变。
+本项目通过固定版本 CLI/容器、结构化结果、可信 `--rule` 文件和 adapter contract 使用 OCR。focused/critical 计划先在临时 worktree 生成仅包含 selected paths 的 base-rooted commit，再交给 OCR；不把大量 deferred paths 拼成模型侧排除参数。模型上下文耗尽属于确定性终态，不对相同输入自动重试。若未来更换引擎，task、rule snapshot、finding 和 publisher 的外部契约保持不变。
 
 ## 4. 明确不照搬
 

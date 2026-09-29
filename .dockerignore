@@ -1,0 +1,25 @@
+# The control-plane image contains only Go binaries and migrations. Keeping
+# local console output, dependencies, secrets, and design artefacts outside
+# the build context makes a rebuild deterministic and prevents accidental
+# inclusion of workstation state in a deployment image.
+.git
+.github
+.env
+.env.*
+*.pem
+*.key
+*.log
+.DS_Store
+
+apps
+docs
+node_modules
+**/node_modules
+**/.next
+**/coverage
+**/dist
+**/.turbo
+
+tmp
+temp
+vendor

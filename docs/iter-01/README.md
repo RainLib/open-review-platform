@@ -39,6 +39,23 @@
 | [08-delivery-plan-and-acceptance.md](08-delivery-plan-and-acceptance.md) | 阶段一/二实施计划、测试门禁、发布与回滚 | 全体 |
 | [09-decisions-and-open-questions.md](09-decisions-and-open-questions.md) | 已确认决策与需业务确认的问题 | 决策人 |
 | [10-reference-architecture-lessons.md](10-reference-architecture-lessons.md) | Kodus/OCR 可复用经验、明确不照搬的部分与来源 | 架构、法律、安全 |
+| [11-review-reporting-design.md](11-review-reporting-design.md) | PR/MR 生命周期评论、Change Contract、证据回执与渲染组件 | 产品、后端、安全、研发效能 |
+| [12-notification-control-plane.md](12-notification-control-plane.md) | 钉钉、飞书与 Webhook 通知目标、仓库路由、幂等投递和密钥边界 | 产品、后端、安全、SRE |
+| [13-usage-control-plane.md](13-usage-control-plane.md) | 自托管额度、admission 预留、终态结算、仓库归因和不可变用量账本 | 产品、后端、财务、SRE |
+| [14-console-v2-design-plan.md](14-console-v2-design-plan.md) | 参考 Kodus 功能但保持独立视觉的 Console V2 全页面清单、Issues 工作台和设计门禁 | 产品、设计、前端、无障碍评审 |
+| [15-luminous-spatial-design-system.md](15-luminous-spatial-design-system.md) | Luminous Spatial 视觉 token、Shell、组件、状态、响应式和实现门禁 | 设计、前端、无障碍评审 |
+| [16-console-v2-page-state-mockups.md](16-console-v2-page-state-mockups.md) | Console V2 页面族、tab 切换态、异常态与组件化边界 | 产品、设计、前端、无障碍评审 |
+| [17-responsive-dark-validation.md](17-responsive-dark-validation.md) | Console V2 1440/1024/390 响应式行为、扩展 Dark 页面与 WCAG token 审计 | 设计、前端、无障碍评审 |
+| [18-implementation-coverage-audit.md](18-implementation-coverage-audit.md) | 阶段一/二与 Kodus 功能对齐的当前证据、缺口和下一实现切片 | 产品、架构、前后端、SRE |
+| [19-console-v2-detailed-tab-mockups.md](19-console-v2-detailed-tab-mockups.md) | PR、Operate、企业设置、Onboarding 与 Policy 的二级页面、Tab 高保真稿及状态契约 | 产品、设计、前端、无障碍评审 |
+| [20-console-v2-remaining-pages-and-state-mockups.md](20-console-v2-remaining-pages-and-state-mockups.md) | 公共/Workspace、执行中心、规则编辑、Models、Audit/Usage 与共享恢复状态的补充高保真稿 | 产品、设计、前端、无障碍、安全评审 |
+| [21-console-v2-security-health-cli-tab-mockups.md](21-console-v2-security-health-cli-tab-mockups.md) | SSO、数据治理、平台健康、CLI Reviews 与 API Keys 的二级 Tab、状态机和安全边界 | 产品、设计、前端、后端、安全、SRE |
+| [22-console-v2-luminous-apple-tab-mockups.md](22-console-v2-luminous-apple-tab-mockups.md) | 将 Review Config、Policy、PR/Review、Operate 与企业控制面全部二级页面统一为 Luminous Apple 高保真稿 | 产品、设计、前端、无障碍、安全评审 |
+| [23-provider-issue-triage-and-format-governance.md](23-provider-issue-triage-and-format-governance.md) | GitHub/GitLab Issue 分析、格式目录、可信规范、版本化继承与 provider 模板导出边界 | 产品、后端、安全、研发效能 |
+| [24-core-flow-completion-matrix.md](24-core-flow-completion-matrix.md) | 阶段一/二核心链路、已验证证据、外部验收缺口与完成判定 | 产品、架构、SRE、验收负责人 |
+| [25-agent-coding-credential-broker.md](25-agent-coding-credential-broker.md) | 独立编码凭据代理、GitHub/GitLab 配置、信任边界与未完成验收 | 平台、安全、SRE |
+| [25-issue-views-and-filter-contract.md](25-issue-views-and-filter-contract.md) | Issues 保存视图、AND/OR 过滤、权限、分页与真实验收契约 | 产品、前后端、安全、验收负责人 |
+| [26-agentic-issue-to-pr-governance.md](26-agentic-issue-to-pr-governance.md) | Issue/PR 到受治理 Coding Agent、Sandbox、候选 PR、反馈迭代与自动化门控 | 产品、后端、平台、安全、SRE |
 
 ## 4. 视觉设计稿
 
@@ -61,6 +78,36 @@
 规则通过组合、继承、影响预览和审批发布来管理，而不是简单 CRUD 表格。
 
 > 图片用于确认视觉方向与信息层级，不代表像素级最终实现。图片中的英文文案是设计占位；实现时进入统一 i18n 词条。
+
+### 4.4 Console V2 — Luminous Spatial
+
+![Console V2 Issues inbox](assets/console-v2-issues-inbox-v3-apple.png)
+
+![Console V2 Issue detail](assets/console-v2-issue-detail-v3-apple.png)
+
+![Console V2 screen system](assets/console-v2-screen-system-v3-apple.png)
+
+当前优先候选使用明亮、空间化、有限半透明的桌面应用语言。具体 token、组件状态和响应式约束见 [15-luminous-spatial-design-system.md](15-luminous-spatial-design-system.md)。
+
+Dark 主题不是机械反色，使用独立校准的 graphite 表面、文字、selection、focus、代码和 semantic colors：
+
+![Console V2 Issues inbox Dark](assets/console-v2-issues-inbox-v3-dark.png)
+
+![Console V2 Issue detail Dark](assets/console-v2-issue-detail-v3-dark.png)
+
+![Console V2 screen system Dark](assets/console-v2-screen-system-v3-dark.png)
+
+剩余页面族、tab 切换后的数据语义、onboarding、workspace、企业治理与异常恢复状态见 [16-console-v2-page-state-mockups.md](16-console-v2-page-state-mockups.md)。
+
+PR 详情、连接与通知、企业设置、Onboarding 和 Policy 的二级 Tab 高保真细化稿见 [19-console-v2-detailed-tab-mockups.md](19-console-v2-detailed-tab-mockups.md)。
+
+公共入口、Workspace、Cockpit/Run/CLI、Rule Composer/Test Lab、Models 二级 Tab、Audit/Usage 和共享恢复状态见 [20-console-v2-remaining-pages-and-state-mockups.md](20-console-v2-remaining-pages-and-state-mockups.md)。
+
+SSO、数据治理、平台健康、CLI Reviews 与 API Keys 的所有二级 Tab 和异步恢复状态见 [21-console-v2-security-health-cli-tab-mockups.md](21-console-v2-security-health-cli-tab-mockups.md)。
+
+Review Configuration、Policy、PR/Review、Connections/Notifications 和企业控制面的 Luminous Apple 全量 Tab 重绘与 1:1 实现验收清单见 [22-console-v2-luminous-apple-tab-mockups.md](22-console-v2-luminous-apple-tab-mockups.md)。
+
+核心布局的 1440/1024/390 适配、扩展 Dark 页面和语义色对比度审计见 [17-responsive-dark-validation.md](17-responsive-dark-validation.md)。
 
 ## 5. 设计评审门禁
 

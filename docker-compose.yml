@@ -1,6 +1,80 @@
+x-provider-worker-environment: &provider-worker-environment
+  # Every provider-calling worker also emits this value in its durable
+  # heartbeat when it owns one. Keep the shared anchor authoritative so a new
+  # worker cannot silently omit deployment provenance.
+  OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+  # Public authenticated Console origin. Provider comments use it only for
+  # deep links to the exact review and command guide; never pass an internal
+  # service URL here.
+  OPEN_REVIEW_APP_URL: ${OPEN_REVIEW_APP_URL:-}
+  GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+  # Provider workers only receive the key through their private container
+  # mount. GITHUB_APP_PRIVATE_KEY_HOST_PATH is preferred for Compose; the
+  # legacy GITHUB_APP_PRIVATE_KEY_PATH host value remains a compatible source.
+  GITHUB_APP_PRIVATE_KEY_PATH: ${GITHUB_APP_PRIVATE_KEY_CONTAINER_PATH:-/run/secrets/github-app.pem}
+  GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
+  GITLAB_API_URL: ${GITLAB_API_URL:-https://gitlab.com/api/v4}
+  GITLAB_ALLOW_HTTP: ${GITLAB_ALLOW_HTTP:-false}
+  GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+  # Required only for GitLab OAuth installations with expiring access tokens.
+  # These provider-call workers refresh server-side; Console is not involved.
+  GITLAB_OAUTH_BASE_URL: ${GITLAB_OAUTH_BASE_URL:-}
+  GITLAB_OAUTH_INTERNAL_BASE_URL: ${GITLAB_OAUTH_INTERNAL_BASE_URL:-}
+  GITLAB_OAUTH_CLIENT_ID: ${GITLAB_OAUTH_CLIENT_ID:-}
+  GITLAB_OAUTH_CLIENT_SECRET: ${GITLAB_OAUTH_CLIENT_SECRET:-}
+  PROVIDER_CREDENTIAL_ENCRYPTION_KEY: ${PROVIDER_CREDENTIAL_ENCRYPTION_KEY:-}
+
+x-provider-worker-volumes: &provider-worker-volumes
+  - type: bind
+    source: ${GITHUB_APP_PRIVATE_KEY_HOST_PATH:-${GITHUB_APP_PRIVATE_KEY_PATH:-/dev/null}}
+    target: ${GITHUB_APP_PRIVATE_KEY_CONTAINER_PATH:-/run/secrets/github-app.pem}
+    read_only: true
+
 services:
+  rabbitmq-volume-init:
+    image: rabbitmq:4.1-management
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec", "chown -R rabbitmq:rabbitmq /var/lib/rabbitmq"]
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: "no"
+
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    # This persistent volume was initialized as rabbit@1361b06b513f. A new
+    # Compose container hostname would select a different Mnesia directory
+    # and make durable quorum messages appear to vanish. Change this only
+    # through an explicit RabbitMQ node-identity migration.
+    hostname: 1361b06b513f
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: openreview
+      RABBITMQ_DEFAULT_PASS: openreview
+    healthcheck:
+      # A responsive Erlang node is not sufficient: quorum queue Raft
+      # processes can all be down while `rabbitmq-diagnostics ping` succeeds.
+      # Capture the command first so its failure is not masked by the pipe.
+      test:
+        - CMD-SHELL
+        - >-
+          rabbitmq-diagnostics -q ping &&
+          queues="$$(rabbitmqctl list_queues --silent name state)" &&
+          printf '%s\n' "$$queues" | awk 'NF && $$2 != "running" { bad=1 } END { exit bad }'
+      interval: 15s
+      timeout: 10s
+      retries: 20
+    depends_on:
+      rabbitmq-volume-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./deploy/rabbitmq.conf:/etc/rabbitmq/conf.d/20-disk-limit.conf:ro
+      - rabbitmq-data:/var/lib/rabbitmq
+    ports:
+      - "127.0.0.1:15672:15672"
+
   postgres:
     image: postgres:16.10-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: openreview
       POSTGRES_USER: openreview
@@ -14,6 +88,9 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   migrate:
+    # This image contains all lightweight Go entrypoints. Build it once, then
+    # run each entrypoint in its own least-privilege service below.
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -26,18 +103,605 @@ services:
     restart: "no"
 
   control-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    env_file: .env
+    # Permit a scoped API rollout without repointing every shared worker to a
+    # partially rebuilt core image. A full release can leave this unset.
+    image: ${OPEN_REVIEW_CONTROL_API_IMAGE:-${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}}
     environment:
       CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
       HTTP_ADDRESS: :8080
+      # Agent task acknowledgements and terminal replies link back to the
+      # authenticated Console, not to this internal API service.
+      OPEN_REVIEW_APP_URL: ${OPEN_REVIEW_APP_URL:-}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      AUTH_MODE: ${AUTH_MODE:-development}
+      CASDOOR_ISSUER: ${CASDOOR_ISSUER:-}
+      CASDOOR_AUDIENCE: ${CASDOOR_AUDIENCE:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:-}
+      # The control plane verifies the callback receipt forwarded only by the
+      # Console BFF before it accepts a provider installation.
+      OPEN_REVIEW_PROVIDER_AUTH_STATE_SECRET: ${OPEN_REVIEW_PROVIDER_AUTH_STATE_SECRET:-}
+      OPEN_REVIEW_GITHUB_INSTALL_STATE_SECRET: ${OPEN_REVIEW_GITHUB_INSTALL_STATE_SECRET:-}
+      OPEN_REVIEW_GITLAB_INSTALLATION_IDENTITY_SECRET: ${OPEN_REVIEW_GITLAB_INSTALLATION_IDENTITY_SECRET:-}
+      PROVIDER_CREDENTIAL_ENCRYPTION_KEY: ${PROVIDER_CREDENTIAL_ENCRYPTION_KEY:-}
+      GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
+      GITLAB_API_URL: ${GITLAB_API_URL:-https://gitlab.com/api/v4}
+      GITLAB_ALLOW_HTTP: ${GITLAB_ALLOW_HTTP:-false}
+      # A non-secret capability signal only. Keep the actual GITLAB_TOKEN on
+      # provider-call workers; this lets Console offer the safe handoff without
+      # granting the public control API the deployment credential.
+      GITLAB_DEPLOYMENT_TOKEN_CONFIGURED: ${GITLAB_DEPLOYMENT_TOKEN_CONFIGURED:-false}
+      # Read-only legacy model metadata lets Issue triage snapshot an existing
+      # self-hosted OCR route while the workspace migrates to Models settings.
+      OCR_LLM_URL: ${OCR_LLM_URL:-}
+      OCR_LLM_MODEL: ${OCR_LLM_MODEL:-}
+      OCR_USE_ANTHROPIC: ${OCR_USE_ANTHROPIC:-false}
+      DATA_GOVERNANCE_ARTIFACT_KEY: ${DATA_GOVERNANCE_ARTIFACT_KEY:-}
+      # Shared only with the isolated agent-task runner. It authenticates
+      # adapter callbacks; it is never present in Console or provider workers.
+      AGENT_TASK_ADAPTER_SECRET: ${AGENT_TASK_ADAPTER_SECRET:-}
+      AGENT_TASK_LEASE_DURATION: ${AGENT_TASK_LEASE_DURATION:-2m}
+      AGENT_GITHUB_PUBLIC_BASE_URL: ${AGENT_GITHUB_PUBLIC_BASE_URL:-}
+      AGENT_GITLAB_PUBLIC_BASE_URL: ${AGENT_GITLAB_PUBLIC_BASE_URL:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
     ports:
       - "8080:8080"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  console:
+    image: ${OPEN_REVIEW_CONSOLE_IMAGE:-open-review-platform-console:local}
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    environment:
+      CONTROL_API_URL: http://control-api:8080
+      CONTROL_API_DEVELOPMENT_SUBJECT: ${CONTROL_API_DEVELOPMENT_SUBJECT:-}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      OPEN_REVIEW_CONSOLE_DEMO: ${OPEN_REVIEW_CONSOLE_DEMO:-false}
+      OPEN_REVIEW_APP_URL: ${OPEN_REVIEW_APP_URL:-}
+      OPEN_REVIEW_PUBLIC_API_URL: ${OPEN_REVIEW_PUBLIC_API_URL:-}
+      CASDOOR_ISSUER: ${CASDOOR_ISSUER:-}
+      CASDOOR_CLIENT_ID: ${CASDOOR_CLIENT_ID:-}
+      CASDOOR_CLIENT_SECRET: ${CASDOOR_CLIENT_SECRET:-}
+      OPEN_REVIEW_DEPLOYMENT_MODE: ${OPEN_REVIEW_DEPLOYMENT_MODE:-self_hosted}
+      OPEN_REVIEW_DEPLOYMENT_REGION: ${OPEN_REVIEW_DEPLOYMENT_REGION:-}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
+      GITHUB_APP_INSTALL_URL: ${GITHUB_APP_INSTALL_URL:-}
+      OPEN_REVIEW_GITHUB_INSTALL_STATE_SECRET: ${OPEN_REVIEW_GITHUB_INSTALL_STATE_SECRET:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      WEB_OAUTH_GITHUB_CLIENT_ID: ${WEB_OAUTH_GITHUB_CLIENT_ID:-}
+      WEB_OAUTH_GITHUB_CLIENT_SECRET: ${WEB_OAUTH_GITHUB_CLIENT_SECRET:-}
+      GITHUB_OAUTH_BASE_URL: ${GITHUB_OAUTH_BASE_URL:-https://github.com}
+      OPEN_REVIEW_PROVIDER_AUTH_STATE_SECRET: ${OPEN_REVIEW_PROVIDER_AUTH_STATE_SECRET:-}
+      OPEN_REVIEW_GITLAB_INSTALLATION_IDENTITY_SECRET: ${OPEN_REVIEW_GITLAB_INSTALLATION_IDENTITY_SECRET:-}
+      GITLAB_API_URL: ${GITLAB_API_URL:-https://gitlab.com/api/v4}
+      GITLAB_ALLOW_HTTP: ${GITLAB_ALLOW_HTTP:-false}
+      GITLAB_OAUTH_BASE_URL: ${GITLAB_OAUTH_BASE_URL:-}
+      GITLAB_OAUTH_INTERNAL_BASE_URL: ${GITLAB_OAUTH_INTERNAL_BASE_URL:-}
+      GITLAB_OAUTH_CLIENT_ID: ${GITLAB_OAUTH_CLIENT_ID:-}
+      GITLAB_OAUTH_CLIENT_SECRET: ${GITLAB_OAUTH_CLIENT_SECRET:-}
+      GITLAB_OAUTH_SCOPES: ${GITLAB_OAUTH_SCOPES:-api read_user}
+    depends_on:
+      control-api:
+        condition: service_started
+    ports:
+      - "3110:3000"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  outbox-relay:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/outbox-relay"]
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+      OUTBOX_RELAY_ID: ${OUTBOX_RELAY_ID:-relay-1}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  interaction-responder:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/interaction-responder"]
+    environment:
+      <<: *provider-worker-environment
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+      INTERACTION_RESPONDER_WORKER_ID: ${INTERACTION_RESPONDER_WORKER_ID:-interaction-responder-1}
+    volumes: *provider-worker-volumes
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  interaction-admitter:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/interaction-admitter"]
+    environment:
+      <<: *provider-worker-environment
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+      INTERACTION_ADMITTER_WORKER_ID: ${INTERACTION_ADMITTER_WORKER_ID:-interaction-admitter-1}
+    volumes: *provider-worker-volumes
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # Freezes the default branch and exact source SHA before a coding plan can
+  # be approved. It is provider-read-only and has neither a coding CLI nor
+  # adapter callback secret.
+  agent-task-source-admitter:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent-task-source-admitter
+    entrypoint: ["/app/agent-task-source-admitter"]
+    environment:
+      <<: *provider-worker-environment
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+      AGENT_TASK_SOURCE_ADMITTER_WORKER_ID: ${AGENT_TASK_SOURCE_ADMITTER_WORKER_ID:-agent-task-source-admitter-1}
+      AGENT_DECISION_JEV_URL: ${AGENT_DECISION_JEV_URL:-https://api.typesafe.ai/v1/systemone}
+      AGENT_DECISION_JEV_API_KEY: ${AGENT_DECISION_JEV_API_KEY:-}
+      AGENT_DECISION_JEV_MODEL: ${AGENT_DECISION_JEV_MODEL:-jev-latest}
+    volumes: *provider-worker-volumes
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # This worker owns the agent execution lease only. Without a separately
+  # deployed sandbox adapter it records needs_attention and never invokes a
+  # host CLI, clones a repository, or receives provider credentials.
+  agent-task-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent-task-runner
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      OPEN_REVIEW_APP_URL: ${OPEN_REVIEW_APP_URL:-}
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      AGENT_TASK_RUNNER_ID: ${AGENT_TASK_RUNNER_ID:-agent-task-runner-1}
+      AGENT_TASK_LEASE_DURATION: ${AGENT_TASK_LEASE_DURATION:-2m}
+      AGENT_TASK_REAPER_INTERVAL: ${AGENT_TASK_REAPER_INTERVAL:-15s}
+      # Do not point this at a host CLI. The adapter must be an isolated
+      # workload which accepts the signed immutable plan and callbacks.
+      AGENT_TASK_ADAPTER_URL: ${AGENT_TASK_ADAPTER_URL:-}
+      AGENT_TASK_CALLBACK_URL: ${AGENT_TASK_CALLBACK_URL:-}
+      AGENT_TASK_ADAPTER_SECRET: ${AGENT_TASK_ADAPTER_SECRET:-}
+      AGENT_TASK_ADAPTER_TIMEOUT: ${AGENT_TASK_ADAPTER_TIMEOUT:-15s}
+      AGENT_TASK_ADAPTER_ALLOW_HTTP: ${AGENT_TASK_ADAPTER_ALLOW_HTTP:-false}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # Optional, profile-gated execution adapter. Its Docker profile launches
+  # an immutable CLI image per job on the internal-only agent-sandbox network.
+  # The daemon socket is adapter-only and therefore gives this trusted service
+  # host-level authority: deploy it only on a dedicated execution host. The
+  # untrusted child never receives the socket or provider write credentials.
+  agent-task-adapter:
+    profiles: ["agent-adapter"]
+    build:
+      context: .
+      dockerfile: Dockerfile.agent-task-adapter
+      target: adapter-base
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      AGENT_ADAPTER_HTTP_ADDRESS: :8090
+      AGENT_TASK_ADAPTER_SECRET: ${AGENT_TASK_ADAPTER_SECRET:-}
+      AGENT_TASK_CALLBACK_URL: ${AGENT_TASK_CALLBACK_URL:-}
+      AGENT_TASK_ADAPTER_ALLOW_HTTP: ${AGENT_TASK_ADAPTER_ALLOW_HTTP:-false}
+      AGENT_ADAPTER_WORKSPACE_ROOT: /workspaces
+      AGENT_ADAPTER_RECEIPT_DIR: /state
+      AGENT_ADAPTER_EXECUTOR: ${AGENT_ADAPTER_EXECUTOR:-}
+      AGENT_ADAPTER_SANDBOX_KIND: ${AGENT_ADAPTER_SANDBOX_KIND:-}
+      AGENT_ADAPTER_DOCKER_BINARY: ${AGENT_ADAPTER_DOCKER_BINARY:-docker}
+      AGENT_ADAPTER_SANDBOX_IMAGE_ID: ${AGENT_ADAPTER_SANDBOX_IMAGE_ID:-}
+      AGENT_ADAPTER_SANDBOX_NETWORK: ${AGENT_ADAPTER_SANDBOX_NETWORK:-open-review-platform_agent-sandbox}
+      AGENT_ADAPTER_SANDBOX_WORKSPACE_VOLUME: ${AGENT_ADAPTER_SANDBOX_WORKSPACE_VOLUME:-open-review-platform_agent-adapter-workspaces}
+      AGENT_ADAPTER_SANDBOX_ADAPTER_HOST: agent-task-adapter
+      AGENT_ADAPTER_ALLOW_UNSANDBOXED_DEVELOPMENT: ${AGENT_ADAPTER_ALLOW_UNSANDBOXED_DEVELOPMENT:-false}
+      AGENT_ADAPTER_EXECUTOR_IDENTITY_POOL_SIZE: ${AGENT_ADAPTER_EXECUTOR_IDENTITY_POOL_SIZE:-8}
+      AGENT_ADAPTER_CODEX_BINARY: ${AGENT_ADAPTER_CODEX_BINARY:-codex}
+      AGENT_ADAPTER_CLAUDE_BINARY: ${AGENT_ADAPTER_CLAUDE_BINARY:-claude}
+      AGENT_ADAPTER_CODEX_MODEL_API_BASE_URL: ${AGENT_ADAPTER_CODEX_MODEL_API_BASE_URL:-}
+      AGENT_ADAPTER_CODEX_MODEL_API_KEY: ${AGENT_ADAPTER_CODEX_MODEL_API_KEY:-}
+      AGENT_ADAPTER_CODEX_MODEL: ${AGENT_ADAPTER_CODEX_MODEL:-}
+      AGENT_ADAPTER_CLAUDE_MODEL_API_BASE_URL: ${AGENT_ADAPTER_CLAUDE_MODEL_API_BASE_URL:-}
+      AGENT_ADAPTER_CLAUDE_MODEL_API_KEY: ${AGENT_ADAPTER_CLAUDE_MODEL_API_KEY:-}
+      AGENT_ADAPTER_CLAUDE_MODEL: ${AGENT_ADAPTER_CLAUDE_MODEL:-}
+      AGENT_ADAPTER_VERIFICATION_PROFILES_FILE: ${AGENT_ADAPTER_VERIFICATION_PROFILES_FILE:-}
+      AGENT_ADAPTER_GIT_BINARY: ${AGENT_ADAPTER_GIT_BINARY:-git}
+      AGENT_ADAPTER_ALLOWED_PATHS: ${AGENT_ADAPTER_ALLOWED_PATHS:-}
+      AGENT_ADAPTER_MAX_CHANGED_FILES: ${AGENT_ADAPTER_MAX_CHANGED_FILES:-100}
+      AGENT_ADAPTER_MAX_DIFF_BYTES: ${AGENT_ADAPTER_MAX_DIFF_BYTES:-2097152}
+      AGENT_ADAPTER_HEARTBEAT_INTERVAL: ${AGENT_ADAPTER_HEARTBEAT_INTERVAL:-30s}
+      AGENT_ADAPTER_CALLBACK_TIMEOUT: ${AGENT_ADAPTER_CALLBACK_TIMEOUT:-15s}
+      AGENT_ADAPTER_GITHUB_TOKEN: ${AGENT_ADAPTER_GITHUB_TOKEN:-}
+      AGENT_ADAPTER_GITLAB_TOKEN: ${AGENT_ADAPTER_GITLAB_TOKEN:-}
+      AGENT_ADAPTER_CREDENTIALS_FILE: ${AGENT_ADAPTER_CREDENTIALS_FILE:-}
+      AGENT_ADAPTER_CREDENTIAL_BROKER_URL: ${AGENT_ADAPTER_CREDENTIAL_BROKER_URL:-}
+      AGENT_ADAPTER_CREDENTIAL_BROKER_SECRET: ${AGENT_CREDENTIAL_BROKER_SECRET:-}
+      AGENT_ADAPTER_GITHUB_CLONE_BASE_URL: ${AGENT_ADAPTER_GITHUB_CLONE_BASE_URL:-https://github.com}
+      AGENT_ADAPTER_GITLAB_CLONE_BASE_URL: ${AGENT_ADAPTER_GITLAB_CLONE_BASE_URL:-}
+      AGENT_ADAPTER_GITLAB_ALLOW_HTTP: ${AGENT_ADAPTER_GITLAB_ALLOW_HTTP:-false}
+      AGENT_GITHUB_PUBLIC_BASE_URL: ${AGENT_GITHUB_PUBLIC_BASE_URL:-}
+      AGENT_GITHUB_PUBLIC_FOR_API_BASE_URL: ${AGENT_GITHUB_PUBLIC_FOR_API_BASE_URL:-}
+      AGENT_GITLAB_PUBLIC_BASE_URL: ${AGENT_GITLAB_PUBLIC_BASE_URL:-}
+      AGENT_GITLAB_PUBLIC_FOR_API_BASE_URL: ${AGENT_GITLAB_PUBLIC_FOR_API_BASE_URL:-}
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+      - KILL
+    volumes:
+      - agent-adapter-state:/state
+      - agent-adapter-workspaces:/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
+      - agent-sandbox
+    tmpfs:
+      - /tmp
+
+  # Optional private write-credential workload. Coding App keys and GitLab
+  # repository credential maps never enter review workers or the adapter.
+  agent-credential-broker:
+    profiles: ["agent-credential-broker"]
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/agent-credential-broker"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      AGENT_CREDENTIAL_BROKER_HTTP_ADDRESS: :8091
+      AGENT_CREDENTIAL_BROKER_SECRET: ${AGENT_CREDENTIAL_BROKER_SECRET:-}
+      AGENT_CREDENTIAL_BROKER_WORKER_ID: ${AGENT_CREDENTIAL_BROKER_WORKER_ID:-}
+      AGENT_CODING_GITHUB_APP_ID: ${AGENT_CODING_GITHUB_APP_ID:-}
+      AGENT_CODING_GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/coding-github-app.pem
+      AGENT_CODING_GITHUB_API_URL: ${AGENT_CODING_GITHUB_API_URL:-https://api.github.com}
+      AGENT_CODING_GITHUB_INSTALLATIONS_FILE: /run/secrets/coding-installations.json
+      AGENT_CODING_GITLAB_CREDENTIALS_FILE: ${AGENT_CODING_GITLAB_CREDENTIALS_HOST_PATH:+/run/secrets/coding-gitlab.json}
+      AGENT_CODING_GITLAB_ALLOW_HTTP: ${AGENT_CODING_GITLAB_ALLOW_HTTP:-false}
+      AGENT_CREDENTIAL_BROKER_TLS_CERT: ${AGENT_CREDENTIAL_BROKER_TLS_CERT:-}
+      AGENT_CREDENTIAL_BROKER_TLS_KEY: ${AGENT_CREDENTIAL_BROKER_TLS_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    # A private 0600 mapping file must be owned by this UID on the host.
+    user: ${AGENT_CREDENTIAL_BROKER_UID:-65532}:65532
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - type: bind
+        source: ${AGENT_CODING_GITHUB_PRIVATE_KEY_HOST_PATH:-/dev/null}
+        target: /run/secrets/coding-github-app.pem
+        read_only: true
+      - type: bind
+        source: ${AGENT_CODING_GITHUB_INSTALLATIONS_HOST_PATH:-/dev/null}
+        target: /run/secrets/coding-installations.json
+        read_only: true
+      - type: bind
+        source: ${AGENT_CODING_GITLAB_CREDENTIALS_HOST_PATH:-/dev/null}
+        target: /run/secrets/coding-gitlab.json
+        read_only: true
+    tmpfs:
+      - /tmp
+
+  acknowledger:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/acknowledger"]
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  terminal-reporter:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/terminal-reporter"]
+    environment:
+      <<: *provider-worker-environment
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+    volumes: *provider-worker-volumes
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  issue-publisher:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/issue-publisher"]
+    environment:
+      <<: *provider-worker-environment
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+    volumes: *provider-worker-volumes
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  issue-triager:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/issue-triager"]
+    environment:
+      <<: *provider-worker-environment
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+      OPEN_REVIEW_MODEL_SECRET_PRIMARY: ${OPEN_REVIEW_MODEL_SECRET_PRIMARY:-}
+      OCR_LLM_TOKEN: ${OCR_LLM_TOKEN:-}
+      OCR_LLM_URL: ${OCR_LLM_URL:-}
+      OCR_LLM_MODEL: ${OCR_LLM_MODEL:-}
+      OCR_USE_ANTHROPIC: ${OCR_USE_ANTHROPIC:-false}
+      ISSUE_TRIAGE_GITHUB_PUBLIC_BASE_URL: ${ISSUE_TRIAGE_GITHUB_PUBLIC_BASE_URL:-}
+      ISSUE_TRIAGE_GITHUB_PUBLIC_FOR_API_BASE_URL: ${ISSUE_TRIAGE_GITHUB_PUBLIC_FOR_API_BASE_URL:-}
+      ISSUE_TRIAGE_GITLAB_PUBLIC_BASE_URL: ${ISSUE_TRIAGE_GITLAB_PUBLIC_BASE_URL:-}
+      ISSUE_TRIAGE_GITLAB_PUBLIC_FOR_API_BASE_URL: ${ISSUE_TRIAGE_GITLAB_PUBLIC_FOR_API_BASE_URL:-}
+    volumes: *provider-worker-volumes
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  notifier:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/notifier"]
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      NOTIFIER_WORKER_ID: ${NOTIFIER_WORKER_ID:-notifier-1}
+      OPENREVIEW_NOTIFY_PLATFORM: ${OPENREVIEW_NOTIFY_PLATFORM:-}
+      OPENREVIEW_NOTIFY_ENGINEERING: ${OPENREVIEW_NOTIFY_ENGINEERING:-}
+      OPENREVIEW_NOTIFY_SECURITY: ${OPENREVIEW_NOTIFY_SECURITY:-}
+      OPENREVIEW_NOTIFY_INCIDENTS: ${OPENREVIEW_NOTIFY_INCIDENTS:-}
+      OPENREVIEW_NOTIFY_RELEASES: ${OPENREVIEW_NOTIFY_RELEASES:-}
+      OPENREVIEW_NOTIFY_PRODUCT: ${OPENREVIEW_NOTIFY_PRODUCT:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  sso-prober:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/sso-prober"]
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      SSO_PROBE_ALLOW_PRIVATE_NETWORKS: ${SSO_PROBE_ALLOW_PRIVATE_NETWORKS:-false}
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      SSO_PROBER_WORKER_ID: ${SSO_PROBER_WORKER_ID:-sso-prober-1}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  provider-prober:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/provider-prober"]
+    environment:
+      <<: *provider-worker-environment
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      PROVIDER_PROBER_WORKER_ID: ${PROVIDER_PROBER_WORKER_ID:-provider-prober-1}
+      PROVIDER_PROBE_INTERVAL: ${PROVIDER_PROBE_INTERVAL:-5m}
+      PROVIDER_PROBE_POLL_INTERVAL: ${PROVIDER_PROBE_POLL_INTERVAL:-5s}
+      PROVIDER_PROBE_ALLOW_PRIVATE_NETWORKS: ${PROVIDER_PROBE_ALLOW_PRIVATE_NETWORKS:-false}
+      PROVIDER_PROBE_ALLOW_HTTP: ${PROVIDER_PROBE_ALLOW_HTTP:-false}
+      PROVIDER_CHECKS_WORKER_ID: ${PROVIDER_CHECKS_WORKER_ID:-provider-checks-worker-1}
+      PROVIDER_CHECKS_POLL_INTERVAL: ${PROVIDER_CHECKS_POLL_INTERVAL:-5m}
+      PROVIDER_CHECKS_WORKER_INTERVAL: ${PROVIDER_CHECKS_WORKER_INTERVAL:-5s}
+      PROVIDER_CHECKS_ALLOW_PRIVATE_NETWORKS: ${PROVIDER_CHECKS_ALLOW_PRIVATE_NETWORKS:-false}
+      PROVIDER_CHECKS_ALLOW_HTTP: ${PROVIDER_CHECKS_ALLOW_HTTP:-false}
+    volumes: *provider-worker-volumes
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  provider-feedback-poller:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/provider-feedback-poller"]
+    environment:
+      <<: *provider-worker-environment
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      PROVIDER_FEEDBACK_POLLER_WORKER_ID: ${PROVIDER_FEEDBACK_POLLER_WORKER_ID:-provider-feedback-poller-1}
+      PROVIDER_FEEDBACK_POLL_INTERVAL: ${PROVIDER_FEEDBACK_POLL_INTERVAL:-5m}
+      PROVIDER_FEEDBACK_WORKER_INTERVAL: ${PROVIDER_FEEDBACK_WORKER_INTERVAL:-5s}
+    volumes: *provider-worker-volumes
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  model-prober:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/model-prober"]
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      MODEL_PROBER_WORKER_ID: ${MODEL_PROBER_WORKER_ID:-model-prober-1}
+      MODEL_PROBE_POLL_INTERVAL: ${MODEL_PROBE_POLL_INTERVAL:-2s}
+      MODEL_PROBE_ALLOW_PRIVATE_NETWORKS: ${MODEL_PROBE_ALLOW_PRIVATE_NETWORKS:-false}
+      OPEN_REVIEW_MODEL_SECRET_PRIMARY: ${OPEN_REVIEW_MODEL_SECRET_PRIMARY:-}
+      # OCR persists its ephemeral session record below $HOME. Keep it on the
+      # runner's tmpfs so the read-only service can finish a review without
+      # retaining model session data or provider credentials on disk.
+      HOME: /tmp
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  data-governance-worker:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/data-governance-worker"]
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      DATA_GOVERNANCE_ARTIFACT_KEY: ${DATA_GOVERNANCE_ARTIFACT_KEY:-}
+      DATA_GOVERNANCE_ARTIFACT_TTL: ${DATA_GOVERNANCE_ARTIFACT_TTL:-24h}
+      DATA_GOVERNANCE_EXPORT_MAX_RECORDS: ${DATA_GOVERNANCE_EXPORT_MAX_RECORDS:-10000}
+      DATA_GOVERNANCE_REGION_ORCHESTRATOR_URL: ${DATA_GOVERNANCE_REGION_ORCHESTRATOR_URL:-}
+      DATA_GOVERNANCE_REGION_ORCHESTRATOR_SECRET: ${DATA_GOVERNANCE_REGION_ORCHESTRATOR_SECRET:-}
+      DATA_GOVERNANCE_REGION_ORCHESTRATOR_ALLOW_PRIVATE: ${DATA_GOVERNANCE_REGION_ORCHESTRATOR_ALLOW_PRIVATE:-false}
+      DATA_GOVERNANCE_REGION_ORCHESTRATOR_ALLOW_HTTP: ${DATA_GOVERNANCE_REGION_ORCHESTRATOR_ALLOW_HTTP:-false}
+      DATA_GOVERNANCE_REGION_ORCHESTRATOR_TIMEOUT: ${DATA_GOVERNANCE_REGION_ORCHESTRATOR_TIMEOUT:-20s}
+      DATA_GOVERNANCE_REGION_POLL_INTERVAL: ${DATA_GOVERNANCE_REGION_POLL_INTERVAL:-30s}
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      DATA_GOVERNANCE_WORKER_ID: ${DATA_GOVERNANCE_WORKER_ID:-data-governance-worker-1}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  review-scheduler:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/review-scheduler"]
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      REVIEW_SCHEDULER_WORKER_ID: ${REVIEW_SCHEDULER_WORKER_ID:-review-scheduler-1}
+      REVIEW_SCHEDULER_POLL_INTERVAL: ${REVIEW_SCHEDULER_POLL_INTERVAL:-1s}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  rule-exception-expirer:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/rule-exception-expirer"]
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      RULE_EXCEPTION_EXPIRER_WORKER_ID: ${RULE_EXCEPTION_EXPIRER_WORKER_ID:-rule-exception-expirer-1}
+      RULE_EXCEPTION_EXPIRER_POLL_INTERVAL: ${RULE_EXCEPTION_EXPIRER_POLL_INTERVAL:-30s}
+      RULE_EXCEPTION_EXPIRER_TENANT_LIMIT: ${RULE_EXCEPTION_EXPIRER_TENANT_LIMIT:-100}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  rule-rollout-monitor:
+    image: ${OPEN_REVIEW_CORE_IMAGE:-open-review-platform-core:local}
+    entrypoint: ["/app/rule-rollout-monitor"]
+    environment:
+      CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      RULE_ROLLOUT_MONITOR_WORKER_ID: ${RULE_ROLLOUT_MONITOR_WORKER_ID:-rule-rollout-monitor-1}
+      RULE_ROLLOUT_MONITOR_POLL_INTERVAL: ${RULE_ROLLOUT_MONITOR_POLL_INTERVAL:-30s}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp
@@ -46,15 +710,82 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.runner
-    env_file: .env
     environment:
+      <<: *provider-worker-environment
       CONTROL_DATABASE_URL: postgres://openreview:openreview@postgres:5432/openreview?sslmode=disable
+      RABBITMQ_URL: amqp://openreview:openreview@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-openreview.events}
+      OPEN_REVIEW_BUILD_VERSION: ${OPEN_REVIEW_BUILD_VERSION:-development}
+      # The runner executes in Linux, so it must not inherit a host-only Git
+      # path such as /usr/local/opt/git/bin/git from a developer's .env file.
+      GIT_BINARY: ${RUNNER_GIT_BINARY:-git}
+      OCR_BINARY: ${OCR_BINARY:-ocr}
+      OCR_VERSION: ${OCR_VERSION:-1.12.5}
+      OCR_CONCURRENCY: ${OCR_CONCURRENCY:-2}
+      OCR_REVIEW_EFFORT: ${OCR_REVIEW_EFFORT:-low}
+      OCR_MAX_PROMPT_TOKENS: ${OCR_MAX_PROMPT_TOKENS:-8000}
+      OCR_MAX_TOKENS_BUDGET: ${OCR_MAX_TOKENS_BUDGET:-128000}
+      OCR_SUBTASK_TIMEOUT_MINUTES: ${OCR_SUBTASK_TIMEOUT_MINUTES:-5}
+      RISK_REVIEW_MODE: ${RISK_REVIEW_MODE:-focused}
+      MERGE_GATE_MIN_SEVERITY: ${MERGE_GATE_MIN_SEVERITY:-critical}
+      CHECKOUT_TIMEOUT: ${CHECKOUT_TIMEOUT:-2m}
+      RUNNER_LEASE_DURATION: ${RUNNER_LEASE_DURATION:-2m}
+      RUNNER_LEASE_RENEW_INTERVAL: ${RUNNER_LEASE_RENEW_INTERVAL:-30s}
+      OCR_TIMEOUT: ${OCR_TIMEOUT:-15m}
+      RUNNER_ID: ${RUNNER_ID:-runner-1}
+      RUNNER_POLL_INTERVAL: ${RUNNER_POLL_INTERVAL:-5s}
+      OCR_LLM_URL: ${OCR_LLM_URL:-}
+      OCR_LLM_TOKEN: ${OCR_LLM_TOKEN:-}
+      OCR_LLM_MODEL: ${OCR_LLM_MODEL:-}
+      OCR_USE_ANTHROPIC: ${OCR_USE_ANTHROPIC:-false}
+      OPEN_REVIEW_MODEL_SECRET_PRIMARY: ${OPEN_REVIEW_MODEL_SECRET_PRIMARY:-}
+    volumes: *provider-worker-volumes
     depends_on:
       migrate:
         condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      # OCR resolves its session store from the node user's home directory
+      # rather than $HOME. Mount only that leaf on tmpfs to retain the runner's
+      # read-only root filesystem while allowing a review to finalize.
+      - /home/node/.opencodereview:uid=1000,gid=1000,mode=0700
+
+  prometheus:
+    image: prom/prometheus:v3.5.1
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    depends_on:
+      control-api:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/observability/open-review-alerts.yml:/etc/prometheus/open-review-alerts.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp
 
 volumes:
   postgres-data:
+  rabbitmq-data:
+  prometheus-data:
+  agent-adapter-state:
+  agent-adapter-workspaces:
+    name: ${AGENT_ADAPTER_SANDBOX_WORKSPACE_VOLUME:-open-review-platform_agent-adapter-workspaces}
+
+networks:
+  agent-sandbox:
+    name: ${AGENT_ADAPTER_SANDBOX_NETWORK:-open-review-platform_agent-sandbox}
+    internal: true

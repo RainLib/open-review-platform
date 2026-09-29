@@ -1,0 +1,11 @@
+# Refresh the development-only compact worker from tested, host-cross-compiled
+# Linux binaries without rebuilding the OCR/Git base in a constrained Docker
+# VM. Pass a directory containing the rebuilt compact supervisor and changed
+# worker binaries as the named `compact-binaries` build context. The base image
+# must already contain every unchanged role. Never use this for a portable CI
+# release without an independent target-runtime acceptance run.
+ARG REVIEW_BUNDLE_BASE
+FROM ${REVIEW_BUNDLE_BASE}
+COPY --from=compact-binaries --chown=node:node / /app/
+USER node
+ENTRYPOINT ["/app/compact-review"]

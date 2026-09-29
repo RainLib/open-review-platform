@@ -1,0 +1,33 @@
+# Local Console hot-reload overlay. This is intentionally separate from the
+# default production-shaped Compose file: it trades an immutable, read-only
+# standalone image for a bind-mounted Next development server and must never
+# be used for an internet-facing deployment.
+#
+# docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+#   up -d postgres migrate control-api console
+# Add --build on first use or after changing a Dockerfile/dependency. Do not
+# omit the service list: a bare `up` starts the full base stack.
+services:
+  console:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      target: dependencies
+    command: ["pnpm", "dev", "--hostname", "0.0.0.0"]
+    environment:
+      NODE_ENV: development
+      ENVIRONMENT: development
+      # The local-preview bypass remains double-gated by this explicit overlay
+      # plus CONTROL_API_DEVELOPMENT_SUBJECT. It does not expose a provider
+      # token and is not enabled by the default Compose deployment.
+      OPEN_REVIEW_LOCAL_PREVIEW: "true"
+    volumes:
+      - ./apps/web:/app
+      - console-node-modules:/app/node_modules
+      - console-next-dev:/app/.next
+    read_only: false
+    tmpfs: []
+
+volumes:
+  console-node-modules:
+  console-next-dev:

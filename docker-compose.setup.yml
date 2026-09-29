@@ -1,0 +1,8 @@
+# Local onboarding footprint: provider verification and repository inventory
+# without RabbitMQ or PR/Issue review consumers. Combine with docker-compose.yml.
+services:
+  provider-prober:
+    image: ${OPEN_REVIEW_PROVIDER_PROBER_IMAGE:-open-review-platform-provider-prober:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.provider-prober

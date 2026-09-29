@@ -1,0 +1,13 @@
+# Package host-cross-compiled Control API and migrator binaries over a validated
+# local core image. This avoids a full multi-entrypoint rebuild during a focused
+# local acceptance pass; release images still use the canonical Dockerfile.
+#
+# docker build -f Dockerfile.core-api.runtime-local \
+#   --build-arg CORE_BASE_IMAGE=open-review-platform-core:<validated-tag> \
+#   --build-context control-binary=<directory-containing-control-api-and-migrate> \
+#   -t open-review-platform-core:<candidate-tag> .
+ARG CORE_BASE_IMAGE=open-review-platform-core:local
+FROM ${CORE_BASE_IMAGE}
+COPY --from=control-binary --chmod=0555 /control-api /app/control-api
+COPY --from=control-binary --chmod=0555 /migrate /app/migrate
+COPY migrations/ /app/migrations/
