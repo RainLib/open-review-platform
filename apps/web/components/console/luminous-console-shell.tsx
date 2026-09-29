@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 
 import type { AccessibleWorkspace } from "@/lib/control-api";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 type ThemePreference = "system" | "light" | "dark";
@@ -291,45 +292,52 @@ export function LuminousConsoleShell({
           sidebarExpanded ? "w-56" : "w-16",
         )}
       >
-        <button
-          aria-controls="console-sidebar-navigation"
-          aria-expanded={sidebarExpanded}
-          aria-label={sidebarExpanded ? "Collapse navigation" : "Expand navigation"}
-          className={cn(
-            "luminous-focus flex h-10 items-center rounded-[11px] text-[var(--ls-text-secondary)] transition hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]",
-            sidebarExpanded ? "justify-between px-3" : "justify-center",
-          )}
-          onClick={toggleSidebar}
-          title={sidebarExpanded ? "Collapse navigation" : "Expand navigation"}
-          type="button"
-        >
-          {sidebarExpanded ? <span className="text-xs font-semibold uppercase tracking-wider">Navigation</span> : null}
-          {sidebarExpanded ? <PanelLeftClose className="size-[18px]" /> : <PanelLeftOpen className="size-[18px]" />}
-        </button>
+        <Tooltip open={sidebarExpanded ? false : undefined}>
+          <TooltipTrigger asChild>
+            <button
+              aria-controls="console-sidebar-navigation"
+              aria-expanded={sidebarExpanded}
+              aria-label={sidebarExpanded ? "Collapse navigation" : "Expand navigation"}
+              className={cn(
+                "luminous-focus flex h-10 items-center rounded-[11px] text-[var(--ls-text-secondary)] transition hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]",
+                sidebarExpanded ? "justify-between px-3" : "justify-center",
+              )}
+              onClick={toggleSidebar}
+              type="button"
+            >
+              {sidebarExpanded ? <span className="text-xs font-semibold uppercase tracking-wider">Navigation</span> : null}
+              {sidebarExpanded ? <PanelLeftClose className="size-[18px]" /> : <PanelLeftOpen className="size-[18px]" />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right" sideOffset={12}>Expand navigation</TooltipContent>
+        </Tooltip>
         <nav aria-label="Workspace navigation" className="flex flex-col gap-2" id="console-sidebar-navigation">
           {railItems.map((item) => {
             const href = `/${org}/${item.key}`;
             const active = pathname.startsWith(href) || (item.key === "issues" && pathname.startsWith(`/${org}/provider-issues`));
             const Icon = item.icon;
             return (
-              <Link
-                aria-current={active ? "page" : undefined}
-                aria-label={item.label}
-                className={cn(
-                  "luminous-focus relative flex h-10 items-center rounded-[11px] transition",
-                  sidebarExpanded ? "gap-3 px-3" : "justify-center",
-                  active
-                    ? "bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]"
-                    : "text-[var(--ls-text-tertiary)] hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]",
-                )}
-                href={href}
-                key={item.key}
-                title={sidebarExpanded ? undefined : item.label}
-              >
-                {active ? <span className="absolute -left-3 h-5 w-0.5 rounded-full bg-[var(--ls-accent)]" /> : null}
-                <Icon className="size-[18px] shrink-0" />
-                {sidebarExpanded ? <span className="truncate text-sm font-medium">{item.label}</span> : null}
-              </Link>
+              <Tooltip key={item.key} open={sidebarExpanded ? false : undefined}>
+                <TooltipTrigger asChild>
+                  <Link
+                    aria-current={active ? "page" : undefined}
+                    aria-label={item.label}
+                    className={cn(
+                      "luminous-focus relative flex h-10 items-center rounded-[11px] transition",
+                      sidebarExpanded ? "gap-3 px-3" : "justify-center",
+                      active
+                        ? "bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]"
+                        : "text-[var(--ls-text-tertiary)] hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]",
+                    )}
+                    href={href}
+                  >
+                    {active ? <span className="absolute -left-3 h-5 w-0.5 rounded-full bg-[var(--ls-accent)]" /> : null}
+                    <Icon className="size-[18px] shrink-0" />
+                    {sidebarExpanded ? <span className="truncate text-sm font-medium">{item.label}</span> : null}
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side="right" sideOffset={12}>{item.label}</TooltipContent>
+              </Tooltip>
             );
           })}
         </nav>
