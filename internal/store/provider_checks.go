@@ -56,7 +56,7 @@ func (s *PostgresStore) ClaimProviderCheckProbe(ctx context.Context, workerID st
 			  AND lower(run.head_sha)=observation.head_sha
 			  AND lower(job.head_sha)=observation.head_sha
 			  AND ((observation.state='queued' AND observation.available_at<=now())
-			       OR (observation.state='observed' AND run.created_at>now()-interval '24 hours' AND observation.available_at<=now())
+			       OR (observation.state='observed' AND (run.created_at>now()-interval '24 hours' OR EXISTS (SELECT 1 FROM agent_task_acceptances a WHERE a.review_run_id=run.id AND a.head_sha=observation.head_sha AND a.state<>'superseded')) AND observation.available_at<=now())
 			       OR (observation.state='running' AND observation.locked_until<now()))
 			ORDER BY observation.available_at,observation.run_id
 			FOR UPDATE OF observation SKIP LOCKED LIMIT 1

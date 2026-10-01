@@ -49,16 +49,17 @@ type AgentTaskCommandOutcome struct {
 // coding agent. It intentionally has no command, credential, or patch field:
 // creating a task must never cause an external agent to execute.
 type AgentTask struct {
-	ID             uuid.UUID `json:"id"`
-	TenantID       uuid.UUID `json:"tenant_id,omitempty"`
-	InstallationID uuid.UUID `json:"installation_id"`
-	Provider       Provider  `json:"provider"`
-	APIBaseURL     string    `json:"api_base_url"`
-	Repository     string    `json:"repository"`
-	OriginKind     string    `json:"origin_kind"`
-	OriginNumber   int       `json:"origin_number"`
-	OriginRevision string    `json:"origin_revision"`
-	Intent         string    `json:"intent"`
+	Workflow       AgentWorkflowPolicy `json:"workflow"`
+	ID             uuid.UUID           `json:"id"`
+	TenantID       uuid.UUID           `json:"tenant_id,omitempty"`
+	InstallationID uuid.UUID           `json:"installation_id"`
+	Provider       Provider            `json:"provider"`
+	APIBaseURL     string              `json:"api_base_url"`
+	Repository     string              `json:"repository"`
+	OriginKind     string              `json:"origin_kind"`
+	OriginNumber   int                 `json:"origin_number"`
+	OriginRevision string              `json:"origin_revision"`
+	Intent         string              `json:"intent"`
 	// PolicyRevision, MaxAttempts and MaxExecutionSeconds are copied from the
 	// repository policy at task creation. They are an immutable admission
 	// envelope: editing a policy can govern a new Issue revision but cannot
@@ -131,7 +132,8 @@ type AgentTaskPlan struct {
 }
 
 type AgentTaskDetail struct {
-	Task AgentTask `json:"task"`
+	Acceptance *AgentTaskAcceptance `json:"acceptance,omitempty"`
+	Task       AgentTask            `json:"task"`
 	// The review target is the Issue's frozen base branch. For feedback tasks,
 	// source_base_ref is the Draft head instead and must never be used as target.
 	TargetBranch           string                           `json:"target_branch,omitempty"`
@@ -188,8 +190,9 @@ type AgentTaskLinkedReviewGate struct {
 // authorized task readers. The instruction text and its verification digest
 // remain in the source/attempt boundary, not in the Console read model.
 type AgentTaskFeedbackReference struct {
-	CommentExternalID string `json:"comment_external_id"`
-	ActorExternalID   string `json:"actor_external_id"`
+	SourceReviewRunID *uuid.UUID `json:"source_review_run_id,omitempty"`
+	CommentExternalID string     `json:"comment_external_id"`
+	ActorExternalID   string     `json:"actor_external_id"`
 }
 
 // AgentTaskPlanPermissions is a read-time UI affordance only. Every mutation
@@ -261,15 +264,27 @@ type AgentTaskSourceTarget struct {
 // AgentTaskFeedbackBinding is the immutable command evidence retained at
 // admission. Provider text is reread and matched against it before planning.
 type AgentTaskFeedbackBinding struct {
-	CommentExternalID string `json:"comment_external_id"`
-	ActorExternalID   string `json:"actor_external_id"`
-	InstructionSHA256 string `json:"instruction_sha256"`
+	SourceReviewRunID *uuid.UUID `json:"source_review_run_id,omitempty"`
+	SystemInstruction string     `json:"system_instruction,omitempty"`
+	CommentExternalID string     `json:"comment_external_id"`
+	ActorExternalID   string     `json:"actor_external_id"`
+	InstructionSHA256 string     `json:"instruction_sha256"`
 	// The root Issue task's provider-read target branch is immutable. It is
 	// resolved from the task lineage, never accepted from a webhook or browser.
 	TargetBranch string `json:"target_branch,omitempty"`
 }
 
 func (binding AgentTaskFeedbackBinding) Valid() bool {
+	if binding.SourceReviewRunID != nil {
+		if *binding.SourceReviewRunID == uuid.Nil || binding.CommentExternalID != "review:"+binding.SourceReviewRunID.String() || binding.ActorExternalID != "system:review-worker" || len(binding.SystemInstruction) < 20 || len(binding.SystemInstruction) > 12000 {
+			return false
+		}
+		digest := sha256.Sum256([]byte(binding.SystemInstruction))
+		return hex.EncodeToString(digest[:]) == binding.InstructionSHA256
+	}
+	if binding.SystemInstruction != "" {
+		return false
+	}
 	commentID, commentErr := strconv.ParseUint(binding.CommentExternalID, 10, 64)
 	actorID, actorErr := strconv.ParseUint(binding.ActorExternalID, 10, 64)
 	digest, digestErr := hex.DecodeString(binding.InstructionSHA256)
@@ -290,6 +305,7 @@ type AgentTaskSourceSnapshot struct {
 	TargetBranch   string                     `json:"target_branch,omitempty"`
 	Issue          *AgentTaskIssueSnapshot    `json:"-"`
 	Feedback       *AgentTaskFeedbackSnapshot `json:"-"`
+	GeneratedPlan  *AgentTaskPlanSections     `json:"-"`
 	DecisionSignal *AgentTaskDecisionSignal   `json:"-"`
 }
 
@@ -539,14 +555,23 @@ func (input AgentTaskPlanInput) Valid() bool {
 // approval and execution envelope, so these fields cannot disagree with the
 // instructions the coding Agent is allowed to see.
 type AgentTaskPlanSections struct {
-	Objective    string `json:"objective,omitempty"`
-	Scope        string `json:"scope,omitempty"`
-	Verification string `json:"verification,omitempty"`
-	Risks        string `json:"risks,omitempty"`
-	Unknowns     string `json:"unknowns,omitempty"`
+	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
+	Objective          string   `json:"objective,omitempty"`
+	Scope              string   `json:"scope,omitempty"`
+	Verification       string   `json:"verification,omitempty"`
+	Risks              string   `json:"risks,omitempty"`
+	Unknowns           string   `json:"unknowns,omitempty"`
 }
 
 func (sections AgentTaskPlanSections) Valid() bool {
+	if len(sections.AcceptanceCriteria) > 20 {
+		return false
+	}
+	for _, criterion := range sections.AcceptanceCriteria {
+		if len(strings.TrimSpace(criterion)) < 3 || len(criterion) > 1000 || strings.ContainsRune(criterion, 0) {
+			return false
+		}
+	}
 	for _, part := range []struct {
 		value string
 		min   int
@@ -563,12 +588,20 @@ func (sections AgentTaskPlanSections) Valid() bool {
 }
 
 func (sections AgentTaskPlanSections) Normalized() AgentTaskPlanSections {
+	criteria := make([]string, len(sections.AcceptanceCriteria))
+	for i, criterion := range sections.AcceptanceCriteria {
+		criteria[i] = strings.TrimSpace(criterion)
+	}
+	if sections.AcceptanceCriteria == nil {
+		criteria = nil
+	}
 	return AgentTaskPlanSections{
-		Objective:    strings.TrimSpace(sections.Objective),
-		Scope:        strings.TrimSpace(sections.Scope),
-		Verification: strings.TrimSpace(sections.Verification),
-		Risks:        strings.TrimSpace(sections.Risks),
-		Unknowns:     strings.TrimSpace(sections.Unknowns),
+		AcceptanceCriteria: criteria,
+		Objective:          strings.TrimSpace(sections.Objective),
+		Scope:              strings.TrimSpace(sections.Scope),
+		Verification:       strings.TrimSpace(sections.Verification),
+		Risks:              strings.TrimSpace(sections.Risks),
+		Unknowns:           strings.TrimSpace(sections.Unknowns),
 	}
 }
 
@@ -578,7 +611,7 @@ func (sections AgentTaskPlanSections) Summary() string {
 		"\n\n## Scope and impact\n" + normalized.Scope +
 		"\n\n## Verification\n" + normalized.Verification +
 		"\n\n## Risks\n" + normalized.Risks +
-		"\n\n## Unknowns\n" + normalized.Unknowns
+		"\n\n## Unknowns\n" + normalized.Unknowns + normalized.acceptanceSummary()
 }
 
 func (input AgentTaskPlanInput) CanonicalSummary() string {
@@ -612,39 +645,44 @@ func (input AgentTaskCancellationInput) Valid() bool {
 // "manual" permits an authorized human to create a task. No automatic
 // execution mode exists in P0.
 type AgentTaskPolicy struct {
-	ID                   uuid.UUID `json:"id"`
-	Provider             Provider  `json:"provider"`
-	APIBaseURL           string    `json:"api_base_url"`
-	Repository           string    `json:"repository"`
-	Mode                 string    `json:"mode"`
-	MaxAttempts          int       `json:"max_attempts"`
-	MaxExecutionSeconds  int       `json:"max_execution_seconds"`
-	MaxFeedbackCycles    int       `json:"max_feedback_cycles"`
-	ExecutorProfile      string    `json:"executor_profile"`
-	DecisionBackend      string    `json:"decision_backend"`
-	AutoAdmissionEnabled bool      `json:"auto_admission_enabled"`
-	AutoAdmissionLabel   string    `json:"auto_admission_label"`
-	Revision             int       `json:"revision"`
-	UpdatedBy            string    `json:"updated_by"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	Workflow             AgentWorkflowPolicy `json:"workflow"`
+	ID                   uuid.UUID           `json:"id"`
+	Provider             Provider            `json:"provider"`
+	APIBaseURL           string              `json:"api_base_url"`
+	Repository           string              `json:"repository"`
+	Mode                 string              `json:"mode"`
+	MaxAttempts          int                 `json:"max_attempts"`
+	MaxExecutionSeconds  int                 `json:"max_execution_seconds"`
+	MaxFeedbackCycles    int                 `json:"max_feedback_cycles"`
+	ExecutorProfile      string              `json:"executor_profile"`
+	DecisionBackend      string              `json:"decision_backend"`
+	AutoAdmissionEnabled bool                `json:"auto_admission_enabled"`
+	AutoAdmissionLabel   string              `json:"auto_admission_label"`
+	Revision             int                 `json:"revision"`
+	UpdatedBy            string              `json:"updated_by"`
+	UpdatedAt            time.Time           `json:"updated_at"`
 }
 
 type AgentTaskPolicyInput struct {
-	Provider             Provider `json:"provider"`
-	APIBaseURL           string   `json:"api_base_url"`
-	Repository           string   `json:"repository"`
-	Mode                 string   `json:"mode"`
-	MaxAttempts          int      `json:"max_attempts"`
-	MaxExecutionSeconds  int      `json:"max_execution_seconds"`
-	MaxFeedbackCycles    int      `json:"max_feedback_cycles"`
-	ExecutorProfile      string   `json:"executor_profile"`
-	DecisionBackend      string   `json:"decision_backend"`
-	AutoAdmissionEnabled bool     `json:"auto_admission_enabled"`
-	AutoAdmissionLabel   string   `json:"auto_admission_label"`
-	Revision             int      `json:"revision"`
+	Workflow             *AgentWorkflowPolicy `json:"workflow,omitempty"`
+	Provider             Provider             `json:"provider"`
+	APIBaseURL           string               `json:"api_base_url"`
+	Repository           string               `json:"repository"`
+	Mode                 string               `json:"mode"`
+	MaxAttempts          int                  `json:"max_attempts"`
+	MaxExecutionSeconds  int                  `json:"max_execution_seconds"`
+	MaxFeedbackCycles    int                  `json:"max_feedback_cycles"`
+	ExecutorProfile      string               `json:"executor_profile"`
+	DecisionBackend      string               `json:"decision_backend"`
+	AutoAdmissionEnabled bool                 `json:"auto_admission_enabled"`
+	AutoAdmissionLabel   string               `json:"auto_admission_label"`
+	Revision             int                  `json:"revision"`
 }
 
 func (input AgentTaskPolicyInput) Valid() bool {
+	if input.Workflow != nil && !input.Workflow.Valid() {
+		return false
+	}
 	return input.Provider.Valid() && strings.TrimSpace(input.APIBaseURL) != "" &&
 		strings.Trim(strings.TrimSpace(input.Repository), "/") != "" &&
 		(input.Mode == "disabled" || input.Mode == "suggest" || input.Mode == "manual") &&
@@ -688,4 +726,11 @@ type AgentTaskFeedbackOutcome struct {
 	Duplicate bool       `json:"duplicate"`
 	Reason    string     `json:"reason,omitempty"`
 	TaskID    *uuid.UUID `json:"task_id,omitempty"`
+}
+
+func (sections AgentTaskPlanSections) acceptanceSummary() string {
+	if len(sections.AcceptanceCriteria) == 0 {
+		return ""
+	}
+	return "\n\n## Acceptance criteria\n- " + strings.Join(sections.AcceptanceCriteria, "\n- ")
 }

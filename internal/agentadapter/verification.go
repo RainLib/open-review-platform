@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -196,7 +197,14 @@ func (pipeline Pipeline) runVerification(ctx context.Context, workspace string, 
 		return VerificationEvidence{}, fmt.Errorf("verification output exceeded %d-byte budget", maxExecutorOutputBytes)
 	}
 	if runErr != nil {
-		return VerificationEvidence{}, fmt.Errorf("approved repository verification failed (%d bytes output): %w", count, runErr)
+		var exit *exec.ExitError
+		if errors.As(runErr, &exit) && verificationCtx.Err() == nil && exit.ExitCode() > 0 && exit.ExitCode() < 125 {
+			if len(text) > 16384 {
+				text = strings.ToValidUTF8(text[len(text)-16384:], "")
+			}
+			return VerificationEvidence{}, &verificationFailure{output: text, exit: exit.ExitCode()}
+		}
+		return VerificationEvidence{}, fmt.Errorf("approved repository verification unavailable: %w", runErr)
 	}
 	profileSHA, err := profile.evidenceHash()
 	if err != nil {

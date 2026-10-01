@@ -273,6 +273,9 @@ services:
       AGENT_DECISION_JEV_URL: ${AGENT_DECISION_JEV_URL:-https://api.typesafe.ai/v1/systemone}
       AGENT_DECISION_JEV_API_KEY: ${AGENT_DECISION_JEV_API_KEY:-}
       AGENT_DECISION_JEV_MODEL: ${AGENT_DECISION_JEV_MODEL:-jev-latest}
+      AGENT_PLANNER_API_BASE_URL: ${AGENT_PLANNER_API_BASE_URL:-}
+      AGENT_PLANNER_API_KEY: ${AGENT_PLANNER_API_KEY:-}
+      AGENT_PLANNER_MODEL: ${AGENT_PLANNER_MODEL:-}
     volumes: *provider-worker-volumes
     depends_on:
       migrate:

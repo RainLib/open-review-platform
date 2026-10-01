@@ -131,6 +131,12 @@ func (r Resolver) VerifyFeedbackComment(ctx context.Context, task domain.AgentTa
 	if task.OriginKind != "pull_request" || !task.Provider.Valid() || task.OriginNumber < 1 || binding == nil || !binding.ExecutionValid() || strings.TrimSpace(token) == "" {
 		return fmt.Errorf("agent task feedback comment target is invalid")
 	}
+	// An internal review repair is bound by the signed control-plane handoff,
+	// not by a fabricated provider comment. The Draft identity/head/target is
+	// still re-read by VerifyOriginWithFeedback before execution and publication.
+	if binding.SourceReviewRunID != nil {
+		return nil
+	}
 	switch task.Provider {
 	case domain.ProviderGitHub:
 		_, err := r.githubFeedbackComment(ctx, task, binding, token)
@@ -168,6 +174,10 @@ func (r Resolver) Resolve(ctx context.Context, target domain.AgentTaskSourceTarg
 			if target.Feedback == nil || !target.Feedback.ExecutionValid() || snapshot.TargetBranch != target.Feedback.TargetBranch {
 				return domain.AgentTaskSourceSnapshot{}, fmt.Errorf("GitHub Draft target branch differs from the original approved Draft")
 			}
+			if target.Feedback.SourceReviewRunID != nil {
+				snapshot.Feedback = internalReviewFeedback(target.Feedback)
+				return snapshot, nil
+			}
 			snapshot.Feedback, err = r.githubFeedbackComment(ctx, target.Task, target.Feedback, token)
 			return snapshot, err
 		}
@@ -186,6 +196,10 @@ func (r Resolver) Resolve(ctx context.Context, target domain.AgentTaskSourceTarg
 			}
 			if target.Feedback == nil || !target.Feedback.ExecutionValid() || snapshot.TargetBranch != target.Feedback.TargetBranch {
 				return domain.AgentTaskSourceSnapshot{}, fmt.Errorf("GitLab Draft target branch differs from the original approved Draft")
+			}
+			if target.Feedback.SourceReviewRunID != nil {
+				snapshot.Feedback = internalReviewFeedback(target.Feedback)
+				return snapshot, nil
 			}
 			snapshot.Feedback, err = r.gitLabFeedbackComment(ctx, target.Task, target.Feedback, token)
 			return snapshot, err
@@ -538,4 +552,8 @@ func trustedAPIBase(value string, allowHTTP bool) (string, error) {
 		return "", fmt.Errorf("provider API base URL scheme is invalid")
 	}
 	return strings.TrimSuffix(parsed.String(), "/"), nil
+}
+
+func internalReviewFeedback(binding *domain.AgentTaskFeedbackBinding) *domain.AgentTaskFeedbackSnapshot {
+	return &domain.AgentTaskFeedbackSnapshot{CommentExternalID: binding.CommentExternalID, ActorExternalID: binding.ActorExternalID, Instruction: binding.SystemInstruction}
 }

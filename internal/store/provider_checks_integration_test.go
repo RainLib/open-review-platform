@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -12,10 +11,7 @@ import (
 )
 
 func TestProviderChecksExactRunLeaseAndReadModel(t *testing.T) {
-	databaseURL := os.Getenv("OPEN_REVIEW_TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("OPEN_REVIEW_TEST_DATABASE_URL is not configured")
-	}
+	databaseURL := isolatedQueueDatabase(t)
 	ctx := context.Background()
 	postgres, err := Open(ctx, databaseURL)
 	if err != nil {

@@ -872,6 +872,9 @@ func (err callbackStatusError) Error() string {
 }
 
 func (service *Service) validSubmission(submission Submission) bool {
+	if !submission.Limits.Workflow.Valid() {
+		return false
+	}
 	if strings.TrimSpace(submission.CallbackURL) != service.callbackURL || parseAdapterUUID(submission.AttemptID) == uuid.Nil || parseAdapterUUID(submission.Task.InstallationID) == uuid.Nil || !submission.Task.Provider.Valid() || strings.TrimSpace(submission.Task.APIBaseURL) == "" || strings.Trim(strings.TrimSpace(submission.Task.Repository), "/") == "" || submission.Task.OriginNumber < 1 || strings.TrimSpace(submission.Task.OriginRevision) == "" || (submission.Task.ExecutorProfile != "codex" && submission.Task.ExecutorProfile != "claude") || !validSourcePair(submission.Task.SourceBaseRef, submission.Task.SourceBaseSHA) || strings.TrimSpace(submission.Task.BranchName) == "" || submission.Plan.Revision < 1 || len(strings.TrimSpace(submission.Plan.SHA256)) != 64 || submission.Limits.MaxAttempts < 1 || submission.Limits.MaxAttempts > 3 || submission.Limits.MaxExecutionSeconds < 60 || submission.Limits.MaxExecutionSeconds > 7200 || !validRFC3339(submission.Limits.DeadlineAt) {
 		return false
 	}

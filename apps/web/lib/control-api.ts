@@ -192,6 +192,7 @@ export type RuleApproval = {
   approval_count: number;
   rejection_count: number;
   actor_decision?: "approved" | "rejected";
+  remediation_task_id?: string;
   can_decide: boolean;
   can_publish: boolean;
   state: "pending" | "approved" | "rejected" | "cancelled";
@@ -361,6 +362,7 @@ export type RuleException = {
   decision_comment?: string;
   state: "pending" | "approved" | "rejected" | "revoked";
   effective_state: "pending" | "approved" | "rejected" | "revoked" | "expired";
+  remediation_task_id?: string;
   can_decide: boolean;
   can_revoke: boolean;
   expires_at: string;
@@ -1424,7 +1426,30 @@ export type ProviderIssueAnalysisData = {
   detail?: string;
 };
 
+export type AgentWorkflowPolicy = {
+  enabled: boolean;
+  max_repair_cycles: number;
+  max_task_attempts: number;
+  required_checks?: string[];
+};
+export type AgentTaskAcceptance = {
+  remediation_task_id?: string;
+  can_decide: boolean;
+  evidence?: string[];
+  task_id: string;
+  attempt_id: string;
+  head_sha: string;
+  revision: number;
+  state: string;
+  criteria: string[];
+  review_run_id?: string;
+  reason?: string;
+  decided_by?: string;
+  decided_at?: string;
+  updated_at: string;
+};
 export type AgentTaskPolicy = {
+  workflow?: AgentWorkflowPolicy;
   id: string;
   provider: "github" | "gitlab";
   api_base_url: string;
@@ -1443,6 +1468,7 @@ export type AgentTaskPolicy = {
 };
 
 export type AgentTask = {
+  workflow?: AgentWorkflowPolicy;
   id: string;
   installation_id: string;
   provider: "github" | "gitlab";
@@ -1524,6 +1550,7 @@ export type AgentTaskPlan = {
 };
 
 export type AgentTaskPlanSections = {
+  acceptance_criteria?: string[];
   objective: string;
   scope: string;
   verification: string;
@@ -1584,6 +1611,7 @@ export type AgentTaskPublicationCheckpoint = {
 };
 
 export type AgentTaskDetail = {
+  acceptance?: AgentTaskAcceptance;
   task: AgentTask;
   target_branch?: string;
   plans: AgentTaskPlan[];
@@ -1605,6 +1633,7 @@ export type AgentTaskDetail = {
     };
   }[];
   feedback?: {
+    source_review_run_id?: string;
     comment_external_id: string;
     actor_external_id: string;
   };
@@ -1997,6 +2026,7 @@ export type ReviewConfigChangeRequest = {
   approval_count: number;
   rejection_count: number;
   actor_decision?: string;
+  remediation_task_id?: string;
   can_decide: boolean;
   applied_revision?: number;
   created_at: string;

@@ -60,6 +60,7 @@ export function agentPlanHistoricalNotice(
 // Poll only while the control plane can advance a task without another human
 // action. Waiting for a plan/approval and terminal states stay quiet.
 export function agentTaskNeedsLiveRefresh(tasks: AgentTask[], selected?: AgentTask): boolean {
+ if (selected?.workflow?.enabled && selected.state === "completed") return true;
   const active = (task: AgentTask) =>
     task.state === "execution_queued" || task.state === "executing" ||
     (task.state === "received" && task.source_state === "pending");
@@ -361,7 +362,7 @@ export function agentAttemptEvidence(
 export function agentPlanSectionsValid(sections: AgentTaskPlanSections): boolean {
   const encoder = new TextEncoder();
   const byteLength = (value: string) => encoder.encode(value).length;
-  const requirements: [keyof AgentTaskPlanSections, number][] = [
+  const requirements: [keyof Pick<AgentTaskPlanSections, "objective" | "scope" | "verification" | "risks" | "unknowns">, number][] = [
     ["objective", 20], ["scope", 10], ["verification", 10],
     ["risks", 3], ["unknowns", 3],
   ];
@@ -369,8 +370,12 @@ export function agentPlanSectionsValid(sections: AgentTaskPlanSections): boolean
     const value = sections[key].trim();
     return byteLength(value) < minimum || byteLength(value) > 4000 || value.includes("\0");
   })) return false;
+  if ((sections.acceptance_criteria?.length ?? 0) > 20 || sections.acceptance_criteria?.some(value => byteLength(value.trim()) < 3 || byteLength(value) > 1000 || value.includes("\0"))) return false;
   const summary = `## Objective\n${sections.objective.trim()}\n\n## Scope and impact\n${sections.scope.trim()}\n\n## Verification\n${sections.verification.trim()}\n\n## Risks\n${sections.risks.trim()}\n\n## Unknowns\n${sections.unknowns.trim()}`;
-  return byteLength(summary) >= 20 && byteLength(summary) <= 12000;
+  const acceptance = sections.acceptance_criteria?.length
+    ? `\n\n## Acceptance criteria\n${sections.acceptance_criteria.map(value => `- ${value.trim()}`).join("\n")}` : "";
+  const totalBytes = byteLength(summary + acceptance);
+  return totalBytes >= 20 && totalBytes <= 12000;
 }
 
 // One failing provider/read endpoint must not hide independent task evidence.

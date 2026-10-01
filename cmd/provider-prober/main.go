@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RainLib/open-review-platform/internal/agentworkflow"
 	"github.com/RainLib/open-review-platform/internal/config"
 	"github.com/RainLib/open-review-platform/internal/credentials"
 	"github.com/RainLib/open-review-platform/internal/health"
@@ -81,6 +82,29 @@ func main() {
 			worked, runErr := checksProcessor.RunOnce(ctx)
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {
 				slog.Error("provider check observation failed", "error", runErr)
+			}
+			if worked {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	workflowReporter := &health.Reporter{Store: database, WorkerID: health.EnvironmentWorkerID("AGENT_DELIVERY_WORKER_ID", "agent-delivery-monitor"), Kind: "agent-delivery-monitor", Version: health.EnvironmentBuildVersion(), Capacity: 1}
+	go workflowReporter.Run(ctx)
+	workflowProcessor := agentworkflow.Processor{Store: database, Resolver: resolver, WorkerID: workflowReporter.WorkerID, AllowHTTP: cfg.Environment == "development" && envBool("PROVIDER_CHECKS_ALLOW_HTTP"), AllowPrivateNetworks: envBool("PROVIDER_CHECKS_ALLOW_PRIVATE_NETWORKS")}
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			release := workflowReporter.BeginTask()
+			worked, err := workflowProcessor.RunOnce(ctx)
+			release()
+			if err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("Agent delivery observation failed", "error", err)
 			}
 			if worked {
 				continue

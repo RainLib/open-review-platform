@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/RainLib/open-review-platform/internal/agentdecision"
+	"github.com/RainLib/open-review-platform/internal/agentplan"
 	"github.com/RainLib/open-review-platform/internal/agenttasksource"
 	"github.com/RainLib/open-review-platform/internal/config"
 	"github.com/RainLib/open-review-platform/internal/credentials"
@@ -121,6 +122,13 @@ func main() {
 				}
 				slog.Warn("agent task decision unavailable", "task_id", taskID, "backend", target.Task.DecisionBackend, "failure", "decision_backend_unavailable")
 				return database.FailAgentTaskSourceSnapshot(ctx, taskID, "agent_decision_unavailable", "Open Review could not obtain a valid decision from the repository's configured backend. No Agent was started. Check the decision service and retry source verification in Agent Work.")
+			}
+			if target.Task.Workflow.Enabled {
+				plan, planErr := agentplan.FromEnvironment().Generate(ctx, target.Task, snapshot)
+				if planErr != nil {
+					return database.FailAgentTaskSourceSnapshot(ctx, taskID, "agent_plan_unavailable", "Automatic planning could not produce a bounded plan. Check the planner configuration and retry source verification.")
+				}
+				snapshot.GeneratedPlan = &plan
 			}
 			_, err = database.RecordAgentTaskSourceSnapshot(ctx, taskID, snapshot)
 			return err

@@ -17,8 +17,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const agentTaskColumns = `id,tenant_id,installation_id,provider,api_base_url,repository,origin_kind,origin_number,origin_revision,intent,policy_revision,max_attempts,max_execution_seconds,max_feedback_cycles,executor_profile,decision_backend,feedback_cycle,execution_branch,parent_task_id,parent_attempt_id,source_state,source_base_ref,source_base_sha,source_captured_at,state,revision,requested_by,created_at,updated_at`
-const agentTaskPolicyColumns = `id,provider,api_base_url,repository,mode,max_attempts,max_execution_seconds,max_feedback_cycles,executor_profile,decision_backend,auto_admission_enabled,auto_admission_label,revision,updated_by,updated_at`
+const agentTaskColumns = `id,tenant_id,installation_id,provider,api_base_url,repository,origin_kind,origin_number,origin_revision,intent,policy_revision,max_attempts,max_execution_seconds,max_feedback_cycles,executor_profile,decision_backend,feedback_cycle,execution_branch,parent_task_id,parent_attempt_id,source_state,source_base_ref,source_base_sha,source_captured_at,state,revision,requested_by,created_at,updated_at,workflow`
+const agentTaskPolicyColumns = `id,provider,api_base_url,repository,mode,max_attempts,max_execution_seconds,max_feedback_cycles,executor_profile,decision_backend,auto_admission_enabled,auto_admission_label,revision,updated_by,updated_at,workflow`
 
 // Feedback always updates the first Issue task's Draft. Its original target
 // branch was resolved from provider metadata and frozen as that root task's
@@ -455,10 +455,10 @@ func (s *PostgresStore) GetAgentTask(ctx context.Context, actor, tenantSlug stri
 		}
 		var feedback domain.AgentTaskFeedbackReference
 		err = s.pool.QueryRow(ctx, `
-			SELECT comment_external_id,actor_external_id
+			SELECT comment_external_id,actor_external_id,source_review_run_id
 			FROM agent_task_feedback_cycles
 			WHERE tenant_id=$1 AND child_task_id=$2`, tenantID, taskID).
-			Scan(&feedback.CommentExternalID, &feedback.ActorExternalID)
+			Scan(&feedback.CommentExternalID, &feedback.ActorExternalID, &feedback.SourceReviewRunID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.AgentTaskDetail{}, fmt.Errorf("feedback task has no admitted comment: %w", ErrInvalidAgentTask)
 		}
@@ -578,7 +578,34 @@ func (s *PostgresStore) GetAgentTask(ctx context.Context, actor, tenantSlug stri
 	if err := linkedRows.Err(); err != nil {
 		return domain.AgentTaskDetail{}, fmt.Errorf("iterate agent task linked reviews: %w", err)
 	}
+	acceptance, acceptanceErr := scanAgentAcceptance(s.pool.QueryRow(ctx, `SELECT `+agentAcceptanceColumns+` FROM agent_task_acceptances WHERE task_id=$1`, taskID))
+	if acceptanceErr == nil {
+		acceptance.CanDecide = (role == "owner" || role == "admin") && (acceptance.State == "awaiting_acceptance" || acceptance.State == "checks_failed" || acceptance.State == "changes_requested")
+		if acceptance.ReviewRunID != nil {
+			var childID *uuid.UUID
+			childErr := s.pool.QueryRow(ctx, `SELECT child_task_id FROM agent_task_feedback_cycles WHERE parent_task_id=$1 AND source_review_run_id=$2`, task.ID, acceptance.ReviewRunID).Scan(&childID)
+			if childErr != nil && !errors.Is(childErr, pgx.ErrNoRows) {
+				return domain.AgentTaskDetail{}, childErr
+			}
+			acceptance.RemediationTaskID = childID
+		}
+		detail.Acceptance = &acceptance
+	} else if !errors.Is(acceptanceErr, pgx.ErrNoRows) {
+		return domain.AgentTaskDetail{}, acceptanceErr
+	}
 	detail.PlanPermissions = agentTaskPlanPermissions(detail, role, actor)
+	if task.Workflow.Enabled {
+		var used int
+		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(a.attempt),0) FROM agent_task_attempts a JOIN agent_tasks t ON t.id=a.task_id WHERE t.tenant_id=$1 AND t.execution_branch=$2`, task.TenantID, task.ExecutionBranch).Scan(&used); err != nil {
+			return domain.AgentTaskDetail{}, err
+		}
+		if used >= task.Workflow.MaxTaskAttempts {
+			detail.PlanPermissions.CanCreatePlan = false
+			detail.PlanPermissions.CanApprovePlan = false
+			detail.PlanPermissions.CreateBlockReason = "execution_budget_exhausted"
+			detail.PlanPermissions.ApproveBlockReason = "execution_budget_exhausted"
+		}
+	}
 	return detail, nil
 }
 
@@ -662,6 +689,12 @@ func (s *PostgresStore) CreateAgentTaskPlan(ctx context.Context, actor, tenantSl
 	if classification.Decision != "requires_human" {
 		return domain.AgentTaskPlan{}, ErrInvalidAgentTaskPlan
 	}
+	if err := checkAgentWorkflowBudgetTx(ctx, tx, task); err != nil {
+		return domain.AgentTaskPlan{}, err
+	}
+	if err := requireAgentWorkflowCriteriaTx(ctx, tx, task, sections); err != nil {
+		return domain.AgentTaskPlan{}, err
+	}
 	var nextRevision int
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(revision),0)+1 FROM agent_task_plans WHERE task_id=$1`, taskID).Scan(&nextRevision); err != nil {
 		return domain.AgentTaskPlan{}, err
@@ -742,6 +775,15 @@ func approveAgentTaskPlanTx(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, 
 	}
 	if task.State != "awaiting_approval" {
 		return domain.AgentTaskPlan{}, ErrConflict
+	}
+	if err := checkAgentWorkflowBudgetTx(ctx, tx, task); err != nil {
+		return domain.AgentTaskPlan{}, err
+	}
+	if task.Workflow.Enabled {
+		plan, e := scanAgentTaskPlan(tx.QueryRow(ctx, `SELECT `+agentTaskPlanColumns+` FROM agent_task_plans WHERE id=$1 AND task_id=$2`, planID, task.ID))
+		if e != nil || requireAgentWorkflowCriteriaTx(ctx, tx, task, plan.Sections) != nil {
+			return domain.AgentTaskPlan{}, ErrInvalidAgentTaskPlan
+		}
 	}
 	classification, err := latestAgentTaskClassification(ctx, tx, task.ID)
 	if err != nil {
@@ -1226,7 +1268,7 @@ func (s *PostgresStore) RetryAgentTaskSource(ctx context.Context, actor, tenantS
 
 func scanAgentTask(row rowScanner) (domain.AgentTask, error) {
 	var item domain.AgentTask
-	err := row.Scan(&item.ID, &item.TenantID, &item.InstallationID, &item.Provider, &item.APIBaseURL, &item.Repository, &item.OriginKind, &item.OriginNumber, &item.OriginRevision, &item.Intent, &item.PolicyRevision, &item.MaxAttempts, &item.MaxExecutionSeconds, &item.MaxFeedbackCycles, &item.ExecutorProfile, &item.DecisionBackend, &item.FeedbackCycle, &item.ExecutionBranch, &item.ParentTaskID, &item.ParentAttemptID, &item.SourceState, &item.SourceBaseRef, &item.SourceBaseSHA, &item.SourceCapturedAt, &item.State, &item.Revision, &item.RequestedBy, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.TenantID, &item.InstallationID, &item.Provider, &item.APIBaseURL, &item.Repository, &item.OriginKind, &item.OriginNumber, &item.OriginRevision, &item.Intent, &item.PolicyRevision, &item.MaxAttempts, &item.MaxExecutionSeconds, &item.MaxFeedbackCycles, &item.ExecutorProfile, &item.DecisionBackend, &item.FeedbackCycle, &item.ExecutionBranch, &item.ParentTaskID, &item.ParentAttemptID, &item.SourceState, &item.SourceBaseRef, &item.SourceBaseSHA, &item.SourceCapturedAt, &item.State, &item.Revision, &item.RequestedBy, &item.CreatedAt, &item.UpdatedAt, &item.Workflow)
 	return item, err
 }
 
@@ -1246,7 +1288,7 @@ func scanAgentTaskPlan(row rowScanner) (domain.AgentTaskPlan, error) {
 }
 
 func validateAgentTaskPlanIntegrity(plan domain.AgentTaskPlan) error {
-	if plan.Sections != (domain.AgentTaskPlanSections{}) && (!plan.Sections.Valid() || plan.Sections.Summary() != plan.Summary) {
+	if (plan.Sections.Objective != "" || plan.Sections.Scope != "" || plan.Sections.Verification != "" || plan.Sections.Risks != "" || plan.Sections.Unknowns != "" || len(plan.Sections.AcceptanceCriteria) > 0) && (!plan.Sections.Valid() || plan.Sections.Summary() != plan.Summary) {
 		return fmt.Errorf("agent task plan sections disagree with approved summary")
 	}
 	digest := sha256.Sum256([]byte(plan.Summary))
@@ -1271,7 +1313,7 @@ func (s *PostgresStore) LoadAgentTaskSourceTarget(ctx context.Context, taskID uu
 		&target.Task.ID, &target.Task.TenantID, &target.Task.InstallationID, &target.Task.Provider, &target.Task.APIBaseURL, &target.Task.Repository,
 		&target.Task.OriginKind, &target.Task.OriginNumber, &target.Task.OriginRevision, &target.Task.Intent, &target.Task.PolicyRevision,
 		&target.Task.MaxAttempts, &target.Task.MaxExecutionSeconds, &target.Task.MaxFeedbackCycles, &target.Task.ExecutorProfile, &target.Task.DecisionBackend, &target.Task.FeedbackCycle, &target.Task.ExecutionBranch, &target.Task.ParentTaskID, &target.Task.ParentAttemptID, &target.Task.SourceState, &target.Task.SourceBaseRef, &target.Task.SourceBaseSHA,
-		&target.Task.SourceCapturedAt, &target.Task.State, &target.Task.Revision, &target.Task.RequestedBy, &target.Task.CreatedAt, &target.Task.UpdatedAt,
+		&target.Task.SourceCapturedAt, &target.Task.State, &target.Task.Revision, &target.Task.RequestedBy, &target.Task.CreatedAt, &target.Task.UpdatedAt, &target.Task.Workflow,
 		&target.InstallationExternalID, &target.CredentialRef,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1282,7 +1324,7 @@ func (s *PostgresStore) LoadAgentTaskSourceTarget(ctx context.Context, taskID uu
 	}
 	if target.Task.OriginKind == "pull_request" {
 		var feedback domain.AgentTaskFeedbackBinding
-		err = s.pool.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256 FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, taskID).Scan(&feedback.CommentExternalID, &feedback.ActorExternalID, &feedback.InstructionSHA256)
+		err = s.pool.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256,source_review_run_id,system_instruction FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, taskID).Scan(&feedback.CommentExternalID, &feedback.ActorExternalID, &feedback.InstructionSHA256, &feedback.SourceReviewRunID, &feedback.SystemInstruction)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.AgentTaskSourceTarget{}, ErrInvalidAgentTask
 		}
@@ -1358,9 +1400,12 @@ func (s *PostgresStore) RecordAgentTaskSourceSnapshot(ctx context.Context, taskI
 			return domain.AgentTask{}, ErrInvalidAgentTask
 		}
 		var binding domain.AgentTaskFeedbackBinding
-		err = tx.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256 FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, taskID).Scan(&binding.CommentExternalID, &binding.ActorExternalID, &binding.InstructionSHA256)
+		err = tx.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256,source_review_run_id,system_instruction FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, taskID).Scan(&binding.CommentExternalID, &binding.ActorExternalID, &binding.InstructionSHA256, &binding.SourceReviewRunID, &binding.SystemInstruction)
 		if err != nil {
 			return domain.AgentTask{}, fmt.Errorf("load agent feedback evidence: %w", err)
+		}
+		if binding.SourceReviewRunID != nil && !internalReviewBindingMatches(*snapshot.Feedback, binding) {
+			return domain.AgentTask{}, ErrInvalidAgentTask
 		}
 		digest := sha256.Sum256([]byte(strings.TrimSpace(snapshot.Feedback.Instruction)))
 		if snapshot.Feedback.CommentExternalID != binding.CommentExternalID || snapshot.Feedback.ActorExternalID != binding.ActorExternalID || hex.EncodeToString(digest[:]) != binding.InstructionSHA256 {
@@ -1396,10 +1441,26 @@ func (s *PostgresStore) RecordAgentTaskSourceSnapshot(ctx context.Context, taskI
 			}
 		}
 	}
+	if task.Workflow.Enabled && snapshot.GeneratedPlan != nil {
+		classification, classErr := latestAgentTaskClassification(ctx, tx, task.ID)
+		if classErr != nil {
+			return domain.AgentTask{}, classErr
+		}
+		if classification.Decision == "requires_human" {
+			if err = recordGeneratedAgentPlanTx(ctx, tx, &task, *snapshot.GeneratedPlan); err != nil {
+				return domain.AgentTask{}, err
+			}
+		}
+	}
 	// The acknowledgement is intentionally early and cannot know the provider
 	// revision or model verdict. Publish the terminal source-admission result on
 	// first capture as well as retry, with one stable status marker per task.
-	if err = queueAgentTaskSourceProviderComment(ctx, tx, task, "ready", "", ""); err != nil {
+	if err = queueAgentTaskSourceProviderComment(ctx, tx, task, func() string {
+		if task.State == "awaiting_approval" {
+			return "plan"
+		}
+		return "ready"
+	}(), "", ""); err != nil {
 		return domain.AgentTask{}, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO audit_events(tenant_id,actor_subject,action,target,metadata) VALUES($1,'worker:agent-task-source-admitter','agent_task.source_captured',$2,jsonb_build_object('base_ref',$3::text,'base_sha',$4::text,'revision',$5::int))`, task.TenantID, task.ID.String(), snapshot.BaseRef, snapshot.BaseSHA, task.Revision); err != nil {
@@ -1515,10 +1576,34 @@ func (s *PostgresStore) ClaimAgentTaskAttempt(ctx context.Context, workerID stri
 	var attempt domain.AgentTaskAttempt
 	attempt, err = scanAgentTaskAttempt(tx.QueryRow(ctx, `SELECT `+agentTaskAttemptColumns+` FROM agent_task_attempts WHERE task_id=$1 AND task_revision=$2 AND plan_id=$3 AND plan_revision=$4 FOR UPDATE`, request.TaskID, request.TaskRevision, request.PlanID, request.PlanRevision))
 	if errors.Is(err, pgx.ErrNoRows) {
+		if e := checkAgentWorkflowBudgetTx(ctx, tx, task); e != nil {
+			if !errors.Is(e, ErrInvalidAgentTaskPlan) {
+				return nil, e
+			}
+			if stopErr := stopAgentWorkflowBudgetTx(ctx, tx, task, uuid.Nil); stopErr != nil {
+				return nil, stopErr
+			}
+			if commitErr := tx.Commit(ctx); commitErr != nil {
+				return nil, commitErr
+			}
+			return nil, ErrNoQueuedAgentTask
+		}
 		interval := fmt.Sprintf("%f seconds", lease.Seconds())
 		attempt, err = scanAgentTaskAttempt(tx.QueryRow(ctx, `INSERT INTO agent_task_attempts(task_id,plan_id,task_revision,plan_revision,attempt,state,worker_id,locked_until,deadline_at,started_at) VALUES($1,$2,$3,$4,1,'running',$5,LEAST(now()+$6::interval,now()+$7::interval),now()+$7::interval,now()) RETURNING `+agentTaskAttemptColumns, request.TaskID, request.PlanID, request.TaskRevision, request.PlanRevision, workerID, interval, executionInterval))
 	} else if err == nil {
 		if !canReclaimAgentAttempt(attempt, task.MaxAttempts, time.Now()) {
+			return nil, ErrNoQueuedAgentTask
+		}
+		if e := checkAgentWorkflowBudgetTx(ctx, tx, task); e != nil {
+			if !errors.Is(e, ErrInvalidAgentTaskPlan) {
+				return nil, e
+			}
+			if stopErr := stopAgentWorkflowBudgetTx(ctx, tx, task, attempt.ID); stopErr != nil {
+				return nil, stopErr
+			}
+			if commitErr := tx.Commit(ctx); commitErr != nil {
+				return nil, commitErr
+			}
 			return nil, ErrNoQueuedAgentTask
 		}
 		interval := fmt.Sprintf("%f seconds", lease.Seconds())
@@ -1649,7 +1734,7 @@ func (s *PostgresStore) LoadAgentTaskAttemptTarget(ctx context.Context, attemptI
 	target := domain.AgentTaskAttemptTarget{Attempt: attempt, Task: task, Plan: plan}
 	if task.OriginKind == "pull_request" {
 		var binding domain.AgentTaskFeedbackBinding
-		err = s.pool.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256 FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, task.ID).Scan(&binding.CommentExternalID, &binding.ActorExternalID, &binding.InstructionSHA256)
+		err = s.pool.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256,source_review_run_id,system_instruction FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, task.ID).Scan(&binding.CommentExternalID, &binding.ActorExternalID, &binding.InstructionSHA256, &binding.SourceReviewRunID, &binding.SystemInstruction)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !binding.Valid()) {
 			return domain.AgentTaskAttemptTarget{}, ErrInvalidAgentTask
 		}
@@ -1910,6 +1995,11 @@ func (s *PostgresStore) RecordAgentTaskAdapterEvent(ctx context.Context, event d
 	}
 	if _, err = tx.Exec(ctx, `UPDATE agent_tasks SET state=$2,revision=revision+1,updated_at=now() WHERE id=$1 AND state='executing'`, task.ID, taskState); err != nil {
 		return domain.AgentTaskAttempt{}, false, fmt.Errorf("complete agent task from adapter: %w", err)
+	}
+	if event.Kind == "completed" {
+		if err = recordAgentDeliveryTx(ctx, tx, task, attempt); err != nil {
+			return domain.AgentTaskAttempt{}, false, err
+		}
 	}
 	if err = queueAgentTaskAdapterTerminalStatus(ctx, tx, task, attempt, event); err != nil {
 		return domain.AgentTaskAttempt{}, false, err
@@ -2608,7 +2698,7 @@ func queueAgentTaskAttemptProviderComment(ctx context.Context, tx pgx.Tx, taskID
 		"installation_external_id": installation.ExternalID, "credential_ref": installation.CredentialRef,
 		"repository": repository, "review_number": issueNumber, "resource_kind": "issue", "comment_external_id": "",
 		"reaction": domain.InteractionReactionNone, "body": body,
-		"marker": "open-review-platform:agent-task-attempt:" + attemptID.String(), "marker_since": markerSince.UTC().Format(time.RFC3339Nano),
+		"marker": agentAttemptPublicationMarker(attemptID, status), "marker_since": markerSince.UTC().Format(time.RFC3339Nano),
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO outbox_messages(aggregate_type,aggregate_id,topic,dedupe_key,payload) VALUES('agent_task_attempt',$1,'review.interaction.response',$2,$3::jsonb) ON CONFLICT(dedupe_key) DO NOTHING`, attemptID, "agent-task-attempt:"+attemptID.String()+":"+status, jsonPayload(payload)); err != nil {
 		return fmt.Errorf("queue agent task attempt status: %w", err)
@@ -2997,7 +3087,8 @@ func (s *PostgresStore) SaveAgentTaskPolicy(ctx context.Context, actor, tenantSl
 	}
 	var currentRevision int
 	var currentBackend string
-	err = tx.QueryRow(ctx, `SELECT revision,decision_backend FROM agent_task_policies WHERE tenant_id=$1 AND provider=$2 AND api_base_url=$3 AND repository=$4 FOR UPDATE`, tenantID, input.Provider, input.APIBaseURL, input.Repository).Scan(&currentRevision, &currentBackend)
+	var currentWorkflow domain.AgentWorkflowPolicy
+	err = tx.QueryRow(ctx, `SELECT revision,decision_backend,workflow FROM agent_task_policies WHERE tenant_id=$1 AND provider=$2 AND api_base_url=$3 AND repository=$4 FOR UPDATE`, tenantID, input.Provider, input.APIBaseURL, input.Repository).Scan(&currentRevision, &currentBackend, &currentWorkflow)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if input.Revision != 0 {
 			return domain.AgentTaskPolicy{}, ErrRevisionConflict
@@ -3021,7 +3112,19 @@ func (s *PostgresStore) SaveAgentTaskPolicy(ctx context.Context, actor, tenantSl
 	if err != nil {
 		return domain.AgentTaskPolicy{}, fmt.Errorf("save agent task policy: %w", err)
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO audit_events(tenant_id,actor_subject,action,target,metadata) VALUES($1,$2,'agent_task.policy_saved',$3,jsonb_build_object('provider',$4::text,'api_base_url',$5::text,'repository',$6::text,'mode',$7::text,'max_attempts',$8::int,'max_execution_seconds',$9::int,'max_feedback_cycles',$10::int,'executor_profile',$11::text,'decision_backend',$12::text,'auto_admission_enabled',$13::boolean,'auto_admission_label',$14::text,'revision',$15::int))`, tenantID, actor, result.ID.String(), result.Provider, result.APIBaseURL, result.Repository, result.Mode, result.MaxAttempts, result.MaxExecutionSeconds, result.MaxFeedbackCycles, result.ExecutorProfile, result.DecisionBackend, result.AutoAdmissionEnabled, result.AutoAdmissionLabel, result.Revision); err != nil {
+	workflow := currentWorkflow
+	if input.Workflow != nil {
+		workflow = *input.Workflow
+	}
+	if !workflow.Valid() {
+		return domain.AgentTaskPolicy{}, ErrInvalidAgentTask
+	}
+	workflowJSON, _ := json.Marshal(workflow)
+	if _, err = tx.Exec(ctx, `UPDATE agent_task_policies SET workflow=$2 WHERE id=$1`, result.ID, workflowJSON); err != nil {
+		return domain.AgentTaskPolicy{}, err
+	}
+	result.Workflow = workflow
+	if _, err = tx.Exec(ctx, `INSERT INTO audit_events(tenant_id,actor_subject,action,target,metadata) VALUES($1,$2,'agent_task.policy_saved',$3,jsonb_build_object('provider',$4::text,'api_base_url',$5::text,'repository',$6::text,'mode',$7::text,'max_attempts',$8::int,'max_execution_seconds',$9::int,'max_feedback_cycles',$10::int,'executor_profile',$11::text,'decision_backend',$12::text,'auto_admission_enabled',$13::boolean,'auto_admission_label',$14::text,'revision',$15::int,'workflow',$16::jsonb))`, tenantID, actor, result.ID.String(), result.Provider, result.APIBaseURL, result.Repository, result.Mode, result.MaxAttempts, result.MaxExecutionSeconds, result.MaxFeedbackCycles, result.ExecutorProfile, result.DecisionBackend, result.AutoAdmissionEnabled, result.AutoAdmissionLabel, result.Revision, workflowJSON); err != nil {
 		return domain.AgentTaskPolicy{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -3032,6 +3135,6 @@ func (s *PostgresStore) SaveAgentTaskPolicy(ctx context.Context, actor, tenantSl
 
 func scanAgentTaskPolicy(row rowScanner) (domain.AgentTaskPolicy, error) {
 	var item domain.AgentTaskPolicy
-	err := row.Scan(&item.ID, &item.Provider, &item.APIBaseURL, &item.Repository, &item.Mode, &item.MaxAttempts, &item.MaxExecutionSeconds, &item.MaxFeedbackCycles, &item.ExecutorProfile, &item.DecisionBackend, &item.AutoAdmissionEnabled, &item.AutoAdmissionLabel, &item.Revision, &item.UpdatedBy, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.Provider, &item.APIBaseURL, &item.Repository, &item.Mode, &item.MaxAttempts, &item.MaxExecutionSeconds, &item.MaxFeedbackCycles, &item.ExecutorProfile, &item.DecisionBackend, &item.AutoAdmissionEnabled, &item.AutoAdmissionLabel, &item.Revision, &item.UpdatedBy, &item.UpdatedAt, &item.Workflow)
 	return item, err
 }

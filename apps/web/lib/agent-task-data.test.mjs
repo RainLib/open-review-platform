@@ -128,6 +128,7 @@ test("Agent task live refresh follows only autonomous progress", () => {
   assert.equal(agentTaskNeedsLiveRefresh([task("awaiting_approval"), task("completed")]), false);
   assert.equal(agentTaskNeedsLiveRefresh([task("needs_attention")]), false);
   assert.equal(agentTaskNeedsLiveRefresh([], task("executing")), true);
+  assert.equal(agentTaskNeedsLiveRefresh([], {...task("completed"), workflow:{enabled:true}}), true);
 });
 
 test("structured Agent plans require each approval boundary before submission", () => {
@@ -139,6 +140,9 @@ test("structured Agent plans require each approval boundary before submission", 
     unknowns: "None after source review.",
   };
   assert.equal(agentPlanSectionsValid(sections), true);
+  assert.equal(agentPlanSectionsValid({...sections,acceptance_criteria:["Regression passes"]}), true);
+  assert.equal(agentPlanSectionsValid({...sections,acceptance_criteria:[""]}), false);
+  assert.equal(agentPlanSectionsValid({...sections,acceptance_criteria:Array(21).fill("Criterion")}), false);
   assert.equal(agentPlanSectionsValid({ ...sections, verification: "" }), false);
   assert.equal(agentPlanSectionsValid({ ...sections, objective: "short" }), false);
   assert.equal(agentPlanSectionsValid({ ...sections, risks: "x".repeat(4001) }), false);

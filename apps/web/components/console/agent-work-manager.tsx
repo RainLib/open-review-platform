@@ -264,6 +264,10 @@ function PolicyForm({
   const [policyLookupAttempt, setPolicyLookupAttempt] = useState(0);
   const [mode, setMode] = useState<AgentTaskPolicy["mode"]>("disabled");
   const [maxAttempts, setMaxAttempts] = useState(1);
+  const [workflowEnabled, setWorkflowEnabled] = useState(false);
+  const [repairCycles, setRepairCycles] = useState(2);
+  const [taskAttempts, setTaskAttempts] = useState(3);
+  const [requiredChecks, setRequiredChecks] = useState("");
   const [maxExecutionSeconds, setMaxExecutionSeconds] = useState(1800);
   const [maxFeedbackCycles, setMaxFeedbackCycles] = useState(0);
   const [executorProfile, setExecutorProfile] = useState<"codex" | "claude">("codex");
@@ -335,6 +339,10 @@ function PolicyForm({
     // policy starts from the narrowest safe defaults instead.
     setMode(existing?.mode ?? "disabled");
     setMaxAttempts(existing?.max_attempts ?? 1);
+    setWorkflowEnabled(existing?.workflow?.enabled ?? false);
+    setRepairCycles(existing?.workflow?.max_repair_cycles ?? 2);
+    setTaskAttempts(existing?.workflow?.max_task_attempts ?? 3);
+    setRequiredChecks(existing?.workflow?.required_checks?.join(", ") ?? "");
     setMaxExecutionSeconds(existing?.max_execution_seconds ?? 1800);
     setMaxFeedbackCycles(existing?.max_feedback_cycles ?? 0);
     setExecutorProfile(existing?.executor_profile ?? "codex");
@@ -401,7 +409,8 @@ function PolicyForm({
               api_base_url: baseURL,
               repository,
               mode,
-              max_attempts: maxAttempts,
+              workflow: workflowEnabled && mode === "manual" ? {enabled:true,max_repair_cycles:repairCycles,max_task_attempts:taskAttempts,required_checks:requiredChecks.split(",").map(value=>value.trim()).filter(Boolean)} : {enabled:false,max_repair_cycles:0,max_task_attempts:0},
+max_attempts: maxAttempts,
               max_execution_seconds: maxExecutionSeconds,
               max_feedback_cycles: mode === "manual" ? maxFeedbackCycles : 0,
               executor_profile: executorProfile,
@@ -507,6 +516,16 @@ function PolicyForm({
           </p>
         ) : null}
       </div>
+      <fieldset className="grid gap-3 rounded-xl border border-[var(--ls-line)] p-4 sm:col-span-2">
+        <legend className="px-1 text-sm font-semibold">Task delivery workflow</legend>
+        <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={workflowEnabled} disabled={disabled || pending || mode !== "manual"} onChange={event=>setWorkflowEnabled(event.target.checked)} />Auto-plan, verify and repair, re-review, then human acceptance</label>
+        {workflowEnabled ? <>
+          <label className="grid gap-1 text-xs">Verification repair cycles<input className="luminous-focus h-10 rounded-lg border border-[var(--ls-line)] px-3" type="number" min={0} max={3} value={repairCycles} disabled={disabled || pending} onChange={event=>setRepairCycles(Number(event.target.value))} /></label>
+          <label className="grid gap-1 text-xs">Total attempts across plans and feedback<input className="luminous-focus h-10 rounded-lg border border-[var(--ls-line)] px-3" type="number" min={1} max={5} value={taskAttempts} disabled={disabled || pending} onChange={event=>setTaskAttempts(Number(event.target.value))} /></label>
+          <label className="grid gap-1 text-xs">Required independent CI checks, separated by commas<input className="luminous-focus h-10 rounded-lg border border-[var(--ls-line)] px-3" value={requiredChecks} maxLength={1800} disabled={disabled || pending} onChange={event=>setRequiredChecks(event.target.value)} placeholder="CI / tests, CI / build" /></label>
+          <p className="text-xs leading-5 text-[var(--ls-text-secondary)]">New tasks require a deployment-approved verification profile. Initial and review repair plans still need owner/admin approval. Blocking review findings prepare a new repair task automatically. A blank CI list requires at least one independent check and all observed independent checks to pass. Existing task budgets stay frozen.</p>
+        </> : null}
+      </fieldset>
       <select
         aria-label="Agent executor profile"
         className="luminous-focus h-10 min-w-0 rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm"
@@ -689,7 +708,7 @@ function PolicyForm({
         Manual mode still requires classification, a bounded plan, and owner/admin approval.
       </p>
 	  <label className="grid gap-1.5 text-sm font-medium text-[var(--ls-text)] sm:col-span-2">
-		Bounded Draft PR feedback cycles
+		Bounded manual Draft PR feedback cycles
 		<select
 		  className="h-10 rounded-[10px] border border-[var(--ls-line)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)] disabled:cursor-not-allowed disabled:opacity-55"
 		  disabled={disabled || pending || mode !== "manual"}
@@ -730,7 +749,7 @@ function PolicyRow({ policy }: { policy: AgentTaskPolicy }) {
         <p className="mt-1 text-xs text-[var(--ls-text-tertiary)]">
           {policy.executor_profile} · {policy.decision_backend} decision · {policy.max_attempts} {policy.max_attempts === 1 ? "attempt" : "attempts"} ·{" "}
           {Math.floor(policy.max_execution_seconds / 60)} min maximum
-		  {policy.max_feedback_cycles ? ` · ${policy.max_feedback_cycles} feedback cycle${policy.max_feedback_cycles === 1 ? "" : "s"}` : " · feedback disabled"}
+		  {policy.max_feedback_cycles ? ` · ${policy.max_feedback_cycles} feedback cycle${policy.max_feedback_cycles === 1 ? "" : "s"}` : " · manual feedback disabled"}
         </p>
       </div>
       <ModePill mode={policy.mode} />
@@ -772,7 +791,7 @@ function TaskRow({
         <p className="mt-1 text-xs text-[var(--ls-text-tertiary)]">
           frozen envelope · {task.executor_profile} · {task.max_attempts} {task.max_attempts === 1 ? "attempt" : "attempts"} ·{" "}
           {Math.floor(task.max_execution_seconds / 60)} min
-		  {task.feedback_cycle ? ` · feedback cycle ${task.feedback_cycle}/${task.max_feedback_cycles}` : ""}
+		  {task.feedback_cycle ? ` · feedback depth ${task.feedback_cycle}` : ""}
         </p>
       </div>
       <StatePill state={task.state} />
@@ -839,7 +858,7 @@ function TaskInspector({
         repository: detail.task.repository,
         issue_number: detail.task.origin_number,
       });
-  const feedbackTarget = detail.feedback && detail.task.origin_kind === "pull_request"
+  const feedbackTarget = detail.feedback && !detail.feedback.source_review_run_id && detail.task.origin_kind === "pull_request"
     ? providerReviewCommentTarget({
         provider: detail.task.provider,
         api_base_url: detail.task.api_base_url,
@@ -894,7 +913,7 @@ function TaskInspector({
           Frozen policy v{detail.task.policy_revision} · {detail.task.decision_backend} decision · {detail.task.executor_profile} · {detail.task.max_attempts}{" "}
           {detail.task.max_attempts === 1 ? "attempt" : "attempts"} · up to{" "}
           {Math.floor(detail.task.max_execution_seconds / 60)} min per attempt
-		  {detail.task.feedback_cycle ? ` · feedback cycle ${detail.task.feedback_cycle}/${detail.task.max_feedback_cycles}` : detail.task.max_feedback_cycles ? ` · up to ${detail.task.max_feedback_cycles} Draft PR feedback cycles` : " · Draft PR feedback disabled"}
+		  {detail.task.feedback_cycle ? ` · feedback depth ${detail.task.feedback_cycle}` : detail.task.max_feedback_cycles ? ` · up to ${detail.task.max_feedback_cycles} Draft PR feedback cycles` : " · manual Draft PR feedback disabled"}
         </p>
       </div>
       <div className="space-y-5 p-5">
@@ -902,12 +921,19 @@ function TaskInspector({
           <section className="rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]">
               <ExternalLink className="size-4 text-[var(--ls-accent)]" />
-              Original review feedback
+              {detail.feedback.source_review_run_id ? "Blocking review result" : "Original review feedback"}
             </h3>
             <p className="mt-2 text-sm leading-6 text-[var(--ls-text-secondary)]">
-              This cycle is bound to comment #{detail.feedback.comment_external_id} by provider user #{detail.feedback.actor_external_id}. The instruction is checked again before execution and publication.
+              {detail.feedback.source_review_run_id
+                ? "This repair is bound to the retained review findings and exact Draft commit. The current Draft is checked again before execution and publication; this plan requires its own approval."
+                : `This cycle is bound to comment #${detail.feedback.comment_external_id} by provider user #${detail.feedback.actor_external_id}. The instruction is checked again before execution and publication.`}
             </p>
-            {feedbackTarget ? (
+            {detail.feedback.source_review_run_id ? (
+              <Link className="luminous-focus mt-2 inline-flex min-h-8 items-center gap-1.5 text-sm font-semibold text-[var(--ls-accent)]"
+                href={`/${encodeURIComponent(org)}/reviews/${encodeURIComponent(detail.feedback.source_review_run_id)}`}>
+                Inspect the exact review findings
+              </Link>
+            ) : feedbackTarget ? (
               <a
                 className="luminous-focus mt-2 inline-flex min-h-8 items-center gap-1.5 rounded-[8px] text-sm font-semibold text-[var(--ls-accent)] underline-offset-4 hover:underline"
                 href={feedbackTarget.url}
@@ -975,6 +1001,7 @@ function TaskInspector({
             </p>
           </section>
         ) : null}
+        <AcceptanceControls key={`${detail.task.id}:${detail.acceptance?.head_sha}:${detail.acceptance?.revision}`} detail={detail} disabled={disabled} onChanged={onChanged} org={org} />
         <section className="rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]">
             <ShieldCheck className="size-4 text-[var(--ls-accent)]" />
@@ -1382,6 +1409,7 @@ function PlanControls({
   onChanged: (message: string) => void;
   org: string;
 }) {
+  const [acceptanceText,setAcceptanceText]=useState(newestPlan?.sections?.acceptance_criteria?.join("\n") ?? "");
   const [sections, setSections] = useState<AgentTaskPlanSections>({
     objective: "", scope: "", verification: "", risks: "", unknowns: "",
   });
@@ -1400,13 +1428,14 @@ function PlanControls({
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sections }),
+            body: JSON.stringify({ sections: {...sections,acceptance_criteria:acceptanceText.split("\n").map(value=>value.trim()).filter(Boolean)} }),
           },
         );
         if (!response.ok) {
           setError(await mutationError(response, "The plan was not saved. Refresh and try again."));
           return;
         }
+        setAcceptanceText("");
         setSections({ objective: "", scope: "", verification: "", risks: "", unknowns: "" });
         onChanged("Plan recorded. It now waits for explicit owner/admin approval.");
       } catch {
@@ -1460,6 +1489,7 @@ function PlanControls({
           ) : (
             <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[var(--ls-text-secondary)]">{newestPlan.summary}</p>
           )}
+          {newestPlan.sections?.acceptance_criteria?.length ? <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs">{newestPlan.sections.acceptance_criteria.map((criterion,index)=><li key={index}>{criterion}</li>)}</ol> : null}
           <p className="mt-2 text-xs text-[var(--ls-text-tertiary)]">
             revision {newestPlan.revision} · {newestPlan.state}
           </p>
@@ -1534,12 +1564,13 @@ function PlanControls({
               </label>
             ))}
           </div>
+          <label className="mt-3 grid gap-1 text-xs font-semibold">Acceptance criteria (one per line)<textarea className="luminous-focus min-h-20 rounded-lg border border-[var(--ls-line)] p-3 text-sm font-normal" value={acceptanceText} disabled={disabled || pending} maxLength={12000} onChange={event=>setAcceptanceText(event.target.value)} /></label>
           <p className="mt-2 text-xs text-[var(--ls-text-tertiary)]">
             Complete every section; each accepts up to 4,000 UTF-8 bytes. This exact content is frozen and hashed for approval.
           </p>
           <button
             className="luminous-focus mt-3 inline-flex h-10 items-center gap-2 rounded-[10px] bg-[var(--ls-accent)] px-4 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={disabled || pending || !agentPlanSectionsValid(sections)}
+            disabled={disabled || pending || !agentPlanSectionsValid({...sections,acceptance_criteria:acceptanceText.split("\n").map(value=>value.trim()).filter(Boolean)}) || (detail.task.workflow?.enabled === true && !acceptanceText.trim())}
             onClick={createPlan}
             type="button"
           >
@@ -1571,6 +1602,7 @@ function agentPlanBlockMessage(reason: string | undefined, action: "create" | "a
     case "classification_not_eligible": return guidance.planClassification;
     case "separate_approver_required": return "High-risk plans require a different owner or admin to approve this exact revision.";
     case "no_pending_plan": return "No current plan revision is awaiting approval.";
+    case "execution_budget_exhausted": return "The frozen branch execution budget is exhausted. A policy edit cannot expand this task; a new request needs its own source verification and approval.";
     case "task_not_plannable": return "This task state no longer accepts a new plan.";
     default: return action === "approve"
       ? "Approval is unavailable until the current permissions and plan revision are reloaded."
@@ -1610,7 +1642,7 @@ function ModePill({ mode }: { mode: AgentTaskPolicy["mode"] }) {
 function StatePill({ state }: { state: AgentTask["state"] }) {
   return (
     <span className="rounded-full bg-[var(--ls-surface-muted)] px-2 py-1 text-[11px] font-semibold capitalize text-[var(--ls-text-secondary)]">
-      {state.replaceAll("_", " ")}
+      {state === "completed" ? "Draft delivered" : state.replaceAll("_", " ")}
     </span>
   );
 }
@@ -1647,5 +1679,99 @@ function NoticeBanner({ notice }: { notice: Exclude<Notice, undefined> }) {
       <AlertTriangle className="mt-0.5 size-4 shrink-0" />
       {notice.message}
     </div>
+  );
+}
+
+function AcceptanceControls({ detail, disabled, onChanged, org }: {
+  detail: AgentTaskDetail;
+  disabled: boolean;
+  onChanged: (message: string) => void;
+  org: string;
+}) {
+  const [evidence, setEvidence] = useState<Record<number, string>>({});
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string>();
+  const [pending, startTransition] = useTransition();
+  const acceptance = detail.acceptance;
+  if (!acceptance) return null;
+  const canDecide = acceptance.can_decide === true;
+  const decide = (decision: "accepted" | "changes_requested") => startTransition(async () => {
+    setError(undefined);
+    try {
+      const response = await fetch(
+        `/api/tenants/${encodeURIComponent(org)}/agent-tasks/${encodeURIComponent(detail.task.id)}/acceptance`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            revision: acceptance.revision, head_sha: acceptance.head_sha, decision, reason,
+            evidence: decision === "accepted" ? acceptance.criteria.map((_, index) => evidence[index] ?? "") : [],
+          }),
+        },
+      );
+      if (!response.ok) {
+        setError(await mutationError(response, "Acceptance changed; refresh the task."));
+        return;
+      }
+      setEvidence({});
+      setReason("");
+      onChanged(decision === "accepted"
+        ? "Requirement acceptance recorded for this exact commit."
+        : "Changes requested. Submit an approved feedback cycle on the existing Draft.");
+    } catch {
+      setError("Acceptance could not be saved. Check the connection and retry.");
+    }
+  });
+  return (
+    <section className="space-y-3 rounded-xl border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">
+      <h3 className="text-sm font-semibold">Requirement acceptance · {acceptance.state.replaceAll("_", " ")}</h3>
+      <p className="break-all font-mono text-[11px] text-[var(--ls-text-tertiary)]">Commit {acceptance.head_sha}</p>
+      <p className="text-xs leading-5 text-[var(--ls-text-secondary)]">{acceptance.reason}</p>
+      <p className="text-xs leading-5 text-[var(--ls-text-secondary)]">
+        Draft delivery is separate from requirement completion. Verify each criterion at this commit; owner or administrator approval is required.
+      </p>
+      {acceptance.criteria.map((criterion, index) => (
+        <label className="grid gap-1 text-xs" key={`${acceptance.head_sha}:${index}`}>
+          <span>{index + 1}. {criterion}</span>
+          {canDecide ? (
+            <textarea
+              className="luminous-focus min-h-20 rounded-lg border border-[var(--ls-line)] p-2"
+              maxLength={2000} value={evidence[index] ?? ""} disabled={disabled || pending}
+              onChange={event => setEvidence(values => ({ ...values, [index]: event.target.value }))}
+              placeholder="Test result or observation supporting this criterion"
+            />
+          ) : acceptance.evidence?.[index] ? (
+            <p className="font-normal text-[var(--ls-text-secondary)]">{acceptance.evidence[index]}</p>
+          ) : null}
+        </label>
+      ))}
+      {canDecide ? (
+        <>
+          <label className="grid gap-1 text-xs">Decision reason
+            <textarea className="luminous-focus min-h-20 rounded-lg border border-[var(--ls-line)] p-2"
+              maxLength={2000} value={reason} disabled={disabled || pending}
+              onChange={event => setReason(event.target.value)} />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button className="luminous-focus rounded-lg border border-[var(--ls-line)] px-3 py-2 text-xs"
+              disabled={disabled || pending || acceptance.state !== "awaiting_acceptance" || reason.trim().length < 3 || acceptance.criteria.some((_, index) => (evidence[index] ?? "").trim().length < 3)}
+              onClick={() => decide("accepted")}>Accept requirements</button>
+            <button className="luminous-focus rounded-lg border border-[var(--ls-line)] px-3 py-2 text-xs"
+              disabled={disabled || pending || reason.trim().length < 3}
+              onClick={() => decide("changes_requested")}>Request changes</button>
+          </div>
+        </>
+      ) : null}
+      {acceptance.remediation_task_id ? (
+        <Link className="inline-flex text-xs font-semibold text-[var(--ls-accent)]"
+          href={`/${encodeURIComponent(org)}/agent-work?task=${encodeURIComponent(acceptance.remediation_task_id)}`}>
+          Open the automatically prepared review repair plan
+        </Link>
+      ) : null}
+      {acceptance.state === "changes_requested" ? (
+        <p className="text-xs">On the existing Draft, use <code>@openreview revise &lt;feedback&gt;</code>. The new plan needs approval and the new commit will be reviewed again.</p>
+      ) : null}
+      {error ? <p role="alert" className="text-xs text-[var(--ls-danger-text)]">{error}</p> : null}
+    </section>
   );
 }

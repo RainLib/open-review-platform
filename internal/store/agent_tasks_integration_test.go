@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -432,7 +433,7 @@ func TestAgentTasksAreDisabledByDefaultAndRequirePolicyPlanApproval(t *testing.T
 	if err != nil || plan.Revision != stalePlan.Revision+1 {
 		t.Fatalf("replacement plan=%#v error=%v", plan, err)
 	}
-	if plan.Sections != sections || plan.Summary != sections.Summary() {
+	if !reflect.DeepEqual(plan.Sections, sections) || plan.Summary != sections.Summary() {
 		t.Fatalf("structured plan did not persist its canonical approval contract: %#v", plan)
 	}
 	var sourceAndPlanMessages, sourceAndPlanMarkers, oldestPlanStatusVersion, newestPlanStatusVersion int
@@ -544,7 +545,7 @@ func TestAgentTasksAreDisabledByDefaultAndRequirePolicyPlanApproval(t *testing.T
 		t.Fatalf("late approval comment published=%d error=%v", lateApprovalPublications, err)
 	}
 	target, err := postgres.LoadAgentTaskAttemptTarget(ctx, attempt.ID, "agent-worker")
-	if err != nil || target.Plan.Sections != sections || target.Plan.Summary != approved.Summary || target.Plan.PlanSHA256 != approved.PlanSHA256 {
+	if err != nil || !reflect.DeepEqual(target.Plan.Sections, sections) || target.Plan.Summary != approved.Summary || target.Plan.PlanSHA256 != approved.PlanSHA256 {
 		t.Fatalf("execution handoff lost approved structured plan: %#v error=%v", target.Plan, err)
 	}
 	if err := postgres.RenewAgentTaskAttemptLease(ctx, attempt.ID, "agent-worker", time.Minute); err != nil {

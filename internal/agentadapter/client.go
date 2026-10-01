@@ -45,9 +45,10 @@ type Submission struct {
 	// adapter must stop at deadline_at; the control plane independently enforces
 	// it when it accepts heartbeats and reaps attempts.
 	Limits struct {
-		MaxAttempts         int    `json:"max_attempts"`
-		MaxExecutionSeconds int    `json:"max_execution_seconds"`
-		DeadlineAt          string `json:"deadline_at"`
+		Workflow            domain.AgentWorkflowPolicy `json:"workflow"`
+		MaxAttempts         int                        `json:"max_attempts"`
+		MaxExecutionSeconds int                        `json:"max_execution_seconds"`
+		DeadlineAt          string                     `json:"deadline_at"`
 	} `json:"limits"`
 }
 
@@ -121,6 +122,7 @@ func (client *Client) Submit(ctx context.Context, target domain.AgentTaskAttempt
 	requestBody.Plan.Revision = target.Plan.Revision
 	requestBody.Plan.SHA256 = target.Plan.PlanSHA256
 	requestBody.Plan.Summary = target.Plan.Summary
+	requestBody.Limits.Workflow = target.Task.Workflow
 	requestBody.Limits.MaxAttempts = target.Task.MaxAttempts
 	requestBody.Limits.MaxExecutionSeconds = target.Task.MaxExecutionSeconds
 	if target.Attempt.DeadlineAt != nil {

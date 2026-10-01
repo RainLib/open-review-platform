@@ -278,6 +278,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tenants/{slug}/agent-tasks/{taskID}/plans", s.createAgentTaskPlan)
 	mux.HandleFunc("POST /v1/tenants/{slug}/agent-tasks/{taskID}/plans/{planID}/approve", s.approveAgentTaskPlan)
 	mux.HandleFunc("POST /v1/tenants/{slug}/agent-tasks/{taskID}/cancel", s.cancelAgentTask)
+	mux.HandleFunc("POST /v1/tenants/{slug}/agent-tasks/{taskID}/acceptance", s.decideAgentTaskAcceptance)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-exceptions", s.createRuleException)
 	mux.HandleFunc("GET /v1/tenants/{slug}/rule-exceptions", s.listRuleExceptions)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-exceptions/{exceptionID}/decisions", s.decideRuleException)
