@@ -56,6 +56,9 @@
 | [25-agent-coding-credential-broker.md](25-agent-coding-credential-broker.md) | 独立编码凭据代理、GitHub/GitLab 配置、信任边界与未完成验收 | 平台、安全、SRE |
 | [25-issue-views-and-filter-contract.md](25-issue-views-and-filter-contract.md) | Issues 保存视图、AND/OR 过滤、权限、分页与真实验收契约 | 产品、前后端、安全、验收负责人 |
 | [26-agentic-issue-to-pr-governance.md](26-agentic-issue-to-pr-governance.md) | Issue/PR 到受治理 Coding Agent、Sandbox、候选 PR、反馈迭代与自动化门控 | 产品、后端、平台、安全、SRE |
+| [27-private-deployment-core-flow-audit.md](27-private-deployment-core-flow-audit.md) | 私有化核心链路审计与证据边界 | 产品、后端、验收负责人 |
+| [28-agent-delivery-workflow-closure.md](28-agent-delivery-workflow-closure.md) | Agent 计划、验证、修复、再审与验收首轮闭环 | 后端、平台、验收负责人 |
+| [29-agent-recovery-and-criterion-evidence.md](29-agent-recovery-and-criterion-evidence.md) | 人工退回、CI 修复、故障恢复与逐项独立证据 | 后端、平台、验收负责人 |
 
 ## 4. 视觉设计稿
 

@@ -47,7 +47,7 @@ func (p Processor) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return true, p.Store.FinishAgentWorkflowObservation(ctx, p.WorkerID, *target, "", "unavailable")
 	}
-	if event.HeadSHA == target.Acceptance.HeadSHA && state == "open" {
+	if event.HeadSHA == target.Acceptance.HeadSHA && (state == "open" || state == "ready") {
 		if err = p.Store.EnsureAgentRereview(ctx, *target, event); err != nil {
 			_ = p.Store.FinishAgentWorkflowObservation(ctx, p.WorkerID, *target, event.HeadSHA, "review_unavailable")
 			return true, err
@@ -128,6 +128,9 @@ func (p Processor) readDraft(ctx context.Context, target store.AgentWorkflowTarg
 		}
 		event.HeadSHA, event.HeadRef, event.BaseSHA, event.BaseRef, event.IsDraft = result.Head.SHA, result.Head.Ref, result.Base.SHA, result.Base.Ref, result.Draft
 		state = result.State
+		if state == "open" && !result.Draft {
+			state = "ready"
+		}
 		if result.Merged {
 			state = "merged"
 		}
@@ -158,10 +161,13 @@ func (p Processor) readDraft(ctx context.Context, target store.AgentWorkflowTarg
 		state = result.State
 		if state == "opened" {
 			state = "open"
+			if !result.Draft {
+				state = "ready"
+			}
 		}
 		event.CloneURL = strings.TrimSuffix(base.String(), "/api/v4") + "/" + job.Repository + ".git"
 	}
-	if state != "open" && state != "merged" && state != "closed" {
+	if state != "open" && state != "ready" && state != "merged" && state != "closed" {
 		return event, "", fmt.Errorf("provider state invalid")
 	}
 	if !validProviderCommit(event.BaseSHA) || !validProviderCommit(event.HeadSHA) || !(domain.AgentTaskSourceSnapshot{BaseRef: event.BaseRef, BaseSHA: event.BaseSHA}).Valid() || !(domain.AgentTaskSourceSnapshot{BaseRef: event.HeadRef, BaseSHA: event.HeadSHA}).Valid() {

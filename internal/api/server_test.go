@@ -1661,6 +1661,19 @@ func TestAgentTaskEndpointsRequireAnExplicitRepositoryPolicyAndPlanApproval(t *t
 	if recorder.Code != http.StatusCreated || !strings.Contains(backend.agentTaskPlanInput.Summary, "smallest bounded change") {
 		t.Fatalf("POST agent plan status=%d body=%s input=%#v", recorder.Code, recorder.Body.String(), backend.agentTaskPlanInput)
 	}
+	full := domain.AgentTaskPlanInput{Sections: &domain.AgentTaskPlanSections{Objective: "Implement the requested bounded fix", Scope: "Keep the original scope", Verification: "Run the fixed verifier", Risks: "Known risks", Unknowns: "Inspect checkout", SourceRequirements: strings.Repeat("<", 16000), RepositoryEvidence: strings.Repeat("<", 16000)}}
+	full.Summary = full.CanonicalSummary()
+	body, err := json.Marshal(full)
+	if err != nil || !full.Valid() || len(body) <= 64<<10 {
+		t.Fatal("full source fixture must be valid and exceed the legacy transport limit")
+	}
+	request = httptest.NewRequest(http.MethodPost, "/v1/tenants/acme/agent-tasks/"+taskID.String()+"/plans", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer user-token")
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated || backend.agentTaskPlanInput.Sections == nil || backend.agentTaskPlanInput.Sections.SourceRequirements != full.Sections.SourceRequirements {
+		t.Fatalf("complete source plan transport failed: status=%d", recorder.Code)
+	}
 
 	request = httptest.NewRequest(http.MethodPost, "/v1/tenants/acme/agent-tasks/"+taskID.String()+"/plans/"+planID.String()+"/approve", strings.NewReader(`{"revision":1}`))
 	request.Header.Set("Content-Type", "application/json")

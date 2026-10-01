@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 
@@ -455,10 +456,10 @@ func (s *PostgresStore) GetAgentTask(ctx context.Context, actor, tenantSlug stri
 		}
 		var feedback domain.AgentTaskFeedbackReference
 		err = s.pool.QueryRow(ctx, `
-			SELECT comment_external_id,actor_external_id,source_review_run_id
+			SELECT comment_external_id,actor_external_id,source_review_run_id,internal_repair_kind
 			FROM agent_task_feedback_cycles
 			WHERE tenant_id=$1 AND child_task_id=$2`, tenantID, taskID).
-			Scan(&feedback.CommentExternalID, &feedback.ActorExternalID, &feedback.SourceReviewRunID)
+			Scan(&feedback.CommentExternalID, &feedback.ActorExternalID, &feedback.SourceReviewRunID, &feedback.InternalRepairKind)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.AgentTaskDetail{}, fmt.Errorf("feedback task has no admitted comment: %w", ErrInvalidAgentTask)
 		}
@@ -580,15 +581,19 @@ func (s *PostgresStore) GetAgentTask(ctx context.Context, actor, tenantSlug stri
 	}
 	acceptance, acceptanceErr := scanAgentAcceptance(s.pool.QueryRow(ctx, `SELECT `+agentAcceptanceColumns+` FROM agent_task_acceptances WHERE task_id=$1`, taskID))
 	if acceptanceErr == nil {
-		acceptance.CanDecide = (role == "owner" || role == "admin") && (acceptance.State == "awaiting_acceptance" || acceptance.State == "checks_failed" || acceptance.State == "changes_requested")
-		if acceptance.ReviewRunID != nil {
-			var childID *uuid.UUID
-			childErr := s.pool.QueryRow(ctx, `SELECT child_task_id FROM agent_task_feedback_cycles WHERE parent_task_id=$1 AND source_review_run_id=$2`, task.ID, acceptance.ReviewRunID).Scan(&childID)
-			if childErr != nil && !errors.Is(childErr, pgx.ErrNoRows) {
-				return domain.AgentTaskDetail{}, childErr
-			}
-			acceptance.RemediationTaskID = childID
+		proofErr := s.pool.QueryRow(ctx, `SELECT verification_criteria FROM agent_task_publication_checkpoints WHERE attempt_id=$1 AND head_sha=$2 ORDER BY attempt_number DESC LIMIT 1`, acceptance.AttemptID, acceptance.HeadSHA).Scan(&acceptance.VerificationCriteria)
+		if proofErr != nil && !errors.Is(proofErr, pgx.ErrNoRows) {
+			return domain.AgentTaskDetail{}, proofErr
 		}
+		acceptance.CanRetryChecks = (role == "owner" || role == "admin") && acceptance.State != "superseded" && acceptance.ReviewRunID != nil
+		acceptance.CanDecide = (role == "owner" || role == "admin") && (acceptance.State == "awaiting_acceptance" || acceptance.State == "checks_failed" || acceptance.State == "changes_requested")
+		var childID *uuid.UUID
+		childErr := s.pool.QueryRow(ctx, `SELECT child_task_id FROM agent_task_feedback_cycles WHERE parent_task_id=$1 AND (source_review_run_id IS NOT NULL OR internal_repair_kind<>'') ORDER BY created_at DESC LIMIT 1`, task.ID).Scan(&childID)
+		if childErr != nil && !errors.Is(childErr, pgx.ErrNoRows) {
+			return domain.AgentTaskDetail{}, childErr
+		}
+		acceptance.RemediationTaskID = childID
+
 		detail.Acceptance = &acceptance
 	} else if !errors.Is(acceptanceErr, pgx.ErrNoRows) {
 		return domain.AgentTaskDetail{}, acceptanceErr
@@ -1324,7 +1329,7 @@ func (s *PostgresStore) LoadAgentTaskSourceTarget(ctx context.Context, taskID uu
 	}
 	if target.Task.OriginKind == "pull_request" {
 		var feedback domain.AgentTaskFeedbackBinding
-		err = s.pool.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256,source_review_run_id,system_instruction FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, taskID).Scan(&feedback.CommentExternalID, &feedback.ActorExternalID, &feedback.InstructionSHA256, &feedback.SourceReviewRunID, &feedback.SystemInstruction)
+		err = s.pool.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256,source_review_run_id,system_instruction,internal_repair_kind,internal_repair_key FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, taskID).Scan(&feedback.CommentExternalID, &feedback.ActorExternalID, &feedback.InstructionSHA256, &feedback.SourceReviewRunID, &feedback.SystemInstruction, &feedback.InternalRepairKind, &feedback.InternalRepairKey)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.AgentTaskSourceTarget{}, ErrInvalidAgentTask
 		}
@@ -1400,11 +1405,11 @@ func (s *PostgresStore) RecordAgentTaskSourceSnapshot(ctx context.Context, taskI
 			return domain.AgentTask{}, ErrInvalidAgentTask
 		}
 		var binding domain.AgentTaskFeedbackBinding
-		err = tx.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256,source_review_run_id,system_instruction FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, taskID).Scan(&binding.CommentExternalID, &binding.ActorExternalID, &binding.InstructionSHA256, &binding.SourceReviewRunID, &binding.SystemInstruction)
+		err = tx.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256,source_review_run_id,system_instruction,internal_repair_kind,internal_repair_key FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, taskID).Scan(&binding.CommentExternalID, &binding.ActorExternalID, &binding.InstructionSHA256, &binding.SourceReviewRunID, &binding.SystemInstruction, &binding.InternalRepairKind, &binding.InternalRepairKey)
 		if err != nil {
 			return domain.AgentTask{}, fmt.Errorf("load agent feedback evidence: %w", err)
 		}
-		if binding.SourceReviewRunID != nil && !internalReviewBindingMatches(*snapshot.Feedback, binding) {
+		if binding.Internal() && !internalReviewBindingMatches(*snapshot.Feedback, binding) {
 			return domain.AgentTask{}, ErrInvalidAgentTask
 		}
 		digest := sha256.Sum256([]byte(strings.TrimSpace(snapshot.Feedback.Instruction)))
@@ -1447,6 +1452,12 @@ func (s *PostgresStore) RecordAgentTaskSourceSnapshot(ctx context.Context, taskI
 			return domain.AgentTask{}, classErr
 		}
 		if classification.Decision == "requires_human" {
+			if snapshot.Issue != nil {
+				snapshot.GeneratedPlan.SourceRequirements = strings.TrimSpace(snapshot.Issue.Body)
+			} else {
+				snapshot.GeneratedPlan.SourceRequirements = strings.TrimSpace(snapshot.Feedback.Instruction)
+			}
+			snapshot.GeneratedPlan.RepositoryEvidence = strings.TrimSpace(snapshot.RepositoryEvidence)
 			if err = recordGeneratedAgentPlanTx(ctx, tx, &task, *snapshot.GeneratedPlan); err != nil {
 				return domain.AgentTask{}, err
 			}
@@ -1734,7 +1745,7 @@ func (s *PostgresStore) LoadAgentTaskAttemptTarget(ctx context.Context, attemptI
 	target := domain.AgentTaskAttemptTarget{Attempt: attempt, Task: task, Plan: plan}
 	if task.OriginKind == "pull_request" {
 		var binding domain.AgentTaskFeedbackBinding
-		err = s.pool.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256,source_review_run_id,system_instruction FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, task.ID).Scan(&binding.CommentExternalID, &binding.ActorExternalID, &binding.InstructionSHA256, &binding.SourceReviewRunID, &binding.SystemInstruction)
+		err = s.pool.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256,source_review_run_id,system_instruction,internal_repair_kind,internal_repair_key FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, task.ID).Scan(&binding.CommentExternalID, &binding.ActorExternalID, &binding.InstructionSHA256, &binding.SourceReviewRunID, &binding.SystemInstruction, &binding.InternalRepairKind, &binding.InternalRepairKey)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !binding.Valid()) {
 			return domain.AgentTaskAttemptTarget{}, ErrInvalidAgentTask
 		}
@@ -1912,6 +1923,20 @@ func (s *PostgresStore) RecordAgentTaskAdapterEvent(ctx context.Context, event d
 		}
 		return attempt, false, nil
 	}
+	if event.Kind == "publication_checkpoint" || event.Kind == "completed" {
+		var frozenWorkflow domain.AgentWorkflowPolicy
+		var sectionsRaw []byte
+		if err = tx.QueryRow(ctx, `SELECT t.workflow,p.sections FROM agent_tasks t JOIN agent_task_plans p ON p.id=$2 WHERE t.id=$1`, attempt.TaskID, attempt.PlanID).Scan(&frozenWorkflow, &sectionsRaw); err != nil {
+			return domain.AgentTaskAttempt{}, false, err
+		}
+		var sections domain.AgentTaskPlanSections
+		if err = json.Unmarshal(sectionsRaw, &sections); err != nil {
+			return domain.AgentTaskAttempt{}, false, err
+		}
+		if frozenWorkflow.RequireCriterionEvidence && !domain.CriteriaVerified(sections.AcceptanceCriteria, event.VerificationCriteria) {
+			return domain.AgentTaskAttempt{}, false, ErrInvalidAgentTask
+		}
+	}
 	if event.Kind == "publication_checkpoint" {
 		var branch string
 		var tenantID uuid.UUID
@@ -1922,18 +1947,18 @@ func (s *PostgresStore) RecordAgentTaskAdapterEvent(ctx context.Context, event d
 			return domain.AgentTaskAttempt{}, false, ErrInvalidAgentTask
 		}
 		var checkpointAttemptID uuid.UUID
-		err = tx.QueryRow(ctx, `INSERT INTO agent_task_publication_checkpoints(attempt_id,attempt_number,adapter_job_id,branch_name,head_sha,patch_sha256,changed_file_count,diff_bytes,verification_profile_sha256,verification_output_sha256,verification_output_bytes)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(attempt_id,attempt_number) DO NOTHING RETURNING attempt_id`,
-			event.AttemptID, attempt.Attempt, event.AdapterJobID, event.BranchName, event.HeadSHA, event.PatchSHA256, event.ChangedFileCount, event.DiffBytes, event.VerificationProfileSHA256, event.VerificationOutputSHA256, event.VerificationOutputBytes).Scan(&checkpointAttemptID)
+		err = tx.QueryRow(ctx, `INSERT INTO agent_task_publication_checkpoints(attempt_id,attempt_number,adapter_job_id,branch_name,head_sha,patch_sha256,changed_file_count,diff_bytes,verification_profile_sha256,verification_output_sha256,verification_output_bytes,verification_criteria)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(attempt_id,attempt_number) DO NOTHING RETURNING attempt_id`,
+			event.AttemptID, attempt.Attempt, event.AdapterJobID, event.BranchName, event.HeadSHA, event.PatchSHA256, event.ChangedFileCount, event.DiffBytes, event.VerificationProfileSHA256, event.VerificationOutputSHA256, event.VerificationOutputBytes, criterionResultsJSON(event.VerificationCriteria)).Scan(&checkpointAttemptID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			var existing domain.AgentTaskPublicationCheckpoint
-			err = tx.QueryRow(ctx, `SELECT adapter_job_id,branch_name,head_sha,patch_sha256,changed_file_count,diff_bytes,verification_profile_sha256,verification_output_sha256,verification_output_bytes
+			err = tx.QueryRow(ctx, `SELECT adapter_job_id,branch_name,head_sha,patch_sha256,changed_file_count,diff_bytes,verification_profile_sha256,verification_output_sha256,verification_output_bytes,verification_criteria
 				FROM agent_task_publication_checkpoints WHERE attempt_id=$1 AND attempt_number=$2`, event.AttemptID, attempt.Attempt).
-				Scan(&existing.AdapterJobID, &existing.BranchName, &existing.HeadSHA, &existing.PatchSHA256, &existing.ChangedFileCount, &existing.DiffBytes, &existing.VerificationProfileSHA256, &existing.VerificationOutputSHA256, &existing.VerificationOutputBytes)
+				Scan(&existing.AdapterJobID, &existing.BranchName, &existing.HeadSHA, &existing.PatchSHA256, &existing.ChangedFileCount, &existing.DiffBytes, &existing.VerificationProfileSHA256, &existing.VerificationOutputSHA256, &existing.VerificationOutputBytes, &existing.VerificationCriteria)
 			if err != nil {
 				return domain.AgentTaskAttempt{}, false, fmt.Errorf("load existing agent publication checkpoint: %w", err)
 			}
-			if existing.AdapterJobID != event.AdapterJobID || existing.BranchName != event.BranchName || existing.HeadSHA != event.HeadSHA || existing.PatchSHA256 != event.PatchSHA256 || existing.ChangedFileCount != event.ChangedFileCount || existing.DiffBytes != event.DiffBytes || existing.VerificationProfileSHA256 != event.VerificationProfileSHA256 || existing.VerificationOutputSHA256 != event.VerificationOutputSHA256 || existing.VerificationOutputBytes != event.VerificationOutputBytes {
+			if existing.AdapterJobID != event.AdapterJobID || existing.BranchName != event.BranchName || existing.HeadSHA != event.HeadSHA || existing.PatchSHA256 != event.PatchSHA256 || existing.ChangedFileCount != event.ChangedFileCount || existing.DiffBytes != event.DiffBytes || existing.VerificationProfileSHA256 != event.VerificationProfileSHA256 || existing.VerificationOutputSHA256 != event.VerificationOutputSHA256 || existing.VerificationOutputBytes != event.VerificationOutputBytes || !equalCriterionResults(existing.VerificationCriteria, event.VerificationCriteria) {
 				return domain.AgentTaskAttempt{}, false, ErrInvalidAgentTask
 			}
 		} else if err != nil {
@@ -1971,16 +1996,16 @@ func (s *PostgresStore) RecordAgentTaskAdapterEvent(ctx context.Context, event d
 			return domain.AgentTaskAttempt{}, false, ErrInvalidAgentTask
 		}
 		var checkpoint domain.AgentTaskPublicationCheckpoint
-		checkpointErr := tx.QueryRow(ctx, `SELECT branch_name,head_sha,patch_sha256,changed_file_count,diff_bytes,verification_profile_sha256,verification_output_sha256,verification_output_bytes
+		checkpointErr := tx.QueryRow(ctx, `SELECT branch_name,head_sha,patch_sha256,changed_file_count,diff_bytes,verification_profile_sha256,verification_output_sha256,verification_output_bytes,verification_criteria
 			FROM agent_task_publication_checkpoints WHERE attempt_id=$1 AND attempt_number=$2`, attempt.ID, attempt.Attempt).
-			Scan(&checkpoint.BranchName, &checkpoint.HeadSHA, &checkpoint.PatchSHA256, &checkpoint.ChangedFileCount, &checkpoint.DiffBytes, &checkpoint.VerificationProfileSHA256, &checkpoint.VerificationOutputSHA256, &checkpoint.VerificationOutputBytes)
+			Scan(&checkpoint.BranchName, &checkpoint.HeadSHA, &checkpoint.PatchSHA256, &checkpoint.ChangedFileCount, &checkpoint.DiffBytes, &checkpoint.VerificationProfileSHA256, &checkpoint.VerificationOutputSHA256, &checkpoint.VerificationOutputBytes, &checkpoint.VerificationCriteria)
 		if checkpointErr != nil && !errors.Is(checkpointErr, pgx.ErrNoRows) {
 			return domain.AgentTaskAttempt{}, false, fmt.Errorf("load validated publication before completion: %w", checkpointErr)
 		}
 		if errors.Is(checkpointErr, pgx.ErrNoRows) && event.VerificationProfileSHA256 != "" {
 			return domain.AgentTaskAttempt{}, false, ErrInvalidAgentTask
 		}
-		if checkpointErr == nil && (event.BranchName != checkpoint.BranchName || event.HeadSHA != checkpoint.HeadSHA || event.PatchSHA256 != checkpoint.PatchSHA256 || event.ChangedFileCount != checkpoint.ChangedFileCount || event.DiffBytes != checkpoint.DiffBytes || event.VerificationProfileSHA256 != checkpoint.VerificationProfileSHA256 || event.VerificationOutputSHA256 != checkpoint.VerificationOutputSHA256 || event.VerificationOutputBytes != checkpoint.VerificationOutputBytes) {
+		if checkpointErr == nil && (event.BranchName != checkpoint.BranchName || event.HeadSHA != checkpoint.HeadSHA || event.PatchSHA256 != checkpoint.PatchSHA256 || event.ChangedFileCount != checkpoint.ChangedFileCount || event.DiffBytes != checkpoint.DiffBytes || event.VerificationProfileSHA256 != checkpoint.VerificationProfileSHA256 || event.VerificationOutputSHA256 != checkpoint.VerificationOutputSHA256 || event.VerificationOutputBytes != checkpoint.VerificationOutputBytes || !equalCriterionResults(event.VerificationCriteria, checkpoint.VerificationCriteria)) {
 			return domain.AgentTaskAttempt{}, false, ErrInvalidAgentTask
 		}
 		resultURL = canonicalURL
@@ -3137,4 +3162,18 @@ func scanAgentTaskPolicy(row rowScanner) (domain.AgentTaskPolicy, error) {
 	var item domain.AgentTaskPolicy
 	err := row.Scan(&item.ID, &item.Provider, &item.APIBaseURL, &item.Repository, &item.Mode, &item.MaxAttempts, &item.MaxExecutionSeconds, &item.MaxFeedbackCycles, &item.ExecutorProfile, &item.DecisionBackend, &item.AutoAdmissionEnabled, &item.AutoAdmissionLabel, &item.Revision, &item.UpdatedBy, &item.UpdatedAt, &item.Workflow)
 	return item, err
+}
+
+func criterionResultsJSON(results []domain.AgentCriterionResult) []byte {
+	if results == nil {
+		results = []domain.AgentCriterionResult{}
+	}
+	raw, _ := json.Marshal(results)
+	return raw
+}
+func equalCriterionResults(a, b []domain.AgentCriterionResult) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(a, b)
 }

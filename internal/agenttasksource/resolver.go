@@ -134,7 +134,7 @@ func (r Resolver) VerifyFeedbackComment(ctx context.Context, task domain.AgentTa
 	// An internal review repair is bound by the signed control-plane handoff,
 	// not by a fabricated provider comment. The Draft identity/head/target is
 	// still re-read by VerifyOriginWithFeedback before execution and publication.
-	if binding.SourceReviewRunID != nil {
+	if binding.Internal() {
 		return nil
 	}
 	switch task.Provider {
@@ -174,7 +174,7 @@ func (r Resolver) Resolve(ctx context.Context, target domain.AgentTaskSourceTarg
 			if target.Feedback == nil || !target.Feedback.ExecutionValid() || snapshot.TargetBranch != target.Feedback.TargetBranch {
 				return domain.AgentTaskSourceSnapshot{}, fmt.Errorf("GitHub Draft target branch differs from the original approved Draft")
 			}
-			if target.Feedback.SourceReviewRunID != nil {
+			if target.Feedback.Internal() {
 				snapshot.Feedback = internalReviewFeedback(target.Feedback)
 				return snapshot, nil
 			}
@@ -197,7 +197,7 @@ func (r Resolver) Resolve(ctx context.Context, target domain.AgentTaskSourceTarg
 			if target.Feedback == nil || !target.Feedback.ExecutionValid() || snapshot.TargetBranch != target.Feedback.TargetBranch {
 				return domain.AgentTaskSourceSnapshot{}, fmt.Errorf("GitLab Draft target branch differs from the original approved Draft")
 			}
-			if target.Feedback.SourceReviewRunID != nil {
+			if target.Feedback.Internal() {
 				snapshot.Feedback = internalReviewFeedback(target.Feedback)
 				return snapshot, nil
 			}

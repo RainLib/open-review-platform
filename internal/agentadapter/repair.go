@@ -3,8 +3,10 @@ package agentadapter
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/RainLib/open-review-platform/internal/domain"
 )
 
 // Only a cleanly removed verifier's ordinary nonzero exit is repairable.
@@ -23,6 +25,7 @@ func (pipeline Pipeline) verifyAndRepair(ctx context.Context, workspace string, 
 	if submission.Limits.Workflow.Enabled {
 		budget = submission.Limits.Workflow.MaxRepairCycles
 	}
+	pipeline.verificationCriteria = submission.Plan.AcceptanceCriteria
 	verify := pipeline.runVerification
 	if pipeline.verifyCommand != nil {
 		verify = pipeline.verifyCommand
@@ -41,6 +44,19 @@ func (pipeline Pipeline) verifyAndRepair(ctx context.Context, workspace string, 
 		checkedFiles, checkedBytes, checkedSHA, err := pipeline.validatePatch(ctx, workspace, submission)
 		if err != nil || checkedSHA != patchSHA || checkedBytes != diffBytes || !equalAgentPaths(files, checkedFiles) {
 			return nil, nil, 0, "", fmt.Errorf("approved verification changed the validated patch")
+		}
+		if verifyErr == nil {
+			for _, criterion := range result.Criteria {
+				if criterion.Status == "failed" {
+					raw, _ := json.Marshal(result.Criteria)
+					verifyErr = &verificationFailure{exit: 1, output: "Independent criterion checks failed: " + string(raw)}
+					break
+				}
+			}
+		}
+		if verifyErr == nil && submission.Limits.Workflow.RequireCriterionEvidence && !domain.CriteriaVerified(submission.Plan.AcceptanceCriteria, result.Criteria) {
+			diagnostic, _ := json.Marshal(result.Criteria)
+			verifyErr = &verificationFailure{exit: 1, output: "Independent criterion report is missing passing evidence for the approved requirements: " + string(diagnostic)}
 		}
 		if verifyErr == nil {
 			return &result, files, diffBytes, patchSHA, nil

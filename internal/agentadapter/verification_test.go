@@ -18,6 +18,31 @@ func testVerificationProfile() VerificationProfile {
 	}
 }
 
+func TestRetainedCheckpointRejectsMalformedCriterionEvidence(t *testing.T) {
+	checkpoint := PublicationCheckpoint{HeadSHA: strings.Repeat("a", 40), PatchSHA256: strings.Repeat("b", 64), ChangedFileCount: 1, DiffBytes: 10}
+	if !validPublicationCheckpoint(checkpoint) {
+		t.Fatal("legacy checkpoint must remain valid")
+	}
+	checkpoint.VerificationCriteria = []domain.AgentCriterionResult{{Criterion: "Retry twice", Status: "passed", Evidence: "TestRetryLimits passed"}}
+	if validPublicationCheckpoint(checkpoint) {
+		t.Fatal("criterion proof without verifier identity was accepted")
+	}
+	checkpoint.VerificationProfileSHA256, checkpoint.VerificationOutputSHA256 = strings.Repeat("c", 64), strings.Repeat("d", 64)
+	if !validPublicationCheckpoint(checkpoint) {
+		t.Fatal("bounded criterion proof was rejected")
+	}
+	checkpoint.VerificationCriteria = append(checkpoint.VerificationCriteria, checkpoint.VerificationCriteria[0])
+	if validPublicationCheckpoint(checkpoint) {
+		t.Fatal("duplicate criterion proof entered retained checkpoint")
+	}
+	if domain.CriteriaVerified([]string{"Retry twice"}, []domain.AgentCriterionResult{
+		{Criterion: "Retry twice", Status: "passed", Evidence: "TestRetryLimits passed"},
+		{Criterion: "Unapproved replacement", Status: "failed", Evidence: "TestOther failed"},
+	}) {
+		t.Fatal("unapproved criterion changed the fixed verification contract")
+	}
+}
+
 func writeVerificationCatalog(t *testing.T, entries []VerificationProfile) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "verification.json")
@@ -96,5 +121,25 @@ func TestAgentDraftDescribesOnlyTheVerificationActuallyRun(t *testing.T) {
 	}})
 	if !strings.Contains(with, "One deployment-approved repository verification command passed") || !strings.Contains(with, "not product acceptance") || strings.Contains(with, "Build, tests, SAST, performance, UI, and migrations were not attested") {
 		t.Fatal("Draft verification claim did not match the executed evidence")
+	}
+}
+
+func TestIndependentCriterionReportsRequireUnambiguousPassingEvidence(t *testing.T) {
+	marker := `OPENREVIEW_CRITERION_RESULT {"criterion":"Retry twice","status":"passed","evidence":"TestRetryLimits passed"}`
+	results, err := parseCriterionReport("normal output\n" + marker + "\n")
+	if err != nil || !domain.CriteriaVerified([]string{"Retry twice"}, results) {
+		t.Fatalf("%+v %v", results, err)
+	}
+	for _, bad := range []string{marker + "\n" + marker, `OPENREVIEW_CRITERION_RESULT {"criterion":"Retry twice","status":"passed","evidence":"ok!","commands":"unsafe"}`, `OPENREVIEW_CRITERION_RESULT {"criterion":"Retry twice","status":"passed","evidence":""}`} {
+		if _, err := parseCriterionReport(bad); err == nil {
+			t.Fatal("invalid criterion report accepted")
+		}
+	}
+	if domain.CriteriaVerified([]string{"Retry twice", "Show final error"}, results) {
+		t.Fatal("partial requirement proof accepted")
+	}
+	results[0].Status = "failed"
+	if domain.CriteriaVerified([]string{"Retry twice"}, results) {
+		t.Fatal("failed criterion accepted")
 	}
 }

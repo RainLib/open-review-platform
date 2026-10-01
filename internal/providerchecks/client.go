@@ -29,11 +29,12 @@ var commitSHA = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
 type Snapshot = domain.ProviderCheckObservation
 
 type Client struct {
-	Resolver             credentials.Resolver
-	HTTPClient           *http.Client
-	AllowPrivateNetworks bool
-	AllowInsecureHTTP    bool
-	OwnGitHubAppID       int64
+	Resolver                  credentials.Resolver
+	HTTPClient                *http.Client
+	AllowPrivateNetworks      bool
+	AllowInsecureHTTP         bool
+	OwnGitHubAppID            int64
+	CollectFailureDiagnostics bool
 }
 
 // Fetch observes only the exact immutable head from a previously admitted
@@ -99,6 +100,13 @@ func (c Client) github(ctx context.Context, base, repository, sha, token string,
 	var runs struct {
 		TotalCount int `json:"total_count"`
 		CheckRuns  []struct {
+			ID     int64 `json:"id"`
+			Output struct {
+				Title            string `json:"title"`
+				Summary          string `json:"summary"`
+				Text             string `json:"text"`
+				AnnotationsCount int    `json:"annotations_count"`
+			} `json:"output"`
 			Name       string `json:"name"`
 			HeadSHA    string `json:"head_sha"`
 			Status     string `json:"status"`
@@ -134,7 +142,29 @@ func (c Client) github(ctx context.Context, base, repository, sha, token string,
 				origin = "independent"
 			}
 		}
-		snapshot.Checks = append(snapshot.Checks, domain.ProviderCheck{Kind: "check_run", Name: bounded(run.Name, 180), State: bounded(state, 40), URL: safeHTTPSURL(run.HTMLURL), Origin: origin})
+		check := domain.ProviderCheck{Kind: "check_run", Name: bounded(run.Name, 180), State: bounded(state, 40), URL: safeHTTPSURL(run.HTMLURL), Origin: origin}
+		if c.CollectFailureDiagnostics && origin == "independent" && state == "failure" {
+			diagnostic := run.Output.Title + "\n" + run.Output.Summary + "\n" + run.Output.Text
+			if run.ID > 0 && run.Output.AnnotationsCount > 0 && run.Output.AnnotationsCount <= 20 {
+				var annotations []struct {
+					Path       string `json:"path"`
+					StartLine  int    `json:"start_line"`
+					Message    string `json:"message"`
+					RawDetails string `json:"raw_details"`
+				}
+				endpoint := fmt.Sprintf("%s/repos/%s/%s/check-runs/%d/annotations?per_page=20", base, url.PathEscape(parts[0]), url.PathEscape(parts[1]), run.ID)
+				if err := c.getJSON(ctx, endpoint, token, domain.ProviderGitHub, &annotations); err == nil && len(annotations) == run.Output.AnnotationsCount {
+					encoded, _ := json.Marshal(annotations)
+					diagnostic += "\n" + string(encoded)
+				} else {
+					diagnostic = ""
+				}
+			} else if run.Output.AnnotationsCount > 20 {
+				diagnostic = ""
+			}
+			check.Diagnostics, check.FailureClass = classifyDiagnostics(diagnostic, token)
+		}
+		snapshot.Checks = append(snapshot.Checks, check)
 	}
 	var statuses struct {
 		SHA        string `json:"sha"`
@@ -225,7 +255,14 @@ func (c Client) gitlab(ctx context.Context, base, repository, sha, token string,
 			if name != "" && !strings.EqualFold(name, "Open Review / Analysis") {
 				origin = "independent"
 			}
-			snapshot.Checks = append(snapshot.Checks, domain.ProviderCheck{Kind: "job", Name: fmt.Sprintf("Pipeline #%d / %s", pipeline.ID, name), State: bounded(job.Status, 40), URL: safeHTTPSURL(job.WebURL), Origin: origin})
+			check := domain.ProviderCheck{Kind: "job", Name: fmt.Sprintf("Pipeline #%d / %s", pipeline.ID, name), State: bounded(job.Status, 40), URL: safeHTTPSURL(job.WebURL), Origin: origin}
+			if c.CollectFailureDiagnostics && origin == "independent" && job.Status == "failed" && jobIndex < 5 {
+				diagnostic, err := c.getText(ctx, fmt.Sprintf("%s/jobs/%d/trace", projectPath, job.ID), token, domain.ProviderGitLab)
+				if err == nil {
+					check.Diagnostics, check.FailureClass = classifyDiagnostics(diagnostic, token)
+				}
+			}
+			snapshot.Checks = append(snapshot.Checks, check)
 		}
 	}
 	return nil

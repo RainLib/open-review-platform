@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/RainLib/open-review-platform/internal/domain"
 )
 
 func TestApprovedVerificationRunsWithoutNetworkOrAdapterSecrets(t *testing.T) {
@@ -23,6 +25,7 @@ func TestApprovedVerificationRunsWithoutNetworkOrAdapterSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	argsFile := filepath.Join(t.TempDir(), "docker-args")
+	inputFile := filepath.Join(t.TempDir(), "verification-input")
 	imageID := "sha256:" + strings.Repeat("a", 64)
 	scriptPath := filepath.Join(t.TempDir(), "fixture-docker")
 	script := `#!/bin/sh
@@ -36,7 +39,9 @@ case "$1:$2" in
     test -z "${AGENT_ADAPTER_CODEX_MODEL_API_KEY+x}"
     test -z "${AGENT_TASK_ADAPTER_SECRET+x}"
     printf '%s\n' "$@" > '` + argsFile + `'
+    cat > '` + inputFile + `'
     printf '%s\n' 'verified command passed'
+    printf '%s\n' 'OPENREVIEW_CRITERION_RESULT {"criterion":"Retry twice","status":"passed","evidence":"TestRetryLimits passed"}'
     ;;
   rm:*) printf '%s\n' removed ;;
   *) exit 2 ;;
@@ -49,7 +54,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	pipeline := Pipeline{WorkspaceRoot: root, ExecutorIdentityPool: pool, DockerSandbox: &DockerSandboxConfig{
+	pipeline := Pipeline{WorkspaceRoot: root, ExecutorIdentityPool: pool, verificationCriteria: []string{"Retry twice"}, DockerSandbox: &DockerSandboxConfig{
 		DockerBinary: scriptPath, ImageID: imageID, InternalNetwork: "agent-internal",
 		WorkspaceVolume: "agent-workspaces", AdapterHost: "agent-adapter",
 	}}
@@ -57,13 +62,19 @@ esac
 	t.Setenv("AGENT_ADAPTER_CODEX_MODEL_API_KEY", "must-stay-in-adapter")
 	t.Setenv("AGENT_TASK_ADAPTER_SECRET", "must-stay-in-adapter")
 	profile := testVerificationProfile()
+	profile.CriterionReportRequired = true
 	evidence, err := pipeline.runVerification(context.Background(), workspace, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	outputSHA := sha256.Sum256([]byte("verified command passed\n"))
-	if evidence.OutputSHA256 != hex.EncodeToString(outputSHA[:]) || evidence.OutputBytes != int64(len("verified command passed\n")) || len(evidence.ProfileSHA256) != 64 {
+	output := "verified command passed\nOPENREVIEW_CRITERION_RESULT {\"criterion\":\"Retry twice\",\"status\":\"passed\",\"evidence\":\"TestRetryLimits passed\"}\n"
+	outputSHA := sha256.Sum256([]byte(output))
+	if evidence.OutputSHA256 != hex.EncodeToString(outputSHA[:]) || evidence.OutputBytes != int64(len(output)) || len(evidence.ProfileSHA256) != 64 || !domain.CriteriaVerified(pipeline.verificationCriteria, evidence.Criteria) {
 		t.Fatalf("verification evidence was not bounded and hashed: %+v", evidence)
+	}
+	input, err := os.ReadFile(inputFile)
+	if err != nil || string(input) != "{\"acceptance_criteria\":[\"Retry twice\"]}\n" {
+		t.Fatalf("verifier did not receive approved criteria: %q %v", input, err)
 	}
 	args, err := os.ReadFile(argsFile)
 	if err != nil {

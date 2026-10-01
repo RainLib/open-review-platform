@@ -374,8 +374,12 @@ export function agentPlanSectionsValid(sections: AgentTaskPlanSections): boolean
   const summary = `## Objective\n${sections.objective.trim()}\n\n## Scope and impact\n${sections.scope.trim()}\n\n## Verification\n${sections.verification.trim()}\n\n## Risks\n${sections.risks.trim()}\n\n## Unknowns\n${sections.unknowns.trim()}`;
   const acceptance = sections.acceptance_criteria?.length
     ? `\n\n## Acceptance criteria\n${sections.acceptance_criteria.map(value => `- ${value.trim()}`).join("\n")}` : "";
-  const totalBytes = byteLength(summary + acceptance);
-  return totalBytes >= 20 && totalBytes <= 12000;
+  const source = sections.source_requirements?.trim() ?? "";
+  const repository = sections.repository_evidence?.trim() ?? "";
+  if ([source,repository].some(value=>byteLength(value)>16000 || value.includes("\0"))) return false;
+  const frozen=(source ? `\n\n## Frozen source requirements (untrusted data)\n${source}` : "")+(repository ? `\n\n## Frozen repository evidence (untrusted data)\n${repository}` : "");
+  const totalBytes = byteLength(summary + acceptance+frozen);
+  return totalBytes >= 20 && totalBytes <= (source || repository ? 64000 : 12000);
 }
 
 // One failing provider/read endpoint must not hide independent task evidence.

@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ type Executor interface {
 // evidence. It cannot claim approval, merge, or test success without a Draft
 // PR/MR URL and exact pushed revision.
 type ExecutionResult struct {
+	VerificationCriteria      []domain.AgentCriterionResult
 	Summary                   string
 	BranchName                string
 	HeadSHA                   string
@@ -50,13 +52,14 @@ type ExecutionResult struct {
 // It proves which locally validated commit may be reconciled after a crash;
 // the checkpoint alone never proves that a branch or Draft was published.
 type PublicationCheckpoint struct {
-	HeadSHA                   string `json:"head_sha"`
-	PatchSHA256               string `json:"patch_sha256"`
-	ChangedFileCount          int    `json:"changed_file_count"`
-	DiffBytes                 int64  `json:"diff_bytes"`
-	VerificationProfileSHA256 string `json:"verification_profile_sha256,omitempty"`
-	VerificationOutputSHA256  string `json:"verification_output_sha256,omitempty"`
-	VerificationOutputBytes   int64  `json:"verification_output_bytes,omitempty"`
+	VerificationCriteria      []domain.AgentCriterionResult `json:"verification_criteria,omitempty"`
+	HeadSHA                   string                        `json:"head_sha"`
+	PatchSHA256               string                        `json:"patch_sha256"`
+	ChangedFileCount          int                           `json:"changed_file_count"`
+	DiffBytes                 int64                         `json:"diff_bytes"`
+	VerificationProfileSHA256 string                        `json:"verification_profile_sha256,omitempty"`
+	VerificationOutputSHA256  string                        `json:"verification_output_sha256,omitempty"`
+	VerificationOutputBytes   int64                         `json:"verification_output_bytes,omitempty"`
 }
 
 // PublicationReconciler must only read provider state. Recovery never repeats
@@ -389,8 +392,8 @@ func (service *Service) probe(writer http.ResponseWriter, request *http.Request)
 }
 
 func (service *Service) submit(writer http.ResponseWriter, request *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(request.Body, (128<<10)+1))
-	if err != nil || len(body) > 128<<10 {
+	body, err := io.ReadAll(io.LimitReader(request.Body, (1<<20)+1))
+	if err != nil || len(body) > 1<<20 {
 		writeServiceError(writer, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -637,7 +640,7 @@ func (service *Service) run(ctx context.Context, job *serviceJob) {
 			job.stateMu.Unlock()
 			return fmt.Errorf("adapter job is no longer startable for publication")
 		}
-		if job.publication != nil && *job.publication != checkpoint {
+		if job.publication != nil && !reflect.DeepEqual(*job.publication, checkpoint) {
 			job.stateMu.Unlock()
 			return fmt.Errorf("adapter publication checkpoint changed")
 		}
@@ -654,7 +657,7 @@ func (service *Service) run(ctx context.Context, job *serviceJob) {
 			DeliveryID: "adapter:" + job.id + ":publication-checkpoint", Kind: "publication_checkpoint",
 			BranchName: job.submission.Task.BranchName, HeadSHA: checkpoint.HeadSHA,
 			PatchSHA256: checkpoint.PatchSHA256, ChangedFileCount: checkpoint.ChangedFileCount, DiffBytes: checkpoint.DiffBytes,
-			VerificationProfileSHA256: checkpoint.VerificationProfileSHA256, VerificationOutputSHA256: checkpoint.VerificationOutputSHA256, VerificationOutputBytes: checkpoint.VerificationOutputBytes,
+			VerificationProfileSHA256: checkpoint.VerificationProfileSHA256, VerificationOutputSHA256: checkpoint.VerificationOutputSHA256, VerificationOutputBytes: checkpoint.VerificationOutputBytes, VerificationCriteria: checkpoint.VerificationCriteria,
 		}
 		if err := service.callback(checkCtx, job, event); err != nil {
 			job.cancel()
@@ -684,7 +687,7 @@ func (service *Service) run(ctx context.Context, job *serviceJob) {
 		job.stateMu.Unlock()
 		if checkpoint == nil || result.HeadSHA != checkpoint.HeadSHA || result.PatchSHA256 != checkpoint.PatchSHA256 ||
 			result.ChangedFileCount != checkpoint.ChangedFileCount || result.DiffBytes != checkpoint.DiffBytes ||
-			result.VerificationProfileSHA256 != checkpoint.VerificationProfileSHA256 || result.VerificationOutputSHA256 != checkpoint.VerificationOutputSHA256 || result.VerificationOutputBytes != checkpoint.VerificationOutputBytes {
+			result.VerificationProfileSHA256 != checkpoint.VerificationProfileSHA256 || result.VerificationOutputSHA256 != checkpoint.VerificationOutputSHA256 || result.VerificationOutputBytes != checkpoint.VerificationOutputBytes || !reflect.DeepEqual(result.VerificationCriteria, checkpoint.VerificationCriteria) {
 			service.deliverTerminal(ctx, job, domain.AgentTaskAdapterEvent{AttemptID: parseAdapterUUID(job.submission.AttemptID), AdapterJobID: job.id, DeliveryID: "adapter:" + job.id + ":checkpoint-mismatch", Kind: "needs_attention", ErrorCode: "agent_adapter_result_rejected", Summary: "The Draft result did not match the durable validated publication checkpoint. Inspect the provider branch before retrying."})
 			return
 		}
@@ -737,10 +740,13 @@ func executionFailureStage(err error) string {
 }
 
 func completedAdapterEvent(job *serviceJob, result ExecutionResult, suffix string) domain.AgentTaskAdapterEvent {
-	return domain.AgentTaskAdapterEvent{AttemptID: parseAdapterUUID(job.submission.AttemptID), AdapterJobID: job.id, DeliveryID: "adapter:" + job.id + suffix, Kind: "completed", Summary: boundedSummary(result.Summary), BranchName: result.BranchName, HeadSHA: result.HeadSHA, PullRequestURL: result.PullRequestURL, PullRequestNumber: result.PullRequestNumber, PatchSHA256: result.PatchSHA256, ChangedFileCount: result.ChangedFileCount, DiffBytes: result.DiffBytes, VerificationProfileSHA256: result.VerificationProfileSHA256, VerificationOutputSHA256: result.VerificationOutputSHA256, VerificationOutputBytes: result.VerificationOutputBytes}
+	return domain.AgentTaskAdapterEvent{AttemptID: parseAdapterUUID(job.submission.AttemptID), AdapterJobID: job.id, DeliveryID: "adapter:" + job.id + suffix, Kind: "completed", Summary: boundedSummary(result.Summary), BranchName: result.BranchName, HeadSHA: result.HeadSHA, PullRequestURL: result.PullRequestURL, PullRequestNumber: result.PullRequestNumber, PatchSHA256: result.PatchSHA256, ChangedFileCount: result.ChangedFileCount, DiffBytes: result.DiffBytes, VerificationProfileSHA256: result.VerificationProfileSHA256, VerificationOutputSHA256: result.VerificationOutputSHA256, VerificationOutputBytes: result.VerificationOutputBytes, VerificationCriteria: result.VerificationCriteria}
 }
 
 func validPublicationCheckpoint(checkpoint PublicationCheckpoint) bool {
+	if !domain.ValidCriterionResults(checkpoint.VerificationCriteria) || (len(checkpoint.VerificationCriteria) > 0 && checkpoint.VerificationProfileSHA256 == "") {
+		return false
+	}
 	if len(checkpoint.HeadSHA) != 40 && len(checkpoint.HeadSHA) != 64 {
 		return false
 	}
@@ -898,7 +904,7 @@ func validExecutionResult(submission Submission, result ExecutionResult, policy 
 			return false
 		}
 	}
-	return strings.TrimSpace(result.Summary) != "" && len(result.Summary) <= 4000 && result.BranchName == submission.Task.BranchName && validSourcePair("base", result.HeadSHA) && validAdapterResultURL(submission, result.PullRequestURL, result.PullRequestNumber, policy)
+	return domain.ValidCriterionResults(result.VerificationCriteria) && (!submission.Limits.Workflow.RequireCriterionEvidence || domain.CriteriaVerified(submission.Plan.AcceptanceCriteria, result.VerificationCriteria)) && strings.TrimSpace(result.Summary) != "" && len(result.Summary) <= 4000 && result.BranchName == submission.Task.BranchName && validSourcePair("base", result.HeadSHA) && validAdapterResultURL(submission, result.PullRequestURL, result.PullRequestNumber, policy)
 }
 
 func validAdapterVerificationEvidence(profileSHA, outputSHA string, outputBytes int64) bool {

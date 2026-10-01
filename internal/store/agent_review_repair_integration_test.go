@@ -15,11 +15,20 @@ import (
 )
 
 func TestAgentReviewRepairIsIdempotentBoundedAndRequiresFreshApproval(t *testing.T) {
+	testAgentInternalRepair(t, "review")
+}
+func TestAgentAcceptanceRejectionPreparesRepairWithoutManualFeedbackBudget(t *testing.T) {
+	testAgentInternalRepair(t, "acceptance")
+}
+func TestAgentCIFailurePreparesOnlyDiagnosedCodeRepair(t *testing.T) {
+	testAgentInternalRepair(t, "ci")
+}
+func testAgentInternalRepair(t *testing.T, kind string) {
 	if os.Getenv("OPEN_REVIEW_TEST_DATABASE_URL") == "" || os.Getenv("OPEN_REVIEW_TEST_ISOLATED_DATABASE") != "true" {
 		t.Skip("requires isolated PostgreSQL")
 	}
 	ctx := context.Background()
-	s, err := Open(ctx, os.Getenv("OPEN_REVIEW_TEST_DATABASE_URL"))
+	s, err := Open(ctx, isolatedQueueDatabase(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,11 +116,57 @@ func TestAgentReviewRepairIsIdempotentBoundedAndRequiresFreshApproval(t *testing
 	exec(`UPDATE review_jobs SET state='succeeded' WHERE id=$1`, jobID)
 	exec(`INSERT INTO review_merge_gate_decisions(run_id,enabled,threshold,conclusion,blocking_findings,finding_count,configuration_content_sha256,origin_scope_kind,origin_revision,evaluation_version) VALUES($1,true,'high','failure',1,1,$2,'default',0,'fixture')`, runID, strings.Repeat("f", 64))
 	exec(`INSERT INTO review_findings(job_id,path,start_line,end_line,severity,category,body,suggestion,fingerprint,provider_marker) VALUES($1,'internal/worker.go',10,10,'high','correctness','Retry loop still retries three times','Bound the loop to two retries',$2,$3)`, jobID, "fixture-"+runID.String(), "fixture-marker-"+runID.String())
+	if kind != "review" {
+		exec(`UPDATE review_merge_gate_decisions SET conclusion='success',blocking_findings=0 WHERE run_id=$1`, runID)
+		checks := `[{"name":"go tests","state":"success","origin":"independent"}]`
+		if kind == "ci" {
+			checks = `[{"name":"go tests","state":"failure","origin":"independent","diagnostics":"--- FAIL: TestRetry: expected two retries, got three","failure_class":"code"}]`
+		}
+		exec(`INSERT INTO review_provider_check_observations(run_id,head_sha,state,checks,observed_at) VALUES($1,$2,'observed',$3,now())`, runID, head, checks)
+	}
+	if kind == "ci" {
+		for _, checks := range []string{
+			`[{"name":"go tests","state":"failure","origin":"independent","diagnostics":"connection refused","failure_class":"infrastructure"}]`,
+			`[{"name":"go tests","state":"pending","origin":"independent","diagnostics":"test failed","failure_class":"code"}]`,
+			`[{"name":"go tests","state":"failure","origin":"independent"}]`,
+		} {
+			exec(`UPDATE review_provider_check_observations SET checks=$2 WHERE run_id=$1`, runID, checks)
+			if err = s.FinishAgentWorkflowObservation(ctx, "repair-monitor", *target, head, "open"); err != nil {
+				t.Fatal(err)
+			}
+			var count int
+			if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_feedback_cycles WHERE parent_task_id=$1`, task.ID).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("unrepairable CI started repair: %d %v", count, err)
+			}
+			exec(`UPDATE agent_task_acceptances SET poll_after=now()-interval '1 second' WHERE task_id=$1`, task.ID)
+			target, err = s.ClaimAgentWorkflow(ctx, "repair-monitor")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		exec(`UPDATE review_provider_check_observations SET checks='[{"name":"go tests","state":"failure","origin":"independent","diagnostics":"--- FAIL: TestRetry: expected two retries, got three","failure_class":"code"}]' WHERE run_id=$1`, runID)
+	}
+
 	if err = s.FinishAgentWorkflowObservation(ctx, "repair-monitor", *target, head, "open"); err != nil {
 		t.Fatal(err)
 	}
+	if kind == "acceptance" {
+		d, loadErr := s.GetAgentTask(ctx, "owner", slug, task.ID)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		decision := domain.AgentTaskAcceptanceInput{Revision: d.Acceptance.Revision, HeadSHA: head, Decision: "changes_requested", Reason: "Observed behavior: final failure message is missing. Expected behavior: retain the original worker error and verify it with a regression test."}
+		rejectedDecision := decision
+		if _, err = s.DecideAgentTaskAcceptance(ctx, "reviewer", slug, task.ID, rejectedDecision); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("reviewer requested changes: %v", err)
+		}
+		if _, err = s.DecideAgentTaskAcceptance(ctx, "owner", slug, task.ID, decision); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	detail, err = s.GetAgentTask(ctx, "owner", slug, task.ID)
-	if err != nil || detail.Acceptance == nil || detail.Acceptance.RemediationTaskID == nil || detail.Acceptance.State != "checks_failed" {
+	if err != nil || detail.Acceptance == nil || detail.Acceptance.RemediationTaskID == nil || (kind != "acceptance" && detail.Acceptance.State != "checks_failed") {
 		t.Fatalf("missing repair: %+v %v", detail.Acceptance, err)
 	}
 	childID := *detail.Acceptance.RemediationTaskID
@@ -124,11 +179,11 @@ func TestAgentReviewRepairIsIdempotentBoundedAndRequiresFreshApproval(t *testing
 		t.Fatal(err)
 	}
 	var children int
-	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_feedback_cycles WHERE source_review_run_id=$1`, runID).Scan(&children); err != nil || children != 1 {
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_feedback_cycles WHERE parent_task_id=$1`, task.ID).Scan(&children); err != nil || children != 1 {
 		t.Fatalf("repair duplicated: %d %v", children, err)
 	}
 	source, err := s.LoadAgentTaskSourceTarget(ctx, childID)
-	if err != nil || source.Feedback == nil || !source.Feedback.ExecutionValid() || source.Feedback.SourceReviewRunID == nil || *source.Feedback.SourceReviewRunID != runID || source.Task.ExecutionBranch != task.ExecutionBranch {
+	if err != nil || source.Feedback == nil || !source.Feedback.ExecutionValid() || source.Feedback.InternalRepairKind != kind || (kind != "acceptance" && (source.Feedback.SourceReviewRunID == nil || *source.Feedback.SourceReviewRunID != runID)) || source.Task.ExecutionBranch != task.ExecutionBranch {
 		t.Fatalf("review binding %+v %v", source, err)
 	}
 	binding := *source.Feedback
@@ -150,7 +205,7 @@ func TestAgentReviewRepairIsIdempotentBoundedAndRequiresFreshApproval(t *testing
 		t.Fatalf("repair plan: %+v %v", child, err)
 	}
 	childDetail, err := s.GetAgentTask(ctx, "owner", slug, childID)
-	if err != nil || len(childDetail.Plans) != 1 || len(childDetail.Plans[0].Sections.AcceptanceCriteria) != 4 || len(childDetail.Attempts) != 0 || childDetail.Feedback == nil || childDetail.Feedback.SourceReviewRunID == nil || *childDetail.Feedback.SourceReviewRunID != runID {
+	if err != nil || len(childDetail.Plans) != 1 || len(childDetail.Plans[0].Sections.AcceptanceCriteria) != 2 || len(childDetail.Attempts) != 0 || childDetail.Feedback == nil || childDetail.Feedback.InternalRepairKind != kind || childDetail.Plans[0].Sections.SourceRequirements != issue.Body {
 		t.Fatalf("repair lost requirements or self-approved: %+v %v", childDetail, err)
 	}
 	childPlan := childDetail.Plans[0]

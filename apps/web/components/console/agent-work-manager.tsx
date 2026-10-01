@@ -265,6 +265,7 @@ function PolicyForm({
   const [mode, setMode] = useState<AgentTaskPolicy["mode"]>("disabled");
   const [maxAttempts, setMaxAttempts] = useState(1);
   const [workflowEnabled, setWorkflowEnabled] = useState(false);
+ const [requireCriterionEvidence,setRequireCriterionEvidence]=useState(true);
   const [repairCycles, setRepairCycles] = useState(2);
   const [taskAttempts, setTaskAttempts] = useState(3);
   const [requiredChecks, setRequiredChecks] = useState("");
@@ -340,6 +341,7 @@ function PolicyForm({
     setMode(existing?.mode ?? "disabled");
     setMaxAttempts(existing?.max_attempts ?? 1);
     setWorkflowEnabled(existing?.workflow?.enabled ?? false);
+ setRequireCriterionEvidence(existing?.workflow ? existing.workflow.require_criterion_evidence===true : true);
     setRepairCycles(existing?.workflow?.max_repair_cycles ?? 2);
     setTaskAttempts(existing?.workflow?.max_task_attempts ?? 3);
     setRequiredChecks(existing?.workflow?.required_checks?.join(", ") ?? "");
@@ -409,7 +411,7 @@ function PolicyForm({
               api_base_url: baseURL,
               repository,
               mode,
-              workflow: workflowEnabled && mode === "manual" ? {enabled:true,max_repair_cycles:repairCycles,max_task_attempts:taskAttempts,required_checks:requiredChecks.split(",").map(value=>value.trim()).filter(Boolean)} : {enabled:false,max_repair_cycles:0,max_task_attempts:0},
+              workflow: workflowEnabled && mode === "manual" ? {enabled:true,require_criterion_evidence:requireCriterionEvidence,max_repair_cycles:repairCycles,max_task_attempts:taskAttempts,required_checks:requiredChecks.split(",").map(value=>value.trim()).filter(Boolean)} : {enabled:false,max_repair_cycles:0,max_task_attempts:0},
 max_attempts: maxAttempts,
               max_execution_seconds: maxExecutionSeconds,
               max_feedback_cycles: mode === "manual" ? maxFeedbackCycles : 0,
@@ -520,10 +522,12 @@ max_attempts: maxAttempts,
         <legend className="px-1 text-sm font-semibold">Task delivery workflow</legend>
         <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={workflowEnabled} disabled={disabled || pending || mode !== "manual"} onChange={event=>setWorkflowEnabled(event.target.checked)} />Auto-plan, verify and repair, re-review, then human acceptance</label>
         {workflowEnabled ? <>
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={requireCriterionEvidence} disabled={disabled || pending} onChange={event=>setRequireCriterionEvidence(event.target.checked)} />Require independent evidence for every acceptance criterion</label>
+          <p className="text-xs leading-5">The fixed verifier must report a passing result for each criterion. A general test-suite pass alone cannot satisfy this option.</p>
           <label className="grid gap-1 text-xs">Verification repair cycles<input className="luminous-focus h-10 rounded-lg border border-[var(--ls-line)] px-3" type="number" min={0} max={3} value={repairCycles} disabled={disabled || pending} onChange={event=>setRepairCycles(Number(event.target.value))} /></label>
           <label className="grid gap-1 text-xs">Total attempts across plans and feedback<input className="luminous-focus h-10 rounded-lg border border-[var(--ls-line)] px-3" type="number" min={1} max={5} value={taskAttempts} disabled={disabled || pending} onChange={event=>setTaskAttempts(Number(event.target.value))} /></label>
           <label className="grid gap-1 text-xs">Required independent CI checks, separated by commas<input className="luminous-focus h-10 rounded-lg border border-[var(--ls-line)] px-3" value={requiredChecks} maxLength={1800} disabled={disabled || pending} onChange={event=>setRequiredChecks(event.target.value)} placeholder="CI / tests, CI / build" /></label>
-          <p className="text-xs leading-5 text-[var(--ls-text-secondary)]">New tasks require a deployment-approved verification profile. Initial and review repair plans still need owner/admin approval. Blocking review findings prepare a new repair task automatically. A blank CI list requires at least one independent check and all observed independent checks to pass. Existing task budgets stay frozen.</p>
+          <p className="text-xs leading-5 text-[var(--ls-text-secondary)]">New tasks require a deployment-approved verification profile. Initial and repair plans still need owner/admin approval. Blocking findings, diagnosed code CI failures and owner acceptance feedback prepare repair tasks automatically. A blank CI list requires at least one independent check and all observed independent checks to pass. Existing task budgets stay frozen.</p>
         </> : null}
       </fieldset>
       <select
@@ -858,7 +862,7 @@ function TaskInspector({
         repository: detail.task.repository,
         issue_number: detail.task.origin_number,
       });
-  const feedbackTarget = detail.feedback && !detail.feedback.source_review_run_id && detail.task.origin_kind === "pull_request"
+  const feedbackTarget = detail.feedback && !detail.feedback.source_review_run_id && !detail.feedback.internal_repair_kind && detail.task.origin_kind === "pull_request"
     ? providerReviewCommentTarget({
         provider: detail.task.provider,
         api_base_url: detail.task.api_base_url,
@@ -921,11 +925,11 @@ function TaskInspector({
           <section className="rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]">
               <ExternalLink className="size-4 text-[var(--ls-accent)]" />
-              {detail.feedback.source_review_run_id ? "Blocking review result" : "Original review feedback"}
+              {detail.feedback.internal_repair_kind ? `${detail.feedback.internal_repair_kind} repair evidence` : detail.feedback.source_review_run_id ? "Blocking review result" : "Original review feedback"}
             </h3>
             <p className="mt-2 text-sm leading-6 text-[var(--ls-text-secondary)]">
-              {detail.feedback.source_review_run_id
-                ? "This repair is bound to the retained review findings and exact Draft commit. The current Draft is checked again before execution and publication; this plan requires its own approval."
+              {(detail.feedback.source_review_run_id || detail.feedback.internal_repair_kind)
+                ? "This repair is bound to the retained repair evidence and exact Draft commit. The current Draft is checked again before execution and publication; this plan requires its own approval."
                 : `This cycle is bound to comment #${detail.feedback.comment_external_id} by provider user #${detail.feedback.actor_external_id}. The instruction is checked again before execution and publication.`}
             </p>
             {detail.feedback.source_review_run_id ? (
@@ -1428,7 +1432,7 @@ function PlanControls({
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sections: {...sections,acceptance_criteria:acceptanceText.split("\n").map(value=>value.trim()).filter(Boolean)} }),
+            body: JSON.stringify({ sections: {...sections,source_requirements:newestPlan?.sections.source_requirements,repository_evidence:newestPlan?.sections.repository_evidence,acceptance_criteria:acceptanceText.split("\n").map(value=>value.trim()).filter(Boolean)} }),
           },
         );
         if (!response.ok) {
@@ -1490,6 +1494,8 @@ function PlanControls({
             <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[var(--ls-text-secondary)]">{newestPlan.summary}</p>
           )}
           {newestPlan.sections?.acceptance_criteria?.length ? <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs">{newestPlan.sections.acceptance_criteria.map((criterion,index)=><li key={index}>{criterion}</li>)}</ol> : null}
+          {newestPlan.sections.source_requirements ? <details className="mt-3 text-xs"><summary className="cursor-pointer font-semibold">Full frozen requirements</summary><pre className="mt-2 whitespace-pre-wrap break-words">{newestPlan.sections.source_requirements}</pre></details> : null}
+          {newestPlan.sections.repository_evidence ? <details className="mt-3 text-xs"><summary className="cursor-pointer font-semibold">Repository evidence at the frozen commit</summary><pre className="mt-2 whitespace-pre-wrap break-words">{newestPlan.sections.repository_evidence}</pre></details> : null}
           <p className="mt-2 text-xs text-[var(--ls-text-tertiary)]">
             revision {newestPlan.revision} · {newestPlan.state}
           </p>
@@ -1717,7 +1723,7 @@ function AcceptanceControls({ detail, disabled, onChanged, org }: {
       setReason("");
       onChanged(decision === "accepted"
         ? "Requirement acceptance recorded for this exact commit."
-        : "Changes requested. Submit an approved feedback cycle on the existing Draft.");
+        : "Changes recorded. A repair plan is prepared when the current Draft and frozen budget allow it.");
     } catch {
       setError("Acceptance could not be saved. Check the connection and retry.");
     }
@@ -1727,12 +1733,19 @@ function AcceptanceControls({ detail, disabled, onChanged, org }: {
       <h3 className="text-sm font-semibold">Requirement acceptance · {acceptance.state.replaceAll("_", " ")}</h3>
       <p className="break-all font-mono text-[11px] text-[var(--ls-text-tertiary)]">Commit {acceptance.head_sha}</p>
       <p className="text-xs leading-5 text-[var(--ls-text-secondary)]">{acceptance.reason}</p>
+      {acceptance.decision && acceptance.state!==acceptance.decision ? <p className="text-xs">Recorded decision: {acceptance.decision.replaceAll("_"," ")} · {acceptance.decision_reason}. Current checks must recover before it is effective.</p> : null}
+      {acceptance.recovery_reason ? <p className="text-xs">{acceptance.recovery_reason}</p> : null}
+      {acceptance.can_retry_checks ? <button className="luminous-focus rounded-lg border border-[var(--ls-line)] px-3 py-2 text-xs" disabled={disabled || pending} onClick={()=>startTransition(async()=>{
+        setError(undefined);
+        try {const response=await fetch(`/api/tenants/${encodeURIComponent(org)}/agent-tasks/${encodeURIComponent(detail.task.id)}/retry-checks`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({revision:acceptance.revision})});if(!response.ok){setError(await mutationError(response,"Check observation is not retryable."));return}onChanged("Independent CI refresh queued. No coding Agent was started.")}catch{setError("Check refresh could not be queued.")}
+      })}>Refresh independent CI</button> : null}
       <p className="text-xs leading-5 text-[var(--ls-text-secondary)]">
         Draft delivery is separate from requirement completion. Verify each criterion at this commit; owner or administrator approval is required.
       </p>
       {acceptance.criteria.map((criterion, index) => (
         <label className="grid gap-1 text-xs" key={`${acceptance.head_sha}:${index}`}>
           <span>{index + 1}. {criterion}</span>
+          {acceptance.verification_criteria?.filter(result=>result.criterion===criterion).map(result=><p key={result.criterion} className="font-normal text-[var(--ls-text-secondary)]">Independent verifier: {result.status} · {result.evidence}</p>)}
           {canDecide ? (
             <textarea
               className="luminous-focus min-h-20 rounded-lg border border-[var(--ls-line)] p-2"
@@ -1765,11 +1778,11 @@ function AcceptanceControls({ detail, disabled, onChanged, org }: {
       {acceptance.remediation_task_id ? (
         <Link className="inline-flex text-xs font-semibold text-[var(--ls-accent)]"
           href={`/${encodeURIComponent(org)}/agent-work?task=${encodeURIComponent(acceptance.remediation_task_id)}`}>
-          Open the automatically prepared review repair plan
+          Open the automatically prepared repair plan
         </Link>
       ) : null}
       {acceptance.state === "changes_requested" ? (
-        <p className="text-xs">On the existing Draft, use <code>@openreview revise &lt;feedback&gt;</code>. The new plan needs approval and the new commit will be reviewed again.</p>
+        <p className="text-xs">The recorded feedback prepares a repair plan when the current Draft and budget allow it. Approve that plan; the updated commit will be verified and reviewed again.</p>
       ) : null}
       {error ? <p role="alert" className="text-xs text-[var(--ls-danger-text)]">{error}</p> : null}
     </section>

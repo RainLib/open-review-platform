@@ -279,6 +279,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tenants/{slug}/agent-tasks/{taskID}/plans/{planID}/approve", s.approveAgentTaskPlan)
 	mux.HandleFunc("POST /v1/tenants/{slug}/agent-tasks/{taskID}/cancel", s.cancelAgentTask)
 	mux.HandleFunc("POST /v1/tenants/{slug}/agent-tasks/{taskID}/acceptance", s.decideAgentTaskAcceptance)
+	mux.HandleFunc("POST /v1/tenants/{slug}/agent-tasks/{taskID}/retry-checks", s.retryAgentTaskChecks)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-exceptions", s.createRuleException)
 	mux.HandleFunc("GET /v1/tenants/{slug}/rule-exceptions", s.listRuleExceptions)
 	mux.HandleFunc("POST /v1/tenants/{slug}/rule-exceptions/{exceptionID}/decisions", s.decideRuleException)
@@ -4045,7 +4046,7 @@ func (s *Server) createAgentTaskPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input domain.AgentTaskPlanInput
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONLimit(w, r, &input, 1<<20) {
 		return
 	}
 	plan, err := s.store.CreateAgentTaskPlan(r.Context(), principal.Subject, r.PathValue("slug"), taskID, input)
@@ -5906,7 +5907,11 @@ func readWebhookBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	return decodeJSONLimit(w, r, destination, 64<<10)
+}
+
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, destination any, limit int64) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON request"})

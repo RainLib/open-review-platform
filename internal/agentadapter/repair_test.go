@@ -13,7 +13,7 @@ import (
 )
 
 func TestBoundedRepairsReverifyEveryPatchAndStopOnInfrastructureFailures(t *testing.T) {
-	for _, scenario := range []string{"repair succeeds", "budget exhausted", "infrastructure failure", "verifier changes patch", "repair escapes scope", "verifier changes metadata", "legacy no repairs", "deadline"} {
+	for _, scenario := range []string{"repair succeeds", "budget exhausted", "infrastructure failure", "verifier changes patch", "repair escapes scope", "verifier changes metadata", "legacy no repairs", "deadline", "criterion proof repaired", "criterion proof absent"} {
 		t.Run(scenario, func(t *testing.T) {
 			workspace := t.TempDir()
 			for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-q", "-m", "base"}, {"switch", "-q", "-c", "agent/test-task"}} {
@@ -41,6 +41,10 @@ func TestBoundedRepairsReverifyEveryPatchAndStopOnInfrastructureFailures(t *test
 					t.Fatal(err)
 				}
 			}
+			if strings.HasPrefix(scenario, "criterion proof") {
+				submission.Limits.Workflow.RequireCriterionEvidence = true
+				submission.Plan.AcceptanceCriteria = []string{"Retry twice"}
+			}
 			write("README.md", "broken change\n")
 			files, size, sha, err := pipeline.validatePatch(context.Background(), workspace, submission)
 			if err != nil {
@@ -49,6 +53,13 @@ func TestBoundedRepairsReverifyEveryPatchAndStopOnInfrastructureFailures(t *test
 			verifies, repairs := 0, 0
 			pipeline.verifyCommand = func(_ context.Context, _ string, _ VerificationProfile) (VerificationEvidence, error) {
 				verifies++
+				if strings.HasPrefix(scenario, "criterion proof") {
+					result := VerificationEvidence{ProfileSHA256: strings.Repeat("b", 64), OutputSHA256: strings.Repeat("c", 64)}
+					if scenario == "criterion proof repaired" && repairs == 1 {
+						result.Criteria = []domain.AgentCriterionResult{{Criterion: "Retry twice", Status: "passed", Evidence: "TestRetryLimits passed"}}
+					}
+					return result, nil
+				}
 				switch scenario {
 				case "infrastructure failure":
 					return VerificationEvidence{}, errors.New("sandbox cleanup failed")
@@ -84,7 +95,7 @@ func TestBoundedRepairsReverifyEveryPatchAndStopOnInfrastructureFailures(t *test
 				ctx = cancelled
 			}
 			evidence, _, _, _, err := pipeline.verifyAndRepair(ctx, workspace, submission, testVerificationProfile(), config, files, size, sha)
-			if scenario == "repair succeeds" {
+			if scenario == "repair succeeds" || scenario == "criterion proof repaired" {
 				if err != nil || evidence == nil || verifies != 2 || repairs != 1 {
 					t.Fatalf("repair loop: checks=%d repairs=%d evidence=%v err=%v", verifies, repairs, evidence, err)
 				}
@@ -94,7 +105,7 @@ func TestBoundedRepairsReverifyEveryPatchAndStopOnInfrastructureFailures(t *test
 				t.Fatal("unsafe/exhausted result accepted")
 			}
 			want := 0
-			if scenario == "budget exhausted" {
+			if scenario == "budget exhausted" || scenario == "criterion proof absent" {
 				want = 2
 			}
 			if scenario == "repair escapes scope" {

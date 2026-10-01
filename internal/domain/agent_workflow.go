@@ -10,15 +10,16 @@ import (
 // AgentWorkflowPolicy is frozen on admission. Legacy tasks retain their
 // original execution contract; enabling a repository never expands them.
 type AgentWorkflowPolicy struct {
-	Enabled         bool     `json:"enabled"`
-	MaxRepairCycles int      `json:"max_repair_cycles"`
-	MaxTaskAttempts int      `json:"max_task_attempts"`
-	RequiredChecks  []string `json:"required_checks,omitempty"`
+	RequireCriterionEvidence bool     `json:"require_criterion_evidence,omitempty"`
+	Enabled                  bool     `json:"enabled"`
+	MaxRepairCycles          int      `json:"max_repair_cycles"`
+	MaxTaskAttempts          int      `json:"max_task_attempts"`
+	RequiredChecks           []string `json:"required_checks,omitempty"`
 }
 
 func (p AgentWorkflowPolicy) Valid() bool {
 	if !p.Enabled {
-		return p.MaxRepairCycles == 0 && p.MaxTaskAttempts == 0 && len(p.RequiredChecks) == 0
+		return !p.RequireCriterionEvidence && p.MaxRepairCycles == 0 && p.MaxTaskAttempts == 0 && len(p.RequiredChecks) == 0
 	}
 	if p.MaxRepairCycles < 0 || p.MaxRepairCycles > 3 || p.MaxTaskAttempts < 1 || p.MaxTaskAttempts > 5 || len(p.RequiredChecks) > 10 {
 		return false
@@ -36,20 +37,26 @@ func (p AgentWorkflowPolicy) Valid() bool {
 // Acceptance belongs to one exact delivered commit, independently of the
 // coding task's legacy completed (Draft delivered) state.
 type AgentTaskAcceptance struct {
-	RemediationTaskID *uuid.UUID `json:"remediation_task_id,omitempty"`
-	CanDecide         bool       `json:"can_decide"`
-	Evidence          []string   `json:"evidence,omitempty"`
-	TaskID            uuid.UUID  `json:"task_id"`
-	AttemptID         uuid.UUID  `json:"attempt_id"`
-	HeadSHA           string     `json:"head_sha"`
-	Revision          int        `json:"revision"`
-	State             string     `json:"state"`
-	Criteria          []string   `json:"criteria"`
-	ReviewRunID       *uuid.UUID `json:"review_run_id,omitempty"`
-	Reason            string     `json:"reason,omitempty"`
-	DecidedBy         string     `json:"decided_by,omitempty"`
-	DecidedAt         *time.Time `json:"decided_at,omitempty"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	CanRetryChecks       bool                   `json:"can_retry_checks"`
+	VerificationCriteria []AgentCriterionResult `json:"verification_criteria,omitempty"`
+	DecisionReason       string                 `json:"decision_reason,omitempty"`
+	DecisionRevision     int                    `json:"decision_revision,omitempty"`
+	Decision             string                 `json:"decision,omitempty"`
+	RecoveryReason       string                 `json:"recovery_reason,omitempty"`
+	RemediationTaskID    *uuid.UUID             `json:"remediation_task_id,omitempty"`
+	CanDecide            bool                   `json:"can_decide"`
+	Evidence             []string               `json:"evidence,omitempty"`
+	TaskID               uuid.UUID              `json:"task_id"`
+	AttemptID            uuid.UUID              `json:"attempt_id"`
+	HeadSHA              string                 `json:"head_sha"`
+	Revision             int                    `json:"revision"`
+	State                string                 `json:"state"`
+	Criteria             []string               `json:"criteria"`
+	ReviewRunID          *uuid.UUID             `json:"review_run_id,omitempty"`
+	Reason               string                 `json:"reason,omitempty"`
+	DecidedBy            string                 `json:"decided_by,omitempty"`
+	DecidedAt            *time.Time             `json:"decided_at,omitempty"`
+	UpdatedAt            time.Time              `json:"updated_at"`
 }
 
 type AgentTaskAcceptanceInput struct {
@@ -109,4 +116,40 @@ func AgentChecksReady(observation ProviderCheckObservation, policy AgentWorkflow
 		return false, "independent_checks_missing"
 	}
 	return true, ""
+}
+
+// Results originate in the fixed independent verifier, never the coding CLI.
+type AgentCriterionResult struct {
+	Criterion string `json:"criterion"`
+	Status    string `json:"status"`
+	Evidence  string `json:"evidence"`
+}
+
+func ValidCriterionResults(results []AgentCriterionResult) bool {
+	if len(results) > 20 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, r := range results {
+		if len(strings.TrimSpace(r.Criterion)) < 3 || len(r.Criterion) > 1000 || r.Criterion != strings.TrimSpace(r.Criterion) || seen[r.Criterion] || (r.Status != "passed" && r.Status != "failed") || len(strings.TrimSpace(r.Evidence)) < 3 || len(r.Evidence) > 2000 || strings.ContainsRune(r.Criterion+r.Evidence, 0) {
+			return false
+		}
+		seen[r.Criterion] = true
+	}
+	return true
+}
+func CriteriaVerified(criteria []string, results []AgentCriterionResult) bool {
+	if len(criteria) == 0 || len(results) != len(criteria) || !ValidCriterionResults(results) {
+		return false
+	}
+	passed := map[string]bool{}
+	for _, r := range results {
+		passed[r.Criterion] = r.Status == "passed"
+	}
+	for _, c := range criteria {
+		if !passed[c] {
+			return false
+		}
+	}
+	return true
 }

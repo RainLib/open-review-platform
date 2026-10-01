@@ -19,7 +19,7 @@ func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T
 		t.Skip("requires an isolated PostgreSQL database")
 	}
 	ctx := context.Background()
-	s, err := Open(ctx, os.Getenv("OPEN_REVIEW_TEST_DATABASE_URL"))
+	s, err := Open(ctx, isolatedQueueDatabase(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T
 	exec(`INSERT INTO tenants(id,slug,name) VALUES($1,$2,'Workflow fixture')`, tenant, slug)
 	exec(`INSERT INTO memberships(tenant_id,subject,role,active) VALUES($1,'owner','owner',true),($1,'reviewer','reviewer',true)`, tenant)
 	exec(`INSERT INTO provider_installations(id,tenant_id,provider,external_id,repository_scope,api_base_url,credential_ref,verification_state) VALUES($1,$2,'github',$3,'team/repo','https://api.github.com','fixture','verified')`, installation, tenant, installation.String())
-	workflow := domain.AgentWorkflowPolicy{Enabled: true, MaxRepairCycles: 2, MaxTaskAttempts: 3, RequiredChecks: []string{"CI / tests"}}
+	workflow := domain.AgentWorkflowPolicy{Enabled: true, RequireCriterionEvidence: true, MaxRepairCycles: 2, MaxTaskAttempts: 3, RequiredChecks: []string{"CI / tests"}}
 	policyInput := domain.AgentTaskPolicyInput{Provider: domain.ProviderGitHub, APIBaseURL: "https://api.github.com", Repository: "team/repo", Mode: "manual", DecisionBackend: "deterministic", Workflow: &workflow, MaxFeedbackCycles: 2}
 	policy, err := s.SaveAgentTaskPolicy(ctx, "owner", slug, policyInput)
 	if err != nil {
@@ -117,14 +117,26 @@ func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T
 	event.VerificationProfileSHA256 = strings.Repeat("d", 64)
 	event.VerificationOutputSHA256 = strings.Repeat("e", 64)
 	event.VerificationOutputBytes = 45
+	event.VerificationCriteria = []domain.AgentCriterionResult{{Criterion: "Retry exactly twice", Status: "passed", Evidence: "TestRetryLimits passed"}, {Criterion: "Show the final failure", Status: "passed", Evidence: "TestFinalFailure passed"}}
 	checkpoint := event
 	checkpoint.Kind = "publication_checkpoint"
 	checkpoint.Summary = ""
 	checkpoint.DeliveryID = "fixture-checkpoint-" + attempt.ID.String()
 	checkpoint.PullRequestURL = ""
 	checkpoint.PullRequestNumber = 0
+	missingProof := checkpoint
+	missingProof.VerificationCriteria = nil
+	if _, _, err = s.RecordAgentTaskAdapterEvent(ctx, missingProof, time.Minute); !errors.Is(err, ErrInvalidAgentTask) {
+		t.Fatalf("unproved requirements published: %v", err)
+	}
 	if _, _, err = s.RecordAgentTaskAdapterEvent(ctx, checkpoint, time.Minute); err != nil {
 		t.Fatal(err)
+	}
+	tampered := event
+	tampered.VerificationCriteria = append([]domain.AgentCriterionResult(nil), event.VerificationCriteria...)
+	tampered.VerificationCriteria[0].Evidence = "Different unbound evidence"
+	if _, _, err = s.RecordAgentTaskAdapterEvent(ctx, tampered, time.Minute); !errors.Is(err, ErrInvalidAgentTask) {
+		t.Fatalf("changed criterion proof accepted: %v", err)
 	}
 	if _, _, err = s.RecordAgentTaskAdapterEvent(ctx, event, time.Minute); err != nil {
 		t.Fatal(err)
@@ -212,6 +224,29 @@ func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T
 	if err != nil || accepted.State != "accepted" || len(accepted.Evidence) != 2 {
 		t.Fatalf("acceptance: %+v %v", accepted, err)
 	}
+	// Temporary observation loss suspends readiness but preserves the decision.
+	lease()
+	observe("", "unavailable")
+	if a = acceptance("owner"); a.State != "needs_attention" || a.Decision != "accepted" {
+		t.Fatalf("decision lost during outage: %+v", a)
+	}
+	lease()
+	observe(event.HeadSHA, "open")
+	if a = acceptance("owner"); a.State != "accepted" {
+		t.Fatalf("acceptance did not recover: %+v", a)
+	}
+	exec(`UPDATE review_provider_check_observations SET state='running' WHERE run_id=$1`, runID)
+	lease()
+	observe(event.HeadSHA, "open")
+	if a = acceptance("owner"); a.State != "reviewing" || a.Decision != "accepted" {
+		t.Fatalf("CI refresh erased decision: %+v", a)
+	}
+	exec(`UPDATE review_provider_check_observations SET state='observed' WHERE run_id=$1`, runID)
+	lease()
+	observe(event.HeadSHA, "open")
+	if a = acceptance("owner"); a.State != "accepted" || a.DecisionReason != decision.Reason {
+		t.Fatalf("CI recovery lost decision evidence: %+v", a)
+	}
 	// Acceptance must still be observable after the usual 24-hour CI window.
 	exec(`UPDATE review_runs SET created_at=now()-interval '2 days' WHERE id=$1`, runID)
 	exec(`UPDATE review_provider_check_observations SET available_at=now()-interval '100 years' WHERE run_id=$1`, runID)
@@ -228,6 +263,29 @@ func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T
 	if a = acceptance("owner"); a.State != "accepted" {
 		t.Fatalf("accepted state lost: %+v", a)
 	}
+	exec(`UPDATE review_provider_check_observations SET state='failed' WHERE run_id=$1`, runID)
+	lease()
+	observe(event.HeadSHA, "open")
+	a = acceptance("owner")
+	if _, err = s.RetryAgentTaskChecks(ctx, "reviewer", slug, task.ID, a.Revision); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("reviewer retried checks: %v", err)
+	}
+	if _, err = s.RetryAgentTaskChecks(ctx, "owner", slug, task.ID, a.Revision-1); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale check retry: %v", err)
+	}
+	if _, err = s.RetryAgentTaskChecks(ctx, "owner", slug, task.ID, a.Revision); err != nil {
+		t.Fatal(err)
+	}
+	var checkState string
+	if err = s.pool.QueryRow(ctx, `SELECT state FROM review_provider_check_observations WHERE run_id=$1`, runID).Scan(&checkState); err != nil || checkState != "queued" {
+		t.Fatalf("check retry did not queue: %s %v", checkState, err)
+	}
+	a = acceptance("owner")
+	if _, err = s.RetryAgentTaskChecks(ctx, "owner", slug, task.ID, a.Revision); !errors.Is(err, ErrConflict) {
+		t.Fatalf("active check retry duplicated: %v", err)
+	}
+	exec(`UPDATE review_provider_check_observations SET state='observed',observed_at=now() WHERE run_id=$1`, runID)
+
 	lease()
 	observe(strings.Repeat("c", 40), "open")
 	if a = acceptance("owner"); a.State != "superseded" {

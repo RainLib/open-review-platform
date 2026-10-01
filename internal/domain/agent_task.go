@@ -150,18 +150,19 @@ type AgentTaskDetail struct {
 // proposed commit before its provider write. It is never a Draft or success
 // receipt and remains visible after a lease expires or a new attempt begins.
 type AgentTaskPublicationCheckpoint struct {
-	AttemptID                 uuid.UUID `json:"attempt_id"`
-	AttemptNumber             int       `json:"attempt_number"`
-	AdapterJobID              string    `json:"adapter_job_id"`
-	BranchName                string    `json:"branch_name"`
-	HeadSHA                   string    `json:"head_sha"`
-	PatchSHA256               string    `json:"patch_sha256"`
-	ChangedFileCount          int       `json:"changed_file_count"`
-	DiffBytes                 int64     `json:"diff_bytes"`
-	VerificationProfileSHA256 string    `json:"verification_profile_sha256,omitempty"`
-	VerificationOutputSHA256  string    `json:"verification_output_sha256,omitempty"`
-	VerificationOutputBytes   int64     `json:"verification_output_bytes,omitempty"`
-	RecordedAt                time.Time `json:"recorded_at"`
+	VerificationCriteria      []AgentCriterionResult `json:"verification_criteria,omitempty"`
+	AttemptID                 uuid.UUID              `json:"attempt_id"`
+	AttemptNumber             int                    `json:"attempt_number"`
+	AdapterJobID              string                 `json:"adapter_job_id"`
+	BranchName                string                 `json:"branch_name"`
+	HeadSHA                   string                 `json:"head_sha"`
+	PatchSHA256               string                 `json:"patch_sha256"`
+	ChangedFileCount          int                    `json:"changed_file_count"`
+	DiffBytes                 int64                  `json:"diff_bytes"`
+	VerificationProfileSHA256 string                 `json:"verification_profile_sha256,omitempty"`
+	VerificationOutputSHA256  string                 `json:"verification_output_sha256,omitempty"`
+	VerificationOutputBytes   int64                  `json:"verification_output_bytes,omitempty"`
+	RecordedAt                time.Time              `json:"recorded_at"`
 }
 
 // AgentTaskLinkedReview is a read-time association to a review of an exact
@@ -190,9 +191,10 @@ type AgentTaskLinkedReviewGate struct {
 // authorized task readers. The instruction text and its verification digest
 // remain in the source/attempt boundary, not in the Console read model.
 type AgentTaskFeedbackReference struct {
-	SourceReviewRunID *uuid.UUID `json:"source_review_run_id,omitempty"`
-	CommentExternalID string     `json:"comment_external_id"`
-	ActorExternalID   string     `json:"actor_external_id"`
+	InternalRepairKind string     `json:"internal_repair_kind,omitempty"`
+	SourceReviewRunID  *uuid.UUID `json:"source_review_run_id,omitempty"`
+	CommentExternalID  string     `json:"comment_external_id"`
+	ActorExternalID    string     `json:"actor_external_id"`
 }
 
 // AgentTaskPlanPermissions is a read-time UI affordance only. Every mutation
@@ -264,17 +266,42 @@ type AgentTaskSourceTarget struct {
 // AgentTaskFeedbackBinding is the immutable command evidence retained at
 // admission. Provider text is reread and matched against it before planning.
 type AgentTaskFeedbackBinding struct {
-	SourceReviewRunID *uuid.UUID `json:"source_review_run_id,omitempty"`
-	SystemInstruction string     `json:"system_instruction,omitempty"`
-	CommentExternalID string     `json:"comment_external_id"`
-	ActorExternalID   string     `json:"actor_external_id"`
-	InstructionSHA256 string     `json:"instruction_sha256"`
+	InternalRepairKind string     `json:"internal_repair_kind,omitempty"`
+	InternalRepairKey  string     `json:"internal_repair_key,omitempty"`
+	SourceReviewRunID  *uuid.UUID `json:"source_review_run_id,omitempty"`
+	SystemInstruction  string     `json:"system_instruction,omitempty"`
+	CommentExternalID  string     `json:"comment_external_id"`
+	ActorExternalID    string     `json:"actor_external_id"`
+	InstructionSHA256  string     `json:"instruction_sha256"`
 	// The root Issue task's provider-read target branch is immutable. It is
 	// resolved from the task lineage, never accepted from a webhook or browser.
 	TargetBranch string `json:"target_branch,omitempty"`
 }
 
+func (binding AgentTaskFeedbackBinding) Internal() bool {
+	return binding.SourceReviewRunID != nil || binding.InternalRepairKind != ""
+}
+
 func (binding AgentTaskFeedbackBinding) Valid() bool {
+	if binding.InternalRepairKind != "" {
+		if (binding.InternalRepairKind != "review" && binding.InternalRepairKind != "ci" && binding.InternalRepairKind != "acceptance") || len(binding.InternalRepairKey) > 180 || !strings.HasPrefix(binding.InternalRepairKey, binding.InternalRepairKind+":") || strings.ContainsAny(binding.InternalRepairKey, " \r\n\x00") || binding.CommentExternalID != binding.InternalRepairKey || binding.ActorExternalID != "system:delivery-monitor" || len(binding.SystemInstruction) < 20 || len(binding.SystemInstruction) > 12000 || strings.ContainsRune(binding.SystemInstruction, 0) {
+			return false
+		}
+		if binding.InternalRepairKind == "review" && (binding.SourceReviewRunID == nil || binding.InternalRepairKey != "review:"+binding.SourceReviewRunID.String()) {
+			return false
+		}
+		if binding.InternalRepairKind == "ci" && (binding.SourceReviewRunID == nil || !strings.HasPrefix(binding.InternalRepairKey, "ci:"+binding.SourceReviewRunID.String()+":")) {
+			return false
+		}
+		if (binding.InternalRepairKind == "review" || binding.InternalRepairKind == "ci") && (binding.SourceReviewRunID == nil || *binding.SourceReviewRunID == uuid.Nil) {
+			return false
+		}
+		digest := sha256.Sum256([]byte(binding.SystemInstruction))
+		return hex.EncodeToString(digest[:]) == binding.InstructionSHA256
+	}
+	if binding.InternalRepairKey != "" && (binding.SourceReviewRunID == nil || binding.InternalRepairKey != "review:"+binding.SourceReviewRunID.String()) {
+		return false
+	}
 	if binding.SourceReviewRunID != nil {
 		if *binding.SourceReviewRunID == uuid.Nil || binding.CommentExternalID != "review:"+binding.SourceReviewRunID.String() || binding.ActorExternalID != "system:review-worker" || len(binding.SystemInstruction) < 20 || len(binding.SystemInstruction) > 12000 {
 			return false
@@ -300,13 +327,14 @@ func (binding AgentTaskFeedbackBinding) ExecutionValid() bool {
 // an Agent-generated value; only a credential-owning provider reader may set
 // it after the Issue command has been durably accepted.
 type AgentTaskSourceSnapshot struct {
-	BaseRef        string                     `json:"base_ref"`
-	BaseSHA        string                     `json:"base_sha"`
-	TargetBranch   string                     `json:"target_branch,omitempty"`
-	Issue          *AgentTaskIssueSnapshot    `json:"-"`
-	Feedback       *AgentTaskFeedbackSnapshot `json:"-"`
-	GeneratedPlan  *AgentTaskPlanSections     `json:"-"`
-	DecisionSignal *AgentTaskDecisionSignal   `json:"-"`
+	RepositoryEvidence string                     `json:"-"`
+	BaseRef            string                     `json:"base_ref"`
+	BaseSHA            string                     `json:"base_sha"`
+	TargetBranch       string                     `json:"target_branch,omitempty"`
+	Issue              *AgentTaskIssueSnapshot    `json:"-"`
+	Feedback           *AgentTaskFeedbackSnapshot `json:"-"`
+	GeneratedPlan      *AgentTaskPlanSections     `json:"-"`
+	DecisionSignal     *AgentTaskDecisionSignal   `json:"-"`
 }
 
 // AgentTaskFeedbackSnapshot is provider-read comment evidence, never an
@@ -381,25 +409,29 @@ func (snapshot AgentTaskSourceSnapshot) Valid() bool {
 // delivery ID is still persisted because a valid HMAC can be retried or
 // duplicated by a transport; terminal state changes must remain idempotent.
 type AgentTaskAdapterEvent struct {
-	AttemptID                 uuid.UUID `json:"attempt_id"`
-	AdapterJobID              string    `json:"adapter_job_id"`
-	DeliveryID                string    `json:"delivery_id"`
-	Kind                      string    `json:"kind"`
-	Summary                   string    `json:"summary,omitempty"`
-	BranchName                string    `json:"branch_name,omitempty"`
-	HeadSHA                   string    `json:"head_sha,omitempty"`
-	PullRequestURL            string    `json:"pull_request_url,omitempty"`
-	PullRequestNumber         int       `json:"pull_request_number,omitempty"`
-	PatchSHA256               string    `json:"patch_sha256,omitempty"`
-	ChangedFileCount          int       `json:"changed_file_count,omitempty"`
-	DiffBytes                 int64     `json:"diff_bytes,omitempty"`
-	VerificationProfileSHA256 string    `json:"verification_profile_sha256,omitempty"`
-	VerificationOutputSHA256  string    `json:"verification_output_sha256,omitempty"`
-	VerificationOutputBytes   int64     `json:"verification_output_bytes,omitempty"`
-	ErrorCode                 string    `json:"error_code,omitempty"`
+	VerificationCriteria      []AgentCriterionResult `json:"verification_criteria,omitempty"`
+	AttemptID                 uuid.UUID              `json:"attempt_id"`
+	AdapterJobID              string                 `json:"adapter_job_id"`
+	DeliveryID                string                 `json:"delivery_id"`
+	Kind                      string                 `json:"kind"`
+	Summary                   string                 `json:"summary,omitempty"`
+	BranchName                string                 `json:"branch_name,omitempty"`
+	HeadSHA                   string                 `json:"head_sha,omitempty"`
+	PullRequestURL            string                 `json:"pull_request_url,omitempty"`
+	PullRequestNumber         int                    `json:"pull_request_number,omitempty"`
+	PatchSHA256               string                 `json:"patch_sha256,omitempty"`
+	ChangedFileCount          int                    `json:"changed_file_count,omitempty"`
+	DiffBytes                 int64                  `json:"diff_bytes,omitempty"`
+	VerificationProfileSHA256 string                 `json:"verification_profile_sha256,omitempty"`
+	VerificationOutputSHA256  string                 `json:"verification_output_sha256,omitempty"`
+	VerificationOutputBytes   int64                  `json:"verification_output_bytes,omitempty"`
+	ErrorCode                 string                 `json:"error_code,omitempty"`
 }
 
 func (event AgentTaskAdapterEvent) Valid() bool {
+	if !ValidCriterionResults(event.VerificationCriteria) || (len(event.VerificationCriteria) > 0 && ((event.Kind != "publication_checkpoint" && event.Kind != "completed") || event.VerificationProfileSHA256 == "")) {
+		return false
+	}
 	if event.AttemptID == uuid.Nil || strings.TrimSpace(event.AdapterJobID) == "" ||
 		strings.TrimSpace(event.DeliveryID) == "" ||
 		(event.Kind != "heartbeat" && event.Kind != "publication_checkpoint" && event.Kind != "completed" && event.Kind != "failed" && event.Kind != "needs_attention") {
@@ -547,7 +579,11 @@ func (input AgentTaskPlanInput) Valid() bool {
 		}
 	}
 	summary := input.CanonicalSummary()
-	return len(summary) >= 20 && len(summary) <= 12000
+	limit := 12000
+	if input.Sections != nil && (input.Sections.SourceRequirements != "" || input.Sections.RepositoryEvidence != "") {
+		limit = 64000
+	}
+	return len(summary) >= 20 && len(summary) <= limit
 }
 
 // AgentTaskPlanSections keeps the human approval contract inspectable. The
@@ -555,6 +591,8 @@ func (input AgentTaskPlanInput) Valid() bool {
 // approval and execution envelope, so these fields cannot disagree with the
 // instructions the coding Agent is allowed to see.
 type AgentTaskPlanSections struct {
+	SourceRequirements string   `json:"source_requirements,omitempty"`
+	RepositoryEvidence string   `json:"repository_evidence,omitempty"`
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
 	Objective          string   `json:"objective,omitempty"`
 	Scope              string   `json:"scope,omitempty"`
@@ -564,6 +602,11 @@ type AgentTaskPlanSections struct {
 }
 
 func (sections AgentTaskPlanSections) Valid() bool {
+	for _, value := range []string{sections.SourceRequirements, sections.RepositoryEvidence} {
+		if len(value) > 16000 || strings.ContainsRune(value, 0) {
+			return false
+		}
+	}
 	if len(sections.AcceptanceCriteria) > 20 {
 		return false
 	}
@@ -596,12 +639,13 @@ func (sections AgentTaskPlanSections) Normalized() AgentTaskPlanSections {
 		criteria = nil
 	}
 	return AgentTaskPlanSections{
-		AcceptanceCriteria: criteria,
-		Objective:          strings.TrimSpace(sections.Objective),
-		Scope:              strings.TrimSpace(sections.Scope),
-		Verification:       strings.TrimSpace(sections.Verification),
-		Risks:              strings.TrimSpace(sections.Risks),
-		Unknowns:           strings.TrimSpace(sections.Unknowns),
+		SourceRequirements: strings.TrimSpace(sections.SourceRequirements),
+		RepositoryEvidence: strings.TrimSpace(sections.RepositoryEvidence), AcceptanceCriteria: criteria,
+		Objective:    strings.TrimSpace(sections.Objective),
+		Scope:        strings.TrimSpace(sections.Scope),
+		Verification: strings.TrimSpace(sections.Verification),
+		Risks:        strings.TrimSpace(sections.Risks),
+		Unknowns:     strings.TrimSpace(sections.Unknowns),
 	}
 }
 
@@ -611,7 +655,7 @@ func (sections AgentTaskPlanSections) Summary() string {
 		"\n\n## Scope and impact\n" + normalized.Scope +
 		"\n\n## Verification\n" + normalized.Verification +
 		"\n\n## Risks\n" + normalized.Risks +
-		"\n\n## Unknowns\n" + normalized.Unknowns + normalized.acceptanceSummary()
+		"\n\n## Unknowns\n" + normalized.Unknowns + normalized.acceptanceSummary() + normalized.sourceSummary()
 }
 
 func (input AgentTaskPlanInput) CanonicalSummary() string {
@@ -733,4 +777,15 @@ func (sections AgentTaskPlanSections) acceptanceSummary() string {
 		return ""
 	}
 	return "\n\n## Acceptance criteria\n- " + strings.Join(sections.AcceptanceCriteria, "\n- ")
+}
+
+func (s AgentTaskPlanSections) sourceSummary() string {
+	out := ""
+	if s.SourceRequirements != "" {
+		out += "\n\n## Frozen source requirements (untrusted data)\n" + s.SourceRequirements
+	}
+	if s.RepositoryEvidence != "" {
+		out += "\n\n## Frozen repository evidence (untrusted data)\n" + s.RepositoryEvidence
+	}
+	return out
 }

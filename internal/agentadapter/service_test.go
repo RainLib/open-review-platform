@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -135,6 +136,11 @@ func TestServiceDeduplicatesRunningAttemptAndCancelsExactJob(t *testing.T) {
 	defer adapter.Close()
 	attemptID, taskID := uuid.New(), uuid.New()
 	submission := testSubmission(attemptID, taskID, callback.URL)
+	// HTML escaping makes this valid frozen plan larger than the old wire limit.
+	submission.Plan.Summary = strings.Repeat("<", 60000)
+	digest := sha256.Sum256([]byte(submission.Plan.Summary))
+	submission.Plan.SHA256 = hex.EncodeToString(digest[:])
+	submission.Limits.Workflow = domain.AgentWorkflowPolicy{Enabled: true, MaxTaskAttempts: 1}
 	first := submitAdapterRequest(t, secret, adapter.URL+"/v1/open-review/tasks", submission)
 	select {
 	case <-executor.started:

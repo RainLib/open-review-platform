@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -110,7 +111,7 @@ func TestAgentTaskAdapterEventRequiresValidHMACAndForwardsEvent(t *testing.T) {
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	if backend.event != event || backend.lease != time.Minute {
+	if !reflect.DeepEqual(backend.event, event) || backend.lease != time.Minute {
 		t.Fatalf("callback was not forwarded: event=%+v lease=%s", backend.event, backend.lease)
 	}
 	checkpoint := event
@@ -127,7 +128,7 @@ func TestAgentTaskAdapterEventRequiresValidHMACAndForwardsEvent(t *testing.T) {
 	request.Header.Set(agentadapter.HeaderSignature, agentadapter.Sign(secret, timestamp, checkpointBody))
 	response = httptest.NewRecorder()
 	mux.ServeHTTP(response, request)
-	if response.Code != http.StatusAccepted || backend.event != checkpoint {
+	if response.Code != http.StatusAccepted || !reflect.DeepEqual(backend.event, checkpoint) {
 		t.Fatalf("signed pre-push checkpoint was not forwarded: status=%d event=%+v", response.Code, backend.event)
 	}
 	checkpoint.PullRequestNumber = 7

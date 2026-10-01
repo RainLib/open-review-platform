@@ -42,3 +42,19 @@ func TestPlannerUsesFrozenRequirementsAndPreservesCriteria(t *testing.T) {
 		t.Fatal("insecure planning endpoint accepted")
 	}
 }
+
+func TestLongUnheadedRequestRemainsInApprovedPlan(t *testing.T) {
+	body := strings.Repeat("Detailed request without an acceptance heading. ", 95) + "FINAL_REQUIREMENT: retain cancellation errors"
+	snapshot := domain.AgentTaskSourceSnapshot{BaseRef: "main", BaseSHA: strings.Repeat("a", 40), Issue: &domain.AgentTaskIssueSnapshot{Title: "Fix all worker requirements", Body: body}, RepositoryEvidence: "Frozen worker.go declares worker cancellation"}
+	plan, err := (Planner{}).Generate(context.Background(), domain.AgentTask{Repository: "team/repo"}, snapshot)
+	if err != nil || plan.SourceRequirements != body || !strings.Contains(plan.Summary(), "FINAL_REQUIREMENT") || !strings.Contains(plan.Summary(), snapshot.RepositoryEvidence) {
+		t.Fatalf("request lost: %v", err)
+	}
+	model := plan
+	model.SourceRequirements = "weakened"
+	model.RepositoryEvidence = "invented"
+	// Normalization and summary must retain full source in the approval hash.
+	if strings.Contains(model.Summary(), "FINAL_REQUIREMENT") {
+		t.Fatal("test did not change approval material")
+	}
+}

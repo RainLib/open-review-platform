@@ -124,6 +124,11 @@ func main() {
 				return database.FailAgentTaskSourceSnapshot(ctx, taskID, "agent_decision_unavailable", "Open Review could not obtain a valid decision from the repository's configured backend. No Agent was started. Check the decision service and retry source verification in Agent Work.")
 			}
 			if target.Task.Workflow.Enabled {
+				inspection, inspectErr := resolver.InspectPlanningSource(ctx, target, snapshot)
+				if inspectErr != nil {
+					return database.FailAgentTaskSourceSnapshot(ctx, taskID, "agent_plan_source_unavailable", "Repository inspection at the frozen commit failed. Restore provider access and retry source verification.")
+				}
+				snapshot.RepositoryEvidence = inspection
 				plan, planErr := agentplan.FromEnvironment().Generate(ctx, target.Task, snapshot)
 				if planErr != nil {
 					return database.FailAgentTaskSourceSnapshot(ctx, taskID, "agent_plan_unavailable", "Automatic planning could not produce a bounded plan. Check the planner configuration and retry source verification.")

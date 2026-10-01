@@ -24,12 +24,13 @@ import (
 // approved plan, repository file or coding model output. Its command runs as
 // argv (not a shell string) in a second, networkless pinned container.
 type VerificationProfile struct {
-	Provider       domain.Provider `json:"provider"`
-	APIBaseURL     string          `json:"api_base_url"`
-	Repository     string          `json:"repository"`
-	ImageID        string          `json:"image_id"`
-	Argv           []string        `json:"argv"`
-	TimeoutSeconds int             `json:"timeout_seconds"`
+	Provider                domain.Provider `json:"provider"`
+	APIBaseURL              string          `json:"api_base_url"`
+	Repository              string          `json:"repository"`
+	ImageID                 string          `json:"image_id"`
+	Argv                    []string        `json:"argv"`
+	CriterionReportRequired bool            `json:"criterion_report_required,omitempty"`
+	TimeoutSeconds          int             `json:"timeout_seconds"`
 }
 
 type verificationProfileFile struct {
@@ -38,6 +39,7 @@ type verificationProfileFile struct {
 }
 
 type VerificationEvidence struct {
+	Criteria      []domain.AgentCriterionResult
 	ProfileSHA256 string
 	OutputSHA256  string
 	OutputBytes   int64
@@ -180,6 +182,10 @@ func (pipeline Pipeline) runVerification(ctx context.Context, workspace string, 
 	defer cancel()
 	command := exec.CommandContext(verificationCtx, pipeline.DockerSandbox.DockerBinary, args...)
 	command.Env = dockerClientEnvironment()
+	if len(pipeline.verificationCriteria) > 0 {
+		input, _ := json.Marshal(map[string]any{"acceptance_criteria": pipeline.verificationCriteria})
+		command.Stdin = strings.NewReader(string(input) + "\n")
+	}
 	if err := configureExecutorProcessGroup(command); err != nil {
 		return VerificationEvidence{}, err
 	}
@@ -210,6 +216,34 @@ func (pipeline Pipeline) runVerification(ctx context.Context, workspace string, 
 	if err != nil {
 		return VerificationEvidence{}, err
 	}
+	criteria, parseErr := parseCriterionReport(text)
+	if parseErr != nil {
+		return VerificationEvidence{}, parseErr
+	}
+	if profile.CriterionReportRequired && len(criteria) == 0 {
+		return VerificationEvidence{}, fmt.Errorf("fixed verifier did not provide required criterion report")
+	}
 	outputSHA := sha256.Sum256([]byte(text))
-	return VerificationEvidence{ProfileSHA256: profileSHA, OutputSHA256: hex.EncodeToString(outputSHA[:]), OutputBytes: count}, nil
+	return VerificationEvidence{Criteria: criteria, ProfileSHA256: profileSHA, OutputSHA256: hex.EncodeToString(outputSHA[:]), OutputBytes: count}, nil
+}
+
+// Only explicitly marked JSON records from the independent command are parsed.
+func parseCriterionReport(output string) ([]domain.AgentCriterionResult, error) {
+	var results []domain.AgentCriterionResult
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "OPENREVIEW_CRITERION_RESULT ") {
+			continue
+		}
+		decoder := json.NewDecoder(strings.NewReader(strings.TrimPrefix(line, "OPENREVIEW_CRITERION_RESULT ")))
+		decoder.DisallowUnknownFields()
+		var r domain.AgentCriterionResult
+		if decoder.Decode(&r) != nil || decoder.Decode(new(any)) != io.EOF {
+			return nil, fmt.Errorf("invalid fixed verifier criterion report")
+		}
+		results = append(results, r)
+	}
+	if !domain.ValidCriterionResults(results) {
+		return nil, fmt.Errorf("invalid or duplicate criterion evidence")
+	}
+	return results, nil
 }

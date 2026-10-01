@@ -37,9 +37,10 @@ type Submission struct {
 		Feedback        *domain.AgentTaskFeedbackBinding `json:"feedback,omitempty"`
 	} `json:"task"`
 	Plan struct {
-		Revision int    `json:"revision"`
-		SHA256   string `json:"sha256"`
-		Summary  string `json:"summary"`
+		AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
+		Revision           int      `json:"revision"`
+		SHA256             string   `json:"sha256"`
+		Summary            string   `json:"summary"`
 	} `json:"plan"`
 	// Limits are copied from the admitted task, not from adapter input. The
 	// adapter must stop at deadline_at; the control plane independently enforces
@@ -119,6 +120,7 @@ func (client *Client) Submit(ctx context.Context, target domain.AgentTaskAttempt
 	requestBody.Task.SourceBaseSHA = target.Task.SourceBaseSHA
 	requestBody.Task.BranchName = target.Task.ExecutionBranch
 	requestBody.Task.Feedback = target.Feedback
+	requestBody.Plan.AcceptanceCriteria = target.Plan.Sections.AcceptanceCriteria
 	requestBody.Plan.Revision = target.Plan.Revision
 	requestBody.Plan.SHA256 = target.Plan.PlanSHA256
 	requestBody.Plan.Summary = target.Plan.Summary

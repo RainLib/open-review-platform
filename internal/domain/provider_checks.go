@@ -9,10 +9,12 @@ import (
 // ProviderCheck is source evidence for one external check on an immutable
 // commit. It never changes an Open Review merge-gate decision.
 type ProviderCheck struct {
-	Kind  string `json:"kind"`
-	Name  string `json:"name"`
-	State string `json:"state"`
-	URL   string `json:"url,omitempty"`
+	Diagnostics  string `json:"diagnostics,omitempty"`
+	FailureClass string `json:"failure_class,omitempty"`
+	Kind         string `json:"kind"`
+	Name         string `json:"name"`
+	State        string `json:"state"`
+	URL          string `json:"url,omitempty"`
 	// Origin is deliberately conservative: an unclassified provider status is
 	// not evidence that an independent CI system has run.
 	Origin string `json:"origin,omitempty"`

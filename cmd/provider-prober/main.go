@@ -65,10 +65,11 @@ func main() {
 	checksProcessor := providerchecks.Processor{
 		Store: database,
 		Client: providerchecks.Client{
-			Resolver:             resolver,
-			AllowPrivateNetworks: envBool("PROVIDER_CHECKS_ALLOW_PRIVATE_NETWORKS"),
-			AllowInsecureHTTP:    envBool("PROVIDER_CHECKS_ALLOW_HTTP"),
-			OwnGitHubAppID:       positiveInt64Env("GITHUB_APP_ID"),
+			Resolver:                  resolver,
+			AllowPrivateNetworks:      envBool("PROVIDER_CHECKS_ALLOW_PRIVATE_NETWORKS"),
+			AllowInsecureHTTP:         envBool("PROVIDER_CHECKS_ALLOW_HTTP"),
+			OwnGitHubAppID:            positiveInt64Env("GITHUB_APP_ID"),
+			CollectFailureDiagnostics: true,
 		},
 		WorkerID:    checksWorkerID,
 		Lease:       durationEnv("PROVIDER_CHECKS_LEASE", time.Minute),

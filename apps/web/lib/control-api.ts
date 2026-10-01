@@ -1427,12 +1427,18 @@ export type ProviderIssueAnalysisData = {
 };
 
 export type AgentWorkflowPolicy = {
+ require_criterion_evidence?: boolean;
   enabled: boolean;
   max_repair_cycles: number;
   max_task_attempts: number;
   required_checks?: string[];
 };
 export type AgentTaskAcceptance = {
+ can_retry_checks?: boolean;
+ decision?: string;
+ decision_reason?: string;
+ recovery_reason?: string;
+ verification_criteria?: {criterion:string;status:"passed"|"failed";evidence:string}[];
   remediation_task_id?: string;
   can_decide: boolean;
   evidence?: string[];
@@ -1550,6 +1556,8 @@ export type AgentTaskPlan = {
 };
 
 export type AgentTaskPlanSections = {
+ source_requirements?: string;
+ repository_evidence?: string;
   acceptance_criteria?: string[];
   objective: string;
   scope: string;
@@ -1633,6 +1641,7 @@ export type AgentTaskDetail = {
     };
   }[];
   feedback?: {
+    internal_repair_kind?: string;
     source_review_run_id?: string;
     comment_external_id: string;
     actor_external_id: string;
