@@ -1,7 +1,7 @@
 package domain
 
 // AcceptanceRuleFixture is an unmerged rule-verification sample.
-// Governed model-route replay keeps the intentional defect for a failing case.
+// The fixed case preserves the caller boolean for the same governed rule.
 func AcceptanceRuleFixture(flag bool) bool {
-	return true
+	return flag
 }
