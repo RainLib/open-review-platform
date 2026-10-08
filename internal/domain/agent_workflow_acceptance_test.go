@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -148,6 +149,180 @@ func TestCriteriaVerifiedEqualCardinalityMalformedFields(t *testing.T) {
 			}
 			if ValidCriterionResults(results) {
 				t.Fatalf("ValidCriterionResults accepted malformed results (%s) at equal cardinality", name)
+			}
+		})
+	}
+}
+
+// TestCriteriaVerifiedInclusiveBoundaries demonstrates the inclusive valid
+// boundaries of the field-length rules: criteria of exactly 3 and exactly
+// 1000 bytes and evidence of exactly 3 and exactly 2000 bytes must pass both
+// validators with complete passing evidence, including multi-byte UTF-8
+// content measured under the existing byte-length rules. Over-limit fields
+// must be rejected; for over-limit criterion cases the approved criterion and
+// the result criterion are identical at equal cardinality, so the rejection
+// can only come from field validation rather than a criterion mismatch.
+func TestCriteriaVerifiedInclusiveBoundaries(t *testing.T) {
+	asciiMinCriterion := "abc"
+	asciiMaxCriterion := strings.Repeat("x", 1000)
+	asciiMinEvidence := "efg"
+	asciiMaxEvidence := strings.Repeat("y", 2000)
+	threeDistinctMaxCriteria := []string{
+		strings.Repeat("a", 999) + "0",
+		strings.Repeat("a", 999) + "1",
+		strings.Repeat("a", 999) + "2",
+	}
+	threeMaxEvidenceResults := []AgentCriterionResult{
+		{Criterion: threeDistinctMaxCriteria[0], Status: "passed", Evidence: asciiMaxEvidence},
+		{Criterion: threeDistinctMaxCriteria[1], Status: "passed", Evidence: asciiMaxEvidence},
+		{Criterion: threeDistinctMaxCriteria[2], Status: "passed", Evidence: asciiMaxEvidence},
+	}
+	multibyteMinCriterion := "日" // 3 bytes
+	multibyteMaxCriterion := strings.Repeat("é", 500)
+	multibyteMinEvidence := "漢" // 3 bytes
+	multibyteMaxEvidence := strings.Repeat("é", 1000)
+	asciiOverCriterion := strings.Repeat("x", 1001)
+	multibyteOverCriterion := strings.Repeat("é", 501) // 1002 bytes
+	asciiOverEvidence := strings.Repeat("y", 2001)
+	multibyteOverEvidence := strings.Repeat("é", 1001) // 2002 bytes
+	cases := []struct {
+		name         string
+		criteria     []string
+		results      []AgentCriterionResult
+		wantVerified bool
+	}{
+		{
+			name:     "minimum-size ASCII criterion and evidence at inclusive limits",
+			criteria: []string{asciiMinCriterion},
+			results: []AgentCriterionResult{
+				{Criterion: asciiMinCriterion, Status: "passed", Evidence: asciiMinEvidence},
+			},
+			wantVerified: true,
+		},
+		{
+			name:     "maximum-size ASCII criterion and evidence at inclusive limits",
+			criteria: []string{asciiMaxCriterion},
+			results: []AgentCriterionResult{
+				{Criterion: asciiMaxCriterion, Status: "passed", Evidence: asciiMaxEvidence},
+			},
+			wantVerified: true,
+		},
+		{
+			name:         "three 1000-byte criteria with 2000-byte evidence fully verified",
+			criteria:     threeDistinctMaxCriteria,
+			results:      threeMaxEvidenceResults,
+			wantVerified: true,
+		},
+		{
+			name:     "multi-byte UTF-8 criterion and evidence at exact byte limits",
+			criteria: []string{multibyteMinCriterion, multibyteMaxCriterion},
+			results: []AgentCriterionResult{
+				{Criterion: multibyteMinCriterion, Status: "passed", Evidence: multibyteMinEvidence},
+				{Criterion: multibyteMaxCriterion, Status: "passed", Evidence: multibyteMaxEvidence},
+			},
+			wantVerified: true,
+		},
+		{
+			name:     "ASCII criterion over the 1000-byte limit rejected at equal cardinality with identical criterion",
+			criteria: []string{asciiOverCriterion},
+			results: []AgentCriterionResult{
+				{Criterion: asciiOverCriterion, Status: "passed", Evidence: "Valid evidence for the over-limit criterion."},
+			},
+			wantVerified: false,
+		},
+		{
+			name:     "multi-byte UTF-8 criterion over the 1000-byte limit rejected at equal cardinality with identical criterion",
+			criteria: []string{multibyteOverCriterion},
+			results: []AgentCriterionResult{
+				{Criterion: multibyteOverCriterion, Status: "passed", Evidence: "Valid evidence for the over-limit criterion."},
+			},
+			wantVerified: false,
+		},
+		{
+			name:     "ASCII evidence over the 2000-byte limit rejected",
+			criteria: []string{"Retry twice"},
+			results: []AgentCriterionResult{
+				{Criterion: "Retry twice", Status: "passed", Evidence: asciiOverEvidence},
+			},
+			wantVerified: false,
+		},
+		{
+			name:     "multi-byte UTF-8 evidence over the 2000-byte limit rejected",
+			criteria: []string{"Retry twice"},
+			results: []AgentCriterionResult{
+				{Criterion: "Retry twice", Status: "passed", Evidence: multibyteOverEvidence},
+			},
+			wantVerified: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CriteriaVerified(tc.criteria, tc.results); got != tc.wantVerified {
+				t.Fatalf("CriteriaVerified = %v, want %v", got, tc.wantVerified)
+			}
+			if got := ValidCriterionResults(tc.results); got != tc.wantVerified {
+				t.Fatalf("ValidCriterionResults = %v, want %v", got, tc.wantVerified)
+			}
+		})
+	}
+}
+
+// TestCriteriaVerifiedTwentyDistinctCriteria demonstrates that a full valid
+// result set of 20 distinct approved criteria passes verification, including
+// when the results are reordered, while 21 criteria/results are rejected.
+func TestCriteriaVerifiedTwentyDistinctCriteria(t *testing.T) {
+	twentyCriteria := make([]string, 20)
+	twentyResults := make([]AgentCriterionResult, 20)
+	for i := range twentyCriteria {
+		twentyCriteria[i] = fmt.Sprintf("Criterion %02d verified distinctly", i)
+		twentyResults[i] = AgentCriterionResult{
+			Criterion: twentyCriteria[i],
+			Status:    "passed",
+			Evidence:  fmt.Sprintf("Evidence for criterion %02d recorded fully.", i),
+		}
+	}
+	reorderedResults := make([]AgentCriterionResult, 20)
+	for i, r := range twentyResults {
+		reorderedResults[19-i] = r
+	}
+	twentyOneCriteria := append(append([]string{}, twentyCriteria...), "Criterion 20 extra beyond limit")
+	twentyOneResults := append(append([]AgentCriterionResult{}, twentyResults...), AgentCriterionResult{
+		Criterion: "Criterion 20 extra beyond limit",
+		Status:    "passed",
+		Evidence:  "Evidence for the twenty-first criterion recorded fully.",
+	})
+	cases := []struct {
+		name     string
+		criteria []string
+		results  []AgentCriterionResult
+		want     bool
+	}{
+		{
+			name:     "twenty distinct criteria in delivered order",
+			criteria: twentyCriteria,
+			results:  twentyResults,
+			want:     true,
+		},
+		{
+			name:     "twenty distinct criteria with reordered results",
+			criteria: twentyCriteria,
+			results:  reorderedResults,
+			want:     true,
+		},
+		{
+			name:     "twenty-one distinct criteria rejected",
+			criteria: twentyOneCriteria,
+			results:  twentyOneResults,
+			want:     false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CriteriaVerified(tc.criteria, tc.results); got != tc.want {
+				t.Fatalf("CriteriaVerified = %v, want %v", got, tc.want)
+			}
+			if got := ValidCriterionResults(tc.results); got != tc.want {
+				t.Fatalf("ValidCriterionResults = %v, want %v", got, tc.want)
 			}
 		})
 	}
