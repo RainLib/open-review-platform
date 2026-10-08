@@ -1,8 +1,9 @@
 "use client";
 
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext } from "react";
 
 import { type UiLanguage, type UiTextKey, uiText } from "@/lib/ui-language";
+import { workflowStatus, workflowText, type WorkflowMessageValues } from "@/lib/workflow-copy";
 
 const UiLanguageContext = createContext<UiLanguage>("en");
 
@@ -17,4 +18,14 @@ export function useUiLanguage() {
 export function useUiText() {
   const language = useUiLanguage();
   return (key: UiTextKey) => uiText(language, key);
+}
+
+export function useWorkflowText() {
+  const language = useUiLanguage();
+  return useCallback((source: string, values?: WorkflowMessageValues) => workflowText(language, source, values), [language]);
+}
+
+export function useWorkflowStatus() {
+  const language = useUiLanguage();
+  return useCallback((state: string) => workflowStatus(language, state), [language]);
 }

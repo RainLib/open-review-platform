@@ -1,5 +1,7 @@
 "use client";
 
+import { useWorkflowText } from "@/components/console/ui-language-context";
+
 import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 
@@ -10,6 +12,7 @@ export function CopyEvidenceButton({
   label?: string;
   value: string;
 }) {
+  const t = useWorkflowText();
   const [state, setState] = useState<"idle" | "copied" | "error">("idle");
 
   async function copy() {
@@ -45,7 +48,7 @@ export function CopyEvidenceButton({
       type="button"
     >
       {state === "copied" ? <Check className="size-3.5 text-[var(--ls-success-text)]" /> : <Copy className="size-3.5" />}
-      {state === "copied" ? "Copied" : state === "error" ? "Copy failed" : label}
+      {state === "copied" ? t("Copied") : state === "error" ? t("Copy failed") : t(label)}
     </button>
   );
 }

@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { observedSeverity, providerObservation, selectedScopeCount, validReviewOverviewView } from "./review-overview.ts";
+import { observedSeverity, providerObservation, reviewConfigurationEvidence, selectedScopeCount, validReviewOverviewView } from "./review-overview.ts";
+
+test("configuration provenance requires every distinct governed section", () => {
+  const snapshots = ["general", "categories", "filters", "prompts", "summary", "messages", "models", "issue-triage"].map((section) => ({ section }));
+  assert.deepEqual(reviewConfigurationEvidence(snapshots), { retained: 8, expected: 8, complete: true });
+  const missingPrompts = snapshots.filter((snapshot) => snapshot.section !== "prompts");
+  assert.deepEqual(reviewConfigurationEvidence([...missingPrompts, snapshots[0]]), { retained: 7, expected: 8, complete: false });
+  assert.deepEqual(reviewConfigurationEvidence([]), { retained: 0, expected: 8, complete: false });
+});
 
 test("overview subviews accept only stable slugs", () => {
   assert.equal(validReviewOverviewView("risk"), "risk");

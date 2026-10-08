@@ -1212,6 +1212,25 @@ export type ReviewEvidence = {
 
 export type DataSource = "live" | "demo" | "unconfigured" | "unavailable";
 
+export type WorkspaceApprovalPolicy = {
+  allow_agent_plan_self_approval: boolean;
+  allow_rule_self_approval: boolean;
+  revision: number;
+  updated_by: string;
+  updated_at?: string;
+  can_update: boolean;
+};
+
+export async function getWorkspaceApprovalPolicyData(org: string): Promise<{ source: DataSource; policy?: WorkspaceApprovalPolicy; detail?: string }> {
+  const configuration = await getControlPlaneRequestConfiguration();
+  if (!configuration || process.env.OPEN_REVIEW_CONSOLE_DEMO === "true") return { source: "unconfigured", detail: "Sign in to read workspace approval settings." };
+  try {
+    return { source: "live", policy: await request<WorkspaceApprovalPolicy>(configuration, `/v1/tenants/${encodeURIComponent(org)}/approval-policy`) };
+  } catch (error) {
+    return { source: "unavailable", detail: error instanceof Error ? error.message : "Could not read approval settings." };
+  }
+}
+
 export type IssueStatus = "open" | "regressed" | "resolved" | "suppressed";
 
 export type ReviewIssue = {
@@ -1619,6 +1638,8 @@ export type AgentTaskPublicationCheckpoint = {
 };
 
 export type AgentTaskDetail = {
+	execution_block?: { code: string; message: string; recorded_at: string };
+	execution_budget?: { used: number; limit: number; successful_deliveries: number; attention_attempts: number };
   acceptance?: AgentTaskAcceptance;
   task: AgentTask;
   target_branch?: string;

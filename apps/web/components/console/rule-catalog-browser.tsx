@@ -1,5 +1,7 @@
 "use client";
 
+import { useWorkflowText } from "@/components/console/ui-language-context";
+
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -30,6 +32,7 @@ export function RuleCatalogBrowser({
   catalog: RuleCatalogData;
   org: string;
 }) {
+  const t = useWorkflowText();
   const router = useRouter();
   const [pendingID, setPendingID] = useState<string>();
   const [message, setMessage] = useState<Message>();
@@ -57,13 +60,13 @@ export function RuleCatalogBrowser({
         replayed?: boolean;
       };
       if (!response.ok) {
-        throw new Error(payload.error ?? "The policy template could not be installed.");
+        throw new Error(payload.error ?? t("The policy template could not be installed."));
       }
       setMessage({
         tone: "success",
         text: payload.replayed
-          ? "This exact catalog release is already installed as a governed draft."
-          : "Installed as a draft. Request independent approval before publishing or binding it.",
+          ? t("This exact catalog release is already installed as a governed draft.")
+          : t("Installed as a draft. Request governed approval before publishing or binding it."),
       });
       router.refresh();
     } catch (error) {
@@ -72,7 +75,7 @@ export function RuleCatalogBrowser({
         text:
           error instanceof Error
             ? error.message
-            : "The policy template could not be installed.",
+            : t("The policy template could not be installed."),
       });
     } finally {
       setPendingID(undefined);
@@ -87,10 +90,9 @@ export function RuleCatalogBrowser({
             <CircleAlert className="size-5" />
           </span>
           <h2 className="mt-5 text-xl font-semibold tracking-[-0.03em] text-[var(--ls-text)]">
-            Catalog unavailable
-          </h2>
+            {t(" Catalog unavailable ")}</h2>
           <p className="mt-3 text-sm leading-6 text-[var(--ls-text-secondary)]">
-            {catalog.detail ?? "The control plane did not return a trusted policy catalog."}
+            {catalog.detail ?? t("The control plane did not return a trusted policy catalog.")}
           </p>
         </div>
       </section>
@@ -111,16 +113,14 @@ export function RuleCatalogBrowser({
             <FileLock2 className="size-4" />
           </span>
           <div>
-            <p className="text-sm font-semibold text-[var(--ls-text)]">Core catalog · release-pinned</p>
+            <p className="text-sm font-semibold text-[var(--ls-text)]">{t("Core catalog · release-pinned")}</p>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-[var(--ls-text-secondary)]">
-              Templates are compiled into this Open Review release. Installation creates a normal draft only; approvals, publication, and scoped bindings remain separate decisions.
-            </p>
+              {t(" Templates are compiled into this Open Review release. Installation creates a normal draft only; approvals, publication, and scoped bindings remain separate decisions. ")}</p>
           </div>
         </div>
         <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-2.5 py-1 text-[11px] text-[var(--ls-text-secondary)]">
           <ShieldCheck className="size-3.5 text-[var(--ls-success-text)]" />
-          Content verified
-        </span>
+          {t(" Content verified ")}</span>
       </div>
 
       {message ? (
@@ -136,7 +136,7 @@ export function RuleCatalogBrowser({
         <div className="grid min-h-52 place-items-center rounded-[18px] border border-dashed border-[var(--ls-line-strong)] bg-[var(--ls-surface)] p-8 text-center">
           <div>
             <Sparkles className="mx-auto size-5 text-[var(--ls-text-tertiary)]" />
-            <p className="mt-3 text-sm font-medium text-[var(--ls-text)]">No catalog entries in this release</p>
+            <p className="mt-3 text-sm font-medium text-[var(--ls-text)]">{t("No catalog entries in this release")}</p>
           </div>
         </div>
       ) : (
@@ -152,8 +152,7 @@ export function RuleCatalogBrowser({
                   </span>
                   {installed ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/[0.1] px-2.5 py-1 text-[11px] font-medium text-[var(--ls-success-text)]">
-                      <Check className="size-3" /> Installed
-                    </span>
+                      <Check className="size-3" /> {t(" Installed ")}</span>
                   ) : (
                     <span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-[11px] font-medium text-[var(--ls-text-secondary)]">
                       {entry.rule_count} {entry.rule_count === 1 ? "rule" : "rules"}
@@ -167,23 +166,22 @@ export function RuleCatalogBrowser({
                 </div>
                 <details className="mt-4 rounded-[10px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)]">
                   <summary className="luminous-focus cursor-pointer list-none px-3 py-2.5 text-xs font-medium text-[var(--ls-text-secondary)] [&::-webkit-details-marker]:hidden">
-                    Version & provenance
-                  </summary>
+                    {t(" Version & provenance ")}</summary>
                   <dl className="space-y-2 border-t border-[var(--ls-line)] px-3 py-3 text-[11px] leading-5 text-[var(--ls-text-secondary)]">
-                    <div className="flex justify-between gap-3"><dt>Release</dt><dd className="font-mono text-[var(--ls-text)]">v{entry.version}</dd></div>
-                    <div className="flex justify-between gap-3"><dt>Source</dt><dd className="truncate font-mono text-[var(--ls-text)]" title={entry.origin}>{entry.origin}</dd></div>
-                    <div className="flex justify-between gap-3"><dt>Digest</dt><dd className="font-mono text-[var(--ls-text)]" title={entry.content_sha256}>{entry.content_sha256.slice(0, 12)}</dd></div>
+                    <div className="flex justify-between gap-3"><dt>{t("Release")}</dt><dd className="font-mono text-[var(--ls-text)]">v{entry.version}</dd></div>
+                    <div className="flex justify-between gap-3"><dt>{t("Source")}</dt><dd className="truncate font-mono text-[var(--ls-text)]" title={entry.origin}>{entry.origin}</dd></div>
+                    <div className="flex justify-between gap-3"><dt>{t("Digest")}</dt><dd className="font-mono text-[var(--ls-text)]" title={entry.content_sha256}>{entry.content_sha256.slice(0, 12)}</dd></div>
                   </dl>
                 </details>
                 <div className="mt-auto pt-4">
                   {installed ? (
                     <Link className="luminous-focus inline-flex h-9 w-full items-center justify-center gap-2 rounded-[9px] border border-[var(--ls-line-strong)] px-3 text-xs font-semibold text-[var(--ls-text)] hover:bg-[var(--ls-surface-muted)]" href={`/${encodeURIComponent(org)}/rules/${encodeURIComponent(installed.rule_set_id)}?tab=overview`}>
-                      Open governed policy <span className="text-[var(--ls-text-tertiary)]">{installationLabel(entry)}</span><ArrowUpRight className="size-3.5" />
+                      {t(" Open governed policy ")}<span className="text-[var(--ls-text-tertiary)]">{installationLabel(entry)}</span><ArrowUpRight className="size-3.5" />
                     </Link>
                   ) : (
                     <button className="luminous-focus inline-flex h-9 w-full items-center justify-center gap-2 rounded-[9px] bg-[var(--ls-accent)] px-3 text-xs font-semibold text-white transition hover:bg-[var(--ls-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45" disabled={!entry.can_install || pending} onClick={() => install(entry)} type="button">
                       {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
-                      {catalog.source === "demo" ? "Preview only" : entry.can_install ? "Install as draft" : "Admin approval required"}
+                      {catalog.source === "demo" ? t("Preview only") : entry.can_install ? t("Install as draft") : t("Admin approval required")}
                     </button>
                   )}
                 </div>

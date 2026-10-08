@@ -90,6 +90,22 @@ test("Jev advice is distinct from deterministic admission checks", () => {
   assert.equal(agentAdmissionEvidence([...evaluation, { stage: "unexpected", outcome: "passed", summary: "", signals: [] }]).hardChecks.length, 3);
 });
 
+test("pending admission stages tolerate missing signals without inventing a passing decision", () => {
+  const evaluation = [
+    { stage: "judge", outcome: "pending", summary: "Source capture pending.", signals: null },
+    { stage: "verify", outcome: "pending", summary: "Source not verified." },
+    { stage: "model", outcome: "pending", summary: "Advice pending.", signals: null },
+  ];
+  const result = agentAdmissionEvidence(evaluation);
+  assert.deepEqual(result.hardChecks.map((stage) => stage.signals), [[], []]);
+  assert.deepEqual(result.hardChecks.map((stage) => stage.outcome), ["pending", "pending"]);
+  assert.equal(evaluation[0].signals, null);
+  assert.equal("signals" in evaluation[1], false);
+  assert.deepEqual(result.modelAdvisory, { ...evaluation[2], signals: [] });
+  assert.equal(evaluation[2].signals, null);
+  assert.deepEqual(agentAdmissionEvidence(null), { hardChecks: [], modelAdvisory: undefined });
+});
+
 test("publication checkpoints stay attached to their exact execution attempt", () => {
   const attempts = [
     { id: "attempt-new", attempt: 2, state: "running" },

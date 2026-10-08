@@ -1,5 +1,7 @@
 "use client";
 
+import { useWorkflowStatus, useWorkflowText } from "@/components/console/ui-language-context";
+
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -41,6 +43,8 @@ export function FindingFeedbackDashboardView({
   findingsError?: string;
   org: string;
 }) {
+  const t = useWorkflowText();
+  const status = useWorkflowStatus();
   const router = useRouter();
   const [busy, setBusy] = useState<string>();
   const [message, setMessage] = useState<string>();
@@ -73,17 +77,17 @@ export function FindingFeedbackDashboardView({
         error?: string;
       };
       if (!response.ok) {
-        setMessage(body.error ?? "The finding disposition could not be updated.");
+        setMessage(body.error ?? t("The finding disposition could not be updated."));
         setMessageTone("error");
         return;
       }
       setMessage(
-        `Finding disposition updated to ${kind === "clear" ? "unresolved" : kind.replace("_", " ")}.`,
+        t("Finding disposition updated to {state}.", { state: status(kind === "clear" ? "unresolved" : kind) }),
       );
       setMessageTone("success");
       router.refresh();
     } catch {
-      setMessage("The finding disposition could not reach the control plane.");
+      setMessage(t("The finding disposition could not reach the control plane."));
       setMessageTone("error");
     } finally {
       setBusy(undefined);
@@ -93,25 +97,25 @@ export function FindingFeedbackDashboardView({
   const metrics = [
     {
       icon: MessageSquareMore,
-      label: "Published findings",
+      label: t("Published findings"),
       tone: "text-[var(--ls-accent)]",
       value: data.finding_count,
     },
     {
       icon: CircleAlert,
-      label: "Feedback events",
+      label: t("Feedback events"),
       tone: "text-violet-600 dark:text-violet-300",
       value: data.feedback_count,
     },
     {
       icon: Layers3,
-      label: "Response coverage",
+      label: t("Response coverage"),
       tone: "text-[var(--ls-warning-text)]",
       value: `${responseRate}%`,
     },
     {
       icon: ThumbsUp,
-      label: "Useful among rated",
+      label: t("Useful among rated"),
       tone: "text-[var(--ls-success-text)]",
       value: `${usefulRate}%`,
     },
@@ -163,11 +167,9 @@ export function FindingFeedbackDashboardView({
 
       <section className="overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
         <div className="border-b border-[var(--ls-line)] px-5 py-4">
-          <h2 className="text-sm font-semibold text-[var(--ls-text)]">Repository evidence</h2>
+          <h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Repository evidence")}</h2>
           <p className="mt-1 text-xs leading-5 text-[var(--ls-text-tertiary)]">
-            Only active feedback is counted. Deleted reactions remain auditable
-            but no longer affect these measurements.
-          </p>
+            {t(" Only active feedback is counted. Deleted reactions remain auditable but no longer affect these measurements. ")}</p>
         </div>
         {data.repositories.length ? (
           <div className="divide-y divide-[var(--ls-line)]">
@@ -182,12 +184,11 @@ export function FindingFeedbackDashboardView({
                         {item.repository}
                       </h3>
                       <p className="mt-1 text-xs text-[var(--ls-text-tertiary)]">
-                        {item.distinct_snapshot_count} immutable snapshot(s) ·{" "}
-                        {item.high_risk_finding_count} high-risk finding(s)
-                      </p>
+                        {item.distinct_snapshot_count} {t(" immutable snapshot(s) ·")}{" "}
+                        {item.high_risk_finding_count} {t(" high-risk finding(s) ")}</p>
                     </div>
                     <div className="flex flex-wrap gap-2 text-[11px]">
-                      <MetricPill>{item.finding_count} findings</MetricPill>
+                      <MetricPill>{item.finding_count} {t(" findings")}</MetricPill>
                       <MetricPill tone="success">
                         <ThumbsUp className="size-3" />
                         {item.useful_finding_count}
@@ -212,22 +213,20 @@ export function FindingFeedbackDashboardView({
           </div>
         ) : (
           <EmptyFeedback
-            detail="Reactions on future inline findings will appear here."
-            title="No finding feedback evidence yet"
+            detail={t("Reactions on future inline findings will appear here.")}
+            title={t("No finding feedback evidence yet")}
           />
         )}
       </section>
 
       <section className="overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
         <div className="border-b border-[var(--ls-line)] px-5 py-4">
-          <h2 className="text-sm font-semibold text-[var(--ls-text)]">{findingHeading}</h2>
+          <h2 className="text-sm font-semibold text-[var(--ls-text)]">{t(findingHeading)}</h2>
           <p className="mt-1 text-xs leading-5 text-[var(--ls-text-tertiary)]">
-            Reviewer dispositions are actor-scoped and auditable; they never
-            rewrite the original AI result.
-          </p>
+            {t(" Reviewer dispositions are actor-scoped and auditable; they never rewrite the original AI result. ")}</p>
         </div>
         {findingsError ? (
-          <EmptyFeedback detail={findingsError} title="Finding results are unavailable" />
+          <EmptyFeedback detail={findingsError} title={t("Finding results are unavailable")} />
         ) : visibleFindings.length ? (
           <div className="divide-y divide-[var(--ls-line)]">
             {visibleFindings.map((finding) => {
@@ -241,14 +240,14 @@ export function FindingFeedbackDashboardView({
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <MetricPill tone={severityTone(finding.severity)}>
-                          {finding.severity}
+                          {status(finding.severity)}
                         </MetricPill>
                         <span className="text-xs text-[var(--ls-text-secondary)]">
                           {finding.category}
                         </span>
                         {finding.actor_disposition ? (
                           <MetricPill tone="accent">
-                            {finding.actor_disposition.replace("_", " ")}
+                            {status(finding.actor_disposition)}
                           </MetricPill>
                         ) : null}
                       </div>
@@ -270,8 +269,7 @@ export function FindingFeedbackDashboardView({
                     <div className="flex shrink-0 flex-wrap gap-2">
                       {evidenceURL ? (
                         <Link className="luminous-focus inline-flex h-8 items-center rounded-[9px] border border-[var(--ls-line-strong)] px-2.5 text-xs text-[var(--ls-accent)] transition hover:bg-[var(--ls-accent-soft)]" href={evidenceURL} prefetch={false}>
-                          Review evidence
-                        </Link>
+                          {t(" Review evidence ")}</Link>
                       ) : null}
                       {target ? (
                         <a
@@ -280,14 +278,14 @@ export function FindingFeedbackDashboardView({
                           rel="noreferrer"
                           target="_blank"
                         >
-                          Open {finding.provider === "gitlab" ? "MR" : "PR"} <ExternalLink className="size-3" />
+                          {t(" Open ")}{finding.provider === "gitlab" ? "MR" : "PR"} <ExternalLink className="size-3" />
                         </a>
                       ) : null}
                       <FeedbackButton
                         busy={isBusy}
                         disabled={!enabled || Boolean(busy)}
                         icon={CheckCircle2}
-                        label="Resolved"
+                        label={t("Resolved")}
                         onClick={() =>
                           setDisposition(
                             finding.id,
@@ -302,7 +300,7 @@ export function FindingFeedbackDashboardView({
                         busy={isBusy}
                         disabled={!enabled || Boolean(busy)}
                         icon={Ban}
-                        label="Won&apos;t fix"
+                        label={t("Won't fix")}
                         onClick={() =>
                           setDisposition(
                             finding.id,
@@ -321,8 +319,8 @@ export function FindingFeedbackDashboardView({
           </div>
         ) : (
           <EmptyFeedback
-            detail="Adjust the view or search filters to inspect other findings."
-            title="No findings match this view"
+            detail={t("Adjust the view or search filters to inspect other findings.")}
+            title={t("No findings match this view")}
           />
         )}
       </section>

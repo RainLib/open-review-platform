@@ -1,4 +1,16 @@
-import type { ReviewEvidence } from "@/lib/control-api";
+import type { ReviewConfigSection, ReviewEvidence } from "@/lib/control-api";
+
+const configurationSections: Record<ReviewConfigSection, true> = {
+  general: true, categories: true, filters: true, prompts: true,
+  summary: true, messages: true, models: true, "issue-triage": true,
+};
+
+export function reviewConfigurationEvidence(snapshots: ReviewEvidence["configuration_snapshot"]) {
+  const sections = Object.keys(configurationSections);
+  const present = new Set(snapshots.map((snapshot) => snapshot.section));
+  const retained = sections.filter((section) => present.has(section as ReviewConfigSection)).length;
+  return { retained, expected: sections.length, complete: retained === sections.length };
+}
 
 export type ReviewOverviewView = "overview" | "scope" | "risk" | "verification" | "evidence";
 

@@ -1,3 +1,5 @@
+import { getUiLanguage } from "@/lib/ui-language-server";
+import { workflowText } from "@/lib/workflow-copy";
 import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 
@@ -18,6 +20,8 @@ export default async function AgentWorkPage({
   params: Promise<{ org: string }>;
   searchParams: Promise<{ task?: string; cursor?: string }>;
 }) {
+  const language = await getUiLanguage();
+  const t = (source: string) => workflowText(language, source);
   const [{ org }, query] = await Promise.all([params, searchParams]);
   const [data, health] = await Promise.all([
     getAgentTaskData(org, query.task, query.cursor),
@@ -28,12 +32,11 @@ export default async function AgentWorkPage({
       <PageState
         action={
           <RecoveryAction href={`/${encodeURIComponent(org)}/connect`}>
-            Check provider connection
-          </RecoveryAction>
+            {t(" Check provider connection ")}</RecoveryAction>
         }
-        detail={data.detail ?? "The control plane is unavailable."}
+        detail={data.detail ?? t("The control plane is unavailable.")}
         kind="unavailable"
-        title="Agent work unavailable"
+        title={t("Agent work unavailable")}
       />
     );
   const sourceQueue = health.source === "live" ? health.queues.find((queue) => queue.key === "agent-source") : undefined;
@@ -73,16 +76,16 @@ export default async function AgentWorkPage({
     : reviewConfigQuery
       ? `/${encodeURIComponent(org)}/review-config/${draftReview.filtersAction ? "filters" : "general"}?${reviewConfigQuery}`
       : "#agent-repository-admission";
-  const decisionStatus = decision?.state === "configured_unverified" ? "Configured only" : decision?.state === "not_configured" ? "Not configured" : "Not observed";
-  const executorStatus = executor?.state === "reachable_unverified" ? "Adapter reachable" : executor?.state === "partially_reachable" ? "Mixed reachability" : executor?.state === "unreachable" ? "Adapter unreachable" : executor?.state === "configured_unverified" ? "Configured only" : executor?.state === "not_configured" ? "Not configured" : "Not observed";
-  const brokerStatus = credentialBroker?.state === "configured_unverified" ? "Configured only" : "Not observed";
+  const decisionStatus = decision?.state === "configured_unverified" ? t("Configured only") : decision?.state === "not_configured" ? t("Not configured") : t("Not observed");
+  const executorStatus = executor?.state === "reachable_unverified" ? t("Adapter reachable") : executor?.state === "partially_reachable" ? t("Mixed reachability") : executor?.state === "unreachable" ? t("Adapter unreachable") : executor?.state === "configured_unverified" ? t("Configured only") : executor?.state === "not_configured" ? t("Not configured") : t("Not observed");
+  const brokerStatus = credentialBroker?.state === "configured_unverified" ? t("Configured only") : t("Not observed");
   const steps: Array<{ label: string; status: string; detail: string; href: string; action: string; attention?: boolean }> = [
-    { label: "Provider connection", status: connection.status, detail: connection.detail, href: taskInstallation ? `/${encodeURIComponent(org)}/connect/${encodeURIComponent(taskInstallation.id)}` : `/${encodeURIComponent(org)}/connect`, action: taskInstallation ? "Connection detail" : "Connections", attention: connection.attention },
-    { label: "Repository admission", status: repositoryAdmission.status, detail: repositoryAdmission.detail, href: "#agent-repository-admission", action: "Set policy", attention: repositoryAdmission.attention },
-    { label: "Jev classification", status: decisionStatus, detail: "Worker configuration is not proof of a successful model decision.", href: `/${encodeURIComponent(org)}/settings/health?tab=queues`, action: "Decision health" },
-    { label: "Coding executor", status: executorStatus, detail: "A separate sandbox, model broker and scoped write credentials are needed after plan approval.", href: `/${encodeURIComponent(org)}/settings/health?tab=queues`, action: "Executor health" },
-    { label: "Write-credential broker", status: brokerStatus, detail: "A private process heartbeat does not prove scoped token issuance or provider write access.", href: `/${encodeURIComponent(org)}/settings/health?tab=queues`, action: "Broker health", attention: health.source === "live" && brokerStatus === "Not observed" },
-    { label: "Draft review handoff", status: draftReview.status, detail: draftReview.detail, href: draftReviewHref, action: draftReview.connectionAction && reviewInstallation ? "Connection settings" : reviewPolicy ? draftReview.filtersAction ? "Review filters" : "Review settings" : "Choose repository", attention: draftReview.attention },
+    { label: t("Provider connection"), status: connection.status, detail: connection.detail, href: taskInstallation ? `/${encodeURIComponent(org)}/connect/${encodeURIComponent(taskInstallation.id)}` : `/${encodeURIComponent(org)}/connect`, action: taskInstallation ? t("Connection detail") : t("Connections"), attention: connection.attention },
+    { label: t("Repository admission"), status: repositoryAdmission.status, detail: repositoryAdmission.detail, href: "#agent-repository-admission", action: t("Set policy"), attention: repositoryAdmission.attention },
+    { label: t("Jev classification"), status: decisionStatus, detail: t("Worker configuration is not proof of a successful model decision."), href: `/${encodeURIComponent(org)}/settings/health?tab=queues`, action: t("Decision health") },
+    { label: t("Coding executor"), status: executorStatus, detail: t("A separate sandbox, model broker and scoped write credentials are needed after plan approval."), href: `/${encodeURIComponent(org)}/settings/health?tab=queues`, action: t("Executor health") },
+    { label: t("Write-credential broker"), status: brokerStatus, detail: t("A private process heartbeat does not prove scoped token issuance or provider write access."), href: `/${encodeURIComponent(org)}/settings/health?tab=queues`, action: t("Broker health"), attention: health.source === "live" && credentialBroker?.state !== "configured_unverified" },
+    { label: t("Draft review handoff"), status: draftReview.status, detail: draftReview.detail, href: draftReviewHref, action: draftReview.connectionAction && reviewInstallation ? t("Connection settings") : reviewPolicy ? draftReview.filtersAction ? t("Review filters") : t("Review settings") : t("Choose repository"), attention: draftReview.attention },
   ];
   return (
     <div className="space-y-5">
@@ -90,68 +93,62 @@ export default async function AgentWorkPage({
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
-              Agent work
-            </h1>
-            <DataFreshness state={data.source} />
+              {t(" Agent work ")}</h1>
+            <DataFreshness language={language} state={data.source} />
           </div>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            A governed Issue-to-PR control plane. Every request is classified
-            first, then requires a bounded plan and explicit approval before
-            a separately deployed coding executor can receive it.
-          </p>
+            {t(" A governed Issue-to-PR control plane. Every request is classified first, then requires a bounded plan and explicit approval before a separately deployed coding executor can receive it. ")}</p>
         </div>
         <Link
           className="luminous-focus inline-flex h-10 items-center justify-center gap-2 rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-4 text-sm font-semibold text-[var(--ls-text)] hover:bg-[var(--ls-surface-muted)]"
           href={`/${encodeURIComponent(org)}/provider-issues`}
         >
           <ExternalLink className="size-4 text-[var(--ls-accent)]" />
-          Provider Issue triage
-        </Link>
+          {t(" Provider Issue triage ")}</Link>
       </header>
       <section aria-labelledby="agent-readiness-title" className="overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
         <div className="border-b border-[var(--ls-line)] px-5 py-4">
-          <h2 className="text-base font-semibold text-[var(--ls-text)]" id="agent-readiness-title">Before the first Agent task</h2>
-          <p className="mt-1 text-sm text-[var(--ls-text-secondary)]">Six independent gates. Creating a Draft does not guarantee review admission or a completed feedback cycle.</p>
+          <h2 className="text-base font-semibold text-[var(--ls-text)]" id="agent-readiness-title">{t("Before the first Agent task")}</h2>
+          <p className="mt-1 text-sm text-[var(--ls-text-secondary)]">{t("Six independent gates. Creating a Draft does not guarantee review admission or a completed feedback cycle.")}</p>
         </div>
         <ol className="grid gap-px bg-[var(--ls-line)] sm:grid-cols-2 xl:grid-cols-3">
           {steps.map((step, index) => (
             <li className="min-w-0 bg-[var(--ls-surface)] px-5 py-4" key={step.label}>
               <div className="flex flex-col items-start gap-2">
-                <span className="text-xs font-semibold tracking-wide text-[var(--ls-text-tertiary)]">0{index + 1} · {step.label}</span>
-                <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${step.attention ? "bg-amber-500/[0.09] text-[var(--ls-warning-text)]" : "bg-[var(--ls-surface-muted)] text-[var(--ls-text-secondary)]"}`}>{step.status}</span>
+                <span className="text-xs font-semibold tracking-wide text-[var(--ls-text-tertiary)]">0{index + 1} · {t(step.label)}</span>
+                <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${step.attention ? "bg-amber-500/[0.09] text-[var(--ls-warning-text)]" : "bg-[var(--ls-surface-muted)] text-[var(--ls-text-secondary)]"}`}>{t(step.status)}</span>
               </div>
-              <p className="mt-3 min-h-12 text-xs leading-5 text-[var(--ls-text-secondary)]">{step.detail}</p>
-              <Link className="luminous-focus mt-2 inline-flex min-h-8 items-center text-xs font-semibold text-[var(--ls-accent)] hover:underline" href={step.href}>{step.action} <span aria-hidden="true" className="ml-1">→</span></Link>
+              <p className="mt-3 min-h-12 text-xs leading-5 text-[var(--ls-text-secondary)]">{t(step.detail)}</p>
+              <Link className="luminous-focus mt-2 inline-flex min-h-8 items-center text-xs font-semibold text-[var(--ls-accent)] hover:underline" href={step.href}>{t(step.action)} <span aria-hidden="true" className="ml-1">→</span></Link>
             </li>
           ))}
         </ol>
         <details className="border-t border-[var(--ls-line)] px-5 py-3 text-xs text-[var(--ls-text-secondary)]">
-          <summary className="luminous-focus w-fit cursor-pointer font-semibold text-[var(--ls-text)]">Queue and worker evidence</summary>
+          <summary className="luminous-focus w-fit cursor-pointer font-semibold text-[var(--ls-text)]">{t("Queue and worker evidence")}</summary>
           <div className="mt-3 space-y-1 leading-5">
-            <p>Jev: {decision?.detail ?? "Fresh source-worker configuration evidence is unavailable."}</p>
-            <p>Executor: {executor?.detail ?? "Fresh runner configuration evidence is unavailable."}</p>
-            <p>Write credentials: {credentialBroker?.detail ?? "Fresh private broker heartbeat evidence is unavailable."}</p>
+            <p>{t("Jev: ")}{decision?.detail ?? t("Fresh source-worker configuration evidence is unavailable.")}</p>
+            <p>{t("Executor: ")}{executor?.detail ?? t("Fresh runner configuration evidence is unavailable.")}</p>
+            <p>{t("Write credentials: ")}{credentialBroker?.detail ?? t("Fresh private broker heartbeat evidence is unavailable.")}</p>
             {sourceQueue && executionQueue ? (
-              <p>Source: {sourceQueue.ready} pending · {sourceQueue.failed} failed. Execution: {executionQueue.ready} queued · {executionQueue.running} running · {executionQueue.failed} needing attention.</p>
-            ) : <p>Tenant queue health is unavailable; zero visible tasks does not prove a healthy adapter.</p>}
-            <p>A signed adapter probe proves endpoint reachability only. Configuration, queue rows, and probe results do not prove model quality, sandbox isolation, provider write access, or a completed Draft PR.</p>
+              <p>{t("Source: ")}{sourceQueue.ready} {t(" pending · ")}{sourceQueue.failed} {t(" failed. Execution: ")}{executionQueue.ready} {t(" queued · ")}{executionQueue.running} {t(" running · ")}{executionQueue.failed} {t(" needing attention.")}</p>
+            ) : <p>{t("Tenant queue health is unavailable; zero visible tasks does not prove a healthy adapter.")}</p>}
+            <p>{t("A signed adapter probe proves endpoint reachability only. Configuration, queue rows, and probe results do not prove model quality, sandbox isolation, provider write access, or a completed Draft PR.")}</p>
           </div>
         </details>
       </section>
       {health.source === "live" && executor?.state === "not_configured" ? (
         <aside className="rounded-[14px] border border-[color-mix(in_srgb,var(--ls-warning)_30%,transparent)] bg-[color-mix(in_srgb,var(--ls-warning)_6%,var(--ls-surface))] px-5 py-4 text-sm leading-6 text-[var(--ls-text-secondary)]" role="status">
-          <p className="font-semibold text-[var(--ls-text)]">Coding Agent is not connected</p>
+          <p className="font-semibold text-[var(--ls-text)]">{t("Coding Agent is not connected")}</p>
           <p className="mt-1">
-            Jev classifies an Issue; it cannot write code. A Manual repository policy may create a candidate, but approving a plan without a coding adapter will not produce a Draft PR/MR.
-          </p>
+            {t(" Jev classifies an Issue; it cannot write code. A Manual repository policy may create a candidate, but approving a plan without a coding adapter will not produce a Draft PR/MR. ")}</p>
           {deployment.mode === "self_hosted" ? (
             <details className="mt-2 text-xs leading-5">
-              <summary className="luminous-focus w-fit cursor-pointer font-semibold text-[var(--ls-accent)]">Self-hosted operator setup</summary>
-              <p className="mt-2">Configure the separate runner connection (<code>AGENT_TASK_ADAPTER_URL</code> and <code>AGENT_TASK_ADAPTER_SECRET</code>), a reviewed per-job sandbox image, the Codex Responses model route/key, and an installation-scoped provider write credential. Keep all secrets on their designated server-side workers; do not enter them in the Console.</p>
-              <p className="mt-1">Then confirm adapter reachability in Platform health and test one explicitly approved Issue before enabling labeled-Issue admission.</p>
+              <summary className="luminous-focus w-fit cursor-pointer font-semibold text-[var(--ls-accent)]">{t("Self-hosted operator setup")}</summary>
+              <p className="mt-2">{t("Configure the separate runner connection (")}<code>AGENT_TASK_ADAPTER_URL</code> {t(" and ")}<code>AGENT_TASK_ADAPTER_SECRET</code>{t("), a reviewed per-job sandbox image, the Codex Responses model route/key, and an installation-scoped provider write credential. Keep all secrets on their designated server-side workers; do not enter them in the Console.")}</p>
+              <p className="mt-1">{t("Then confirm adapter reachability in Platform health and test one explicitly approved Issue before enabling labeled-Issue admission.")}</p>
             </details>
           ) : (
-            <p className="mt-2 text-xs">Ask the deployment operator to connect the isolated coding adapter; workspace policy alone cannot enable it.</p>
+            <p className="mt-2 text-xs">{t("Ask the deployment operator to connect the isolated coding adapter; workspace policy alone cannot enable it.")}</p>
           )}
         </aside>
       ) : null}

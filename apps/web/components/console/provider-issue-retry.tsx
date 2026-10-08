@@ -1,5 +1,7 @@
 "use client";
 
+import { useWorkflowText } from "@/components/console/ui-language-context";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { LoaderCircle, RotateCcw } from "lucide-react";
@@ -24,6 +26,7 @@ export function ProviderIssueRetry({
   revision: number;
   state: ProviderIssueAnalysisState;
 }) {
+  const t = useWorkflowText();
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [retryKey, setRetryKey] = useState<string>();
@@ -55,19 +58,19 @@ export function ProviderIssueRetry({
         replayed?: boolean;
       };
       if (!response.ok) {
-        throw new Error(payload.error ?? "The Issue analysis retry was rejected.");
+        throw new Error(payload.error ?? t("The Issue analysis retry was rejected."));
       }
       setMessage(
         payload.replayed
-          ? `Retry attempt ${payload.attempt ?? ""} was already accepted.`.trim()
-          : `Retry attempt ${payload.attempt ?? ""} queued from the retained Issue snapshot.`.trim(),
+          ? t("Retry attempt {attempt} was already accepted.", { attempt: payload.attempt ?? "" })
+          : t("Retry attempt {attempt} queued from the retained Issue snapshot.", { attempt: payload.attempt ?? "" }),
       );
       router.refresh();
     } catch (error) {
       setMessage(
         error instanceof Error
           ? error.message
-          : "The Issue analysis retry could not be queued.",
+          : t("The Issue analysis retry could not be queued."),
       );
     } finally {
       setPending(false);
@@ -80,17 +83,15 @@ export function ProviderIssueRetry({
         {pending ? (
           <>
             <LoaderCircle className="animate-spin motion-reduce:animate-none" />
-            Queueing retry
-          </>
+            {t(" Queueing retry ")}</>
         ) : (
           <>
             <RotateCcw />
-            Retry retained snapshot
-          </>
+            {t(" Retry retained snapshot ")}</>
         )}
       </Button>
       <p className="mt-2 text-[11px] leading-4 text-[var(--ls-text-tertiary)]">
-        Reuses revision r{revision} and its immutable model, prompt, and Issue-format snapshots.
+        {t("Reuses revision r{revision} and its immutable model, prompt, and Issue-format snapshots.", { revision })}
       </p>
       {message ? (
         <p aria-live="polite" className="mt-2 text-[11px] leading-4 text-[var(--ls-text-secondary)]">

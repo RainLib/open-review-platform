@@ -1,5 +1,7 @@
 "use client";
 
+import { useWorkflowText } from "@/components/console/ui-language-context";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CirclePlus, LoaderCircle, ShieldCheck, Trash2 } from "lucide-react";
@@ -44,6 +46,7 @@ export function RuleSetComposer({
   enabled: boolean;
   org: string;
 }) {
+  const t = useWorkflowText();
   const router = useRouter();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -54,7 +57,7 @@ export function RuleSetComposer({
       enforcement: "mandatory",
       severity: "high",
       prompt:
-        "Identify whether this change exposes credentials, tokens, private keys, or personally identifiable data.",
+        t("Identify whether this change exposes credentials, tokens, private keys, or personally identifiable data."),
     },
   ]);
   const [pending, setPending] = useState(false);
@@ -74,7 +77,7 @@ export function RuleSetComposer({
       !name.trim() ||
       rules.some((rule) => !rule.key.trim() || !rule.prompt.trim())
     ) {
-      setMessage("Name, rule key, and review instruction are required.");
+      setMessage(t("Name, rule key, and review instruction are required."));
       return;
     }
 
@@ -105,22 +108,20 @@ export function RuleSetComposer({
         draft?: { version?: number };
       };
       if (!response.ok) {
-        throw new Error(payload.error ?? "The rule set was not accepted.");
+        throw new Error(payload.error ?? t("The rule set was not accepted."));
       }
       setName("");
       setDescription("");
       setRules([newDraftRule()]);
       setMessage(
-        "Draft version " +
-          (payload.draft?.version ?? 1) +
-          " was created. Request independent approval before publishing it.",
+        t("Draft version {version} was created. Request governed approval before publishing it.", { version: payload.draft?.version ?? 1 }),
       );
       router.refresh();
     } catch (error) {
       setMessage(
         error instanceof Error
           ? error.message
-          : "The rule set could not be created.",
+          : t("The rule set could not be created."),
       );
     } finally {
       setPending(false);
@@ -135,39 +136,32 @@ export function RuleSetComposer({
             <span className="grid size-8 place-items-center rounded-[10px] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]">
               <ShieldCheck className="size-4" />
             </span>
-            New policy draft
-          </div>
+            {t(" New policy draft ")}</div>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            Compose structured review rules. The server validates the
-            normalized rules before storing an immutable draft; publication
-            still requires independent approval.
-          </p>
+            {t(" Compose structured review rules. The server validates the normalized rules before storing an immutable draft; publication still requires governed approval. ")}</p>
         </div>
         <span className="inline-flex w-fit rounded-full bg-[var(--ls-accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ls-accent)]">
-          Governance draft
-        </span>
+          {t(" Governance draft ")}</span>
       </div>
 
       <form className="mt-6 space-y-5" onSubmit={createRuleSet}>
         <div className="grid gap-4 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
           <label className="space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">
-            Policy name
-            <input
+            {t(" Policy name ")}<input
               className={inputClassName}
               disabled={!enabled || pending}
               onChange={(event) => setName(event.target.value)}
-              placeholder="Credential boundary"
+              placeholder={t("Credential boundary")}
               required
               value={name}
             />
           </label>
           <label className="space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">
-            Purpose
-            <input
+            {t(" Purpose ")}<input
               className={inputClassName}
               disabled={!enabled || pending}
               onChange={(event) => setDescription(event.target.value)}
-              placeholder="Explain the intent and expected review behavior."
+              placeholder={t("Explain the intent and expected review behavior.")}
               value={description}
             />
           </label>
@@ -181,10 +175,10 @@ export function RuleSetComposer({
             >
               <div className="flex items-center justify-between gap-3">
                 <legend className="text-xs font-medium text-[var(--ls-text)]">
-                  Rule {index + 1}
+                  {t(" Rule ")}{index + 1}
                 </legend>
                 <Button
-                  aria-label={"Remove rule " + (index + 1)}
+                  aria-label={t("Remove rule {number}", { number: index + 1 })}
                   disabled={!enabled || pending || rules.length === 1}
                   onClick={() =>
                     setRules((current) =>
@@ -200,8 +194,7 @@ export function RuleSetComposer({
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
                 <label className="space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)] sm:col-span-1">
-                  Stable key
-                  <input
+                  {t(" Stable key ")}<input
                     className={inputClassName}
                     disabled={!enabled || pending}
                     onChange={(event) =>
@@ -213,8 +206,7 @@ export function RuleSetComposer({
                   />
                 </label>
                 <label className="space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">
-                  Enforcement
-                  <select
+                  {t(" Enforcement ")}<select
                     className={inputClassName}
                     disabled={!enabled || pending}
                     onChange={(event) =>
@@ -224,13 +216,12 @@ export function RuleSetComposer({
                     }
                     value={rule.enforcement}
                   >
-                    <option value="mandatory">Mandatory</option>
-                    <option value="advisory">Advisory</option>
+                    <option value="mandatory">{t("Mandatory")}</option>
+                    <option value="advisory">{t("Advisory")}</option>
                   </select>
                 </label>
                 <label className="space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">
-                  Severity
-                  <select
+                  {t(" Severity ")}<select
                     className={inputClassName}
                     disabled={!enabled || pending}
                     onChange={(event) =>
@@ -240,30 +231,29 @@ export function RuleSetComposer({
                     }
                     value={rule.severity}
                   >
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                    <option value="critical">Critical</option>
+                    <option value="low">{t("Low")}</option>
+                    <option value="medium">{t("Medium")}</option>
+                    <option value="high">{t("High")}</option>
+                    <option value="critical">{t("Critical")}</option>
                   </select>
                 </label>
               </div>
               <label className="mt-3 block space-y-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">
-                Review instruction
-                <textarea
+                {t(" Review instruction ")}<textarea
                   className={textAreaClassName}
                   disabled={!enabled || pending}
                   onChange={(event) =>
                     updateRule(rule.id, { prompt: event.target.value })
                   }
-                  placeholder="State the failure condition, evidence to inspect, and expected finding."
+                  placeholder={t("State the failure condition, evidence to inspect, and expected finding.")}
                   required
                   value={rule.prompt}
                 />
               </label>
               <p className="mt-2 text-[11px] leading-5 text-[var(--ls-text-tertiary)]">
                 {rule.enforcement === "mandatory"
-                  ? "Mandatory rules use deny_override, so lower-precedence policies cannot weaken them."
-                  : "Advisory rules replace lower-precedence versions with the same stable key."}
+                  ? t("Mandatory rules use deny_override, so lower-precedence policies cannot weaken them.")
+                  : t("Advisory rules replace lower-precedence versions with the same stable key.")}
               </p>
             </fieldset>
           ))}
@@ -278,25 +268,21 @@ export function RuleSetComposer({
             variant="outline"
           >
             <CirclePlus />
-            Add rule
-          </Button>
+            {t(" Add rule ")}</Button>
           <Button disabled={!enabled || pending} size="sm" type="submit">
             {pending ? (
               <>
                 <LoaderCircle className="animate-spin motion-reduce:animate-none" />
-                Creating draft
-              </>
+                {t(" Creating draft ")}</>
             ) : (
-              "Create draft"
+              t("Create draft")
             )}
           </Button>
         </div>
       </form>
       {!enabled ? (
         <p className="mt-4 rounded-[12px] border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2 text-xs leading-5 text-[var(--ls-warning-text)]">
-          The control plane is not reachable with this signed-in session. Check
-          the web service CONTROL_API_URL and the assigned tenant role.
-        </p>
+          {t(" The control plane is not reachable with this signed-in session. Check the web service CONTROL_API_URL and the assigned tenant role. ")}</p>
       ) : null}
       {message ? (
         <p

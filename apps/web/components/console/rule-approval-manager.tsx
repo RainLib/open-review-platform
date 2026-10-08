@@ -1,5 +1,7 @@
 "use client";
 
+import { useUiLanguage, useWorkflowStatus, useWorkflowText } from "@/components/console/ui-language-context";
+
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -42,11 +44,7 @@ const statePresentation = {
   },
 } as const;
 
-const dateFormatter = new Intl.DateTimeFormat("en", {
-  dateStyle: "medium",
-  timeStyle: "short",
-  timeZone: "UTC",
-});
+
 
 export function RuleApprovalManager({
   approvals,
@@ -57,6 +55,10 @@ export function RuleApprovalManager({
   enabled: boolean;
   org: string;
 }) {
+  const t = useWorkflowText();
+  const status = useWorkflowStatus();
+  const language = useUiLanguage();
+  const dateFormatter = new Intl.DateTimeFormat(language, {dateStyle:"medium",timeStyle:"short",timeZone:"UTC"});
   const router = useRouter();
   const [filter, setFilter] = useState<Filter>("all");
   const [busy, setBusy] = useState<string>();
@@ -89,10 +91,10 @@ export function RuleApprovalManager({
       const payload = (await response.json().catch(() => ({}))) as {
         error?: string;
       };
-      if (!response.ok) throw new Error(payload.error ?? "The action was rejected.");
+      if (!response.ok) throw new Error(payload.error ?? t("The action was rejected."));
       router.refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "The action failed.");
+      setMessage(error instanceof Error ? error.message : t("The action failed."));
     } finally {
       setBusy(undefined);
     }
@@ -118,9 +120,9 @@ export function RuleApprovalManager({
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-3">
         {[
-          ["Awaiting decision", counts.pending, Clock3, "text-[var(--ls-warning)]"],
-          ["Ready to publish", counts.approved, CheckCircle2, "text-[var(--ls-success)]"],
-          ["Returned to draft", counts.rejected, XCircle, "text-[var(--ls-critical-text)]"],
+          [t("Awaiting decision"), counts.pending, Clock3, "text-[var(--ls-warning)]"],
+          [t("Ready to publish"), counts.approved, CheckCircle2, "text-[var(--ls-success)]"],
+          [t("Returned to draft"), counts.rejected, XCircle, "text-[var(--ls-critical-text)]"],
         ].map(([label, value, Icon, tone]) => {
           const StatusIcon = Icon as typeof Clock3;
           return (
@@ -149,7 +151,7 @@ export function RuleApprovalManager({
               onClick={() => setFilter(value)}
               type="button"
             >
-              {value === "all" ? "All" : statePresentation[value].label}
+              {value === "all" ? t("All") : status(value)}
             </button>
           ),
         )}
@@ -165,8 +167,8 @@ export function RuleApprovalManager({
         <div className="grid min-h-48 place-items-center rounded-[18px] border border-dashed border-[var(--ls-line-strong)] bg-[var(--ls-surface-muted)] p-8 text-center">
           <div>
             <FileKey2 className="mx-auto size-5 text-[var(--ls-text-tertiary)]" />
-            <h2 className="mt-3 text-sm font-medium text-[var(--ls-text)]">No matching approval requests</h2>
-            <p className="mt-2 text-sm text-[var(--ls-text-secondary)]">Submit a policy draft from the library to start independent review.</p>
+            <h2 className="mt-3 text-sm font-medium text-[var(--ls-text)]">{t("No matching approval requests")}</h2>
+            <p className="mt-2 text-sm text-[var(--ls-text-secondary)]">{t("Submit a policy draft from the library to start governed approval.")}</p>
           </div>
         </div>
       ) : (
@@ -183,18 +185,18 @@ export function RuleApprovalManager({
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="truncate text-sm font-semibold text-[var(--ls-text)]">{approval.rule_set_name}</h2>
                       <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium", presentation.className)}>
-                        <StateIcon className="size-3" /> {presentation.label}
+                        <StateIcon className="size-3" /> {status(approval.state)}
                       </span>
                     </div>
                     <p className="mt-2 text-xs text-[var(--ls-text-secondary)]">
-                      Version {approval.version} requested by <span className="text-[var(--ls-text)]">{approval.requested_by}</span> · {dateFormatter.format(new Date(approval.created_at))} UTC
+                      {t(" Version ")}{approval.version} {t(" requested by ")}<span className="text-[var(--ls-text)]">{approval.requested_by}</span> · {dateFormatter.format(new Date(approval.created_at))} UTC
                     </p>
                   </div>
                   <div className="shrink-0 text-left sm:text-right">
                     <p className="text-sm font-semibold text-[var(--ls-text)]">
                       {approval.approval_count}/{approval.required_approvals}
                     </p>
-                    <p className="text-[11px] text-[var(--ls-text-tertiary)]">independent approvals</p>
+                    <p className="text-[11px] text-[var(--ls-text-tertiary)]">{t("distinct approver votes")}</p>
                   </div>
                 </div>
 
@@ -207,17 +209,16 @@ export function RuleApprovalManager({
 
                 <details className="group mt-4 rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] open:bg-[var(--ls-surface)]">
                   <summary className="cursor-pointer list-none px-3.5 py-2.5 text-xs font-medium text-[var(--ls-text-secondary)] marker:hidden hover:text-[var(--ls-text)]">
-                    Evidence and decision controls
-                  </summary>
+                    {t(" Evidence and decision controls ")}</summary>
                   <div className="border-t border-[var(--ls-line)] px-3.5 py-3">
                     <dl className="grid gap-3 text-xs sm:grid-cols-2">
                       <div>
-                        <dt className="text-[var(--ls-text-tertiary)]">Immutable content SHA-256</dt>
+                        <dt className="text-[var(--ls-text-tertiary)]">{t("Immutable content SHA-256")}</dt>
                         <dd className="mt-1 break-all font-mono text-[var(--ls-text-secondary)]">{approval.content_sha256}</dd>
                       </div>
                       <div>
-                        <dt className="text-[var(--ls-text-tertiary)]">Version state</dt>
-                        <dd className="mt-1 text-[var(--ls-text-secondary)]">{approval.version_state.replace("_", " ")}</dd>
+                        <dt className="text-[var(--ls-text-tertiary)]">{t("Version state")}</dt>
+                        <dd className="mt-1 text-[var(--ls-text-secondary)]">{status(approval.version_state)}</dd>
                       </div>
                     </dl>
 
@@ -225,14 +226,14 @@ export function RuleApprovalManager({
                       approval.can_decide ? (
                         <div className="mt-4">
                           <label className="text-xs font-medium text-[var(--ls-text-secondary)]" htmlFor={`approval-comment-${approval.id}`}>
-                            Review note <span className="font-normal text-[var(--ls-text-tertiary)]">(optional)</span>
+                            {t(" Review note ")}<span className="font-normal text-[var(--ls-text-tertiary)]">{t("(optional)")}</span>
                           </label>
                           <textarea
                             className="luminous-focus mt-2 min-h-20 w-full resize-y rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 py-2 text-sm leading-6 text-[var(--ls-text)] outline-none placeholder:text-[var(--ls-text-tertiary)]"
                             disabled={!enabled || busy !== undefined}
                             id={`approval-comment-${approval.id}`}
                             maxLength={2000}
-                            placeholder="Record the evidence behind this decision."
+                            placeholder={t("Record the evidence behind this decision.")}
                           />
                           <div className="mt-3 flex flex-wrap gap-2">
                             <button
@@ -241,28 +242,25 @@ export function RuleApprovalManager({
                               onClick={() => decide(approval, "approved")}
                               type="button"
                             >
-                              {busy === decisionPath ? <LoaderCircle className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} Approve exact version
-                            </button>
+                              {busy === decisionPath ? <LoaderCircle className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} {t(" Approve exact version ")}</button>
                             <button
                               className="luminous-focus inline-flex h-8 items-center gap-1.5 rounded-[8px] bg-red-500/10 px-3 text-xs font-semibold text-[var(--ls-critical-text)] hover:bg-red-500/15 disabled:opacity-45"
                               disabled={!enabled || busy !== undefined}
                               onClick={() => decide(approval, "rejected")}
                               type="button"
                             >
-                              <X className="size-3.5" /> Reject to draft
-                            </button>
+                              <X className="size-3.5" /> {t(" Reject to draft ")}</button>
                           </div>
                         </div>
                       ) : (
                         <p className="mt-4 rounded-[8px] border border-[var(--ls-line)] px-3 py-2 text-xs leading-5 text-[var(--ls-text-secondary)]">
-                          Decision unavailable for this actor: requesters cannot self-approve, each reviewer votes once, and a rule administrator role is required.
-                        </p>
+                          {t(" Decision unavailable: rule approval permission is required and each reviewer votes once. Requester decisions require the workspace owner to enable rule self-approval in Settings → Approvals. ")}</p>
                       )
                     ) : null}
 
                     {approval.actor_decision ? (
                       <p className="mt-4 text-xs text-[var(--ls-text-secondary)]">
-                        Your recorded decision: <span className="font-medium text-[var(--ls-text)]">{approval.actor_decision}</span>.
+                        {t(" Your recorded decision: ")}<span className="font-medium text-[var(--ls-text)]">{approval.actor_decision}</span>.
                       </p>
                     ) : null}
 
@@ -273,8 +271,7 @@ export function RuleApprovalManager({
                         onClick={() => publish(approval)}
                         type="button"
                       >
-                        {busy === publishPath ? <LoaderCircle className="size-3.5 animate-spin" /> : <UploadCloud className="size-3.5" />} Publish approved version
-                      </button>
+                        {busy === publishPath ? <LoaderCircle className="size-3.5 animate-spin" /> : <UploadCloud className="size-3.5" />} {t(" Publish approved version ")}</button>
                     ) : null}
                   </div>
                 </details>

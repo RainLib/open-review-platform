@@ -11,14 +11,19 @@ import type {
   ProviderInstallation,
   ReviewConfigData,
 } from "@/lib/control-api";
+import type { UiLanguage } from "@/lib/ui-language";
+import { workflowStatus, workflowText, type WorkflowMessageValues } from "@/lib/workflow-copy";
 
 // A model verdict is advisory evidence, not a fourth deterministic admission
 // check. Keep it separate so the Console cannot imply it granted execution.
 export function agentAdmissionEvidence(evaluation: AgentTaskClassification["evaluation"]) {
+  const stages = (Array.isArray(evaluation) ? evaluation : []).map((stage) => ({
+    ...stage, signals: Array.isArray(stage.signals) ? stage.signals : [],
+  }));
   return {
-    hardChecks: evaluation.filter((stage) =>
+    hardChecks: stages.filter((stage) =>
       stage.stage === "judge" || stage.stage === "evaluate" || stage.stage === "verify"),
-    modelAdvisory: evaluation.find((stage) => stage.stage === "model"),
+    modelAdvisory: stages.find((stage) => stage.stage === "model"),
   };
 }
 
@@ -70,41 +75,42 @@ export function agentTaskNeedsLiveRefresh(tasks: AgentTask[], selected?: AgentTa
 // A terminal run without an immutable gate decision is not a passing review.
 // The Agent handoff must show the admitted decision, not infer it from a green
 // external check or today's mutable repository settings.
-export function agentLinkedReviewOutcome(review: AgentTaskDetail["linked_reviews"][number]) {
+export function agentLinkedReviewOutcome(review: AgentTaskDetail["linked_reviews"][number], language: UiLanguage = "en") {
+  const t = (source: string, values?: WorkflowMessageValues) => workflowText(language, source, values);
   if (review.state !== "completed") {
     return {
-      label: `Review ${review.state.replaceAll("_", " ")}`,
+      label: t("Review {state}", {state: language === "en" ? review.state.replaceAll("_", " ") : workflowStatus(language, review.state)}),
       detail: review.state === "failed" || review.state === "needs_attention"
-        ? "No trustworthy passing conclusion was published. Open the review for recovery guidance."
-        : "Wait for the exact-revision review result before acting on findings or a merge gate.",
+        ? t("No trustworthy passing conclusion was published. Open the review for recovery guidance.")
+        : t("Wait for the exact-revision review result before acting on findings or a merge gate."),
       tone: "neutral" as const,
     };
   }
   const gate = review.merge_gate;
   if (!gate) {
     return {
-      label: "Review complete · gate unknown",
-      detail: "No immutable merge-gate decision was retained; this does not prove the Draft is clear to merge.",
+      label: t("Review complete · gate unknown"),
+      detail: t("No immutable merge-gate decision was retained; this does not prove the Draft is clear to merge."),
       tone: "neutral" as const,
     };
   }
   if (!gate.enabled) {
     return {
-      label: "Review complete · advisory only",
-      detail: `${gate.finding_count} recorded finding(s). Blocking was off for this revision; human approval and branch protection still apply.`,
+      label: t("Review complete · advisory only"),
+      detail: t("{count} recorded finding(s). Blocking was off for this revision; human approval and branch protection still apply.", {count: gate.finding_count}),
       tone: "neutral" as const,
     };
   }
   if (gate.conclusion === "failure") {
     return {
-      label: "Merge gate blocked",
-      detail: `${gate.blocking_findings} finding(s) meet the ${gate.threshold} threshold. Open the review to inspect evidence, then update the Draft or request an approved Agent feedback cycle.`,
+      label: t("Merge gate blocked"),
+      detail: t("{count} finding(s) meet the {threshold} threshold. Open the review to inspect evidence, then update the Draft or request an approved Agent feedback cycle.", {count: gate.blocking_findings, threshold: language === "en" ? gate.threshold : workflowStatus(language, gate.threshold)}),
       tone: "danger" as const,
     };
   }
   return {
-    label: "Review gate passed",
-    detail: `${gate.finding_count} recorded finding(s); none block at the ${gate.threshold} threshold. Human approval and branch protection still apply.`,
+    label: t("Review gate passed"),
+    detail: t("{count} recorded finding(s); none block at the {threshold} threshold. Human approval and branch protection still apply.", {count: gate.finding_count, threshold: language === "en" ? gate.threshold : workflowStatus(language, gate.threshold)}),
     tone: "success" as const,
   };
 }
