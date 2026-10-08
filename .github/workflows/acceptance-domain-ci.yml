@@ -1,0 +1,50 @@
+name: Private deployment acceptance
+on:
+  push:
+    branches: [feature/acceptance-rules-20261007]
+permissions:
+  contents: read
+jobs:
+  domain-tests:
+    name: Acceptance / Go domain tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: 1.25.14
+          cache: false
+      - name: Test exact acceptance commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d)
+          cp internal/domain/*.go "$workdir/"
+          cat > "$workdir/go.mod" <<'MOD'
+          module acceptance/domain
+          go 1.25.0
+          require github.com/google/uuid v1.6.0
+          MOD
+          cat > "$workdir/acceptance_rule_fixture_test.go" <<'TEST'
+          package domain
+          import "testing"
+          func TestAcceptanceRuleFlagPreservation(t *testing.T) {
+              for _, flag := range []bool{true, false} {
+                  if got := AcceptanceRuleFixture(flag); got != flag {
+                      t.Errorf("test failed: flag=%v returned %v; expected flag preservation", flag, got)
+                  }
+              }
+          }
+          TEST
+          cd "$workdir"
+          go mod tidy
+          if ! go test -count=1 -v ./... > test.log 2>&1; then
+            cat test.log
+            diagnostic=$(awk '/test failed:/{print;exit}' test.log)
+            echo "::error title=Domain test failed::$diagnostic"
+            exit 1
+          fi
+          cat test.log
