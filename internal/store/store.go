@@ -10,6 +10,7 @@ import (
 )
 
 var (
+	ErrInvalidApprovalPolicy           = errors.New("workspace approval policy is invalid")
 	ErrUnknownInstallation             = errors.New("unknown or inactive provider installation")
 	ErrAmbiguousInstallation           = errors.New("multiple active provider installations match the event")
 	ErrNoQueuedJob                     = errors.New("no queued review job")
@@ -85,6 +86,8 @@ var (
 // Store owns durable state transitions. A job can only be produced by a
 // verified provider delivery and every delivery is recorded once per provider.
 type Store interface {
+	GetWorkspaceApprovalPolicy(ctx context.Context, actor, tenantSlug string) (domain.WorkspaceApprovalPolicy, error)
+	SaveWorkspaceApprovalPolicy(ctx context.Context, actor, tenantSlug string, input domain.WorkspaceApprovalPolicyInput) (domain.WorkspaceApprovalPolicy, error)
 	CreateTenant(ctx context.Context, actor, slug, name string) (domain.Tenant, error)
 	ListTenants(ctx context.Context, actor string, limit int) ([]domain.TenantSummary, error)
 	ListAuditEvents(ctx context.Context, actor, tenantSlug string, filter domain.AuditFilter) ([]domain.AuditEvent, error)

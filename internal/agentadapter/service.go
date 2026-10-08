@@ -99,12 +99,16 @@ type Service struct {
 	draftURLPolicy   domain.AgentDraftURLPolicy
 	receipts         *receiptStore
 
-	mu        sync.Mutex
-	byAttempt map[string]*serviceJob
-	byJob     map[string]*serviceJob
-	recovered []*serviceJob
-	active    sync.WaitGroup
-	closed    bool
+	mu                    sync.Mutex
+	byAttempt             map[string]*serviceJob
+	byJob                 map[string]*serviceJob
+	recovered             []*serviceJob
+	active                sync.WaitGroup
+	closed                bool
+	readinessMu           sync.Mutex
+	readinessProbeMu      sync.Mutex
+	readyUntil            time.Time
+	modelReadinessFailure error
 }
 
 type serviceJob struct {
@@ -308,10 +312,7 @@ func (service *Service) Recover(ctx context.Context) {
 					probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 					result, err := reconciler.ReconcilePublication(probeCtx, job.id, job.submission, *publication)
 					cancel()
-					if err == nil && validExecutionResult(job.submission, result, service.draftURLPolicy) &&
-						result.HeadSHA == publication.HeadSHA && result.PatchSHA256 == publication.PatchSHA256 &&
-						result.ChangedFileCount == publication.ChangedFileCount && result.DiffBytes == publication.DiffBytes &&
-						result.VerificationProfileSHA256 == publication.VerificationProfileSHA256 && result.VerificationOutputSHA256 == publication.VerificationOutputSHA256 && result.VerificationOutputBytes == publication.VerificationOutputBytes {
+					if err == nil && validExecutionResult(job.submission, result, service.draftURLPolicy) && matchesPublicationCheckpoint(result, publication) {
 						service.deliverTerminal(ctx, job, completedAdapterEvent(job, result, ":reconciled"))
 						continue
 					}
@@ -365,6 +366,7 @@ func (service *Service) RetryPending(ctx context.Context) {
 func (service *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/open-review/health", service.probe)
+	mux.HandleFunc("POST /v1/open-review/readiness", service.probe)
 	mux.HandleFunc("POST /v1/open-review/tasks", service.submit)
 	mux.HandleFunc("POST /v1/open-review/tasks/{jobID}/start", service.start)
 	mux.HandleFunc("POST /v1/open-review/tasks/{jobID}/cancel", service.cancel)
@@ -388,7 +390,60 @@ func (service *Service) probe(writer http.ResponseWriter, request *http.Request)
 		writeServiceError(writer, http.StatusServiceUnavailable, "adapter is shutting down")
 		return
 	}
+	service.readinessMu.Lock()
+	failure := service.modelReadinessFailure
+	service.readinessMu.Unlock()
+	if failure != nil {
+		code, summary := executionFailureResult(failure)
+		writeServiceError(writer, http.StatusServiceUnavailable, code+": "+summary)
+		return
+	}
+	if request.URL.Path == "/v1/open-review/health" {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := service.checkExecutionReadiness(request.Context()); err != nil {
+		code, summary := executionFailureResult(err)
+		writeServiceError(writer, http.StatusServiceUnavailable, code+": "+summary)
+		return
+	}
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (service *Service) checkExecutionReadiness(ctx context.Context) error {
+	readiness, ok := service.executor.(interface{ CheckExecutionReady(context.Context) error })
+	if !ok {
+		return nil
+	}
+	// Serialize costly checks separately so a heartbeat never waits for a model.
+	service.readinessProbeMu.Lock()
+	defer service.readinessProbeMu.Unlock()
+	service.readinessMu.Lock()
+	failure, readyUntil := service.modelReadinessFailure, service.readyUntil
+	service.readinessMu.Unlock()
+	if failure != nil {
+		return failure
+	}
+	if time.Now().Before(readyUntil) {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	err := readiness.CheckExecutionReady(ctx)
+	service.readinessMu.Lock()
+	defer service.readinessMu.Unlock()
+	var denied *modelUpstreamFailure
+	if errors.As(err, &denied) && (denied.status == 401 || denied.status == 403) {
+		service.modelReadinessFailure = denied
+	}
+	if service.modelReadinessFailure != nil {
+		return service.modelReadinessFailure
+	}
+	if err == nil {
+		service.readyUntil = time.Now().Add(time.Minute)
+	}
+	return err
 }
 
 func (service *Service) submit(writer http.ResponseWriter, request *http.Request) {
@@ -670,11 +725,38 @@ func (service *Service) run(ctx context.Context, job *serviceJob) {
 	if ctx.Err() != nil {
 		return
 	}
+	// A failed final confirmation may follow a successful provider write. Read
+	// the exact owned Draft once before emitting failure; never replay Execute,
+	// push or creation. The durable control-plane read queue handles later
+	// confirmation loss for feedback revisions.
+	if err != nil {
+		job.stateMu.Lock()
+		publication := job.publication
+		job.stateMu.Unlock()
+		if reconciler, ok := service.executor.(PublicationReconciler); ok && publication != nil {
+			probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			confirmed, confirmErr := reconciler.ReconcilePublication(probeCtx, job.id, job.submission, *publication)
+			cancel()
+			if confirmErr == nil && validExecutionResult(job.submission, confirmed, service.draftURLPolicy) && matchesPublicationCheckpoint(confirmed, publication) {
+				result, err = confirmed, nil
+			}
+		}
+	}
 	if err != nil {
 		// Preserve a bounded diagnostic stage without logging the child output,
 		// repository content, provider response, or credential-bearing error.
 		log.Printf("agent adapter execution failed for job %s at stage %s", job.id, executionFailureStage(err))
-		service.deliverTerminal(ctx, job, domain.AgentTaskAdapterEvent{AttemptID: parseAdapterUUID(job.submission.AttemptID), AdapterJobID: job.id, DeliveryID: "adapter:" + job.id + ":failed", Kind: "needs_attention", ErrorCode: "agent_adapter_execution_failed", Summary: "The isolated adapter could not complete the approved task. Inspect its private execution evidence before retrying."})
+		service.readinessMu.Lock()
+		service.readyUntil = time.Time{}
+		var denied *modelUpstreamFailure
+		if errors.As(err, &denied) && (denied.status == 401 || denied.status == 403) {
+			// Configuration is immutable for this process. Block further task
+			// probes until the operator corrects it and restarts the adapter.
+			service.modelReadinessFailure = denied
+		}
+		service.readinessMu.Unlock()
+		errorCode, summary := executionFailureResult(err)
+		service.deliverTerminal(ctx, job, domain.AgentTaskAdapterEvent{AttemptID: parseAdapterUUID(job.submission.AttemptID), AdapterJobID: job.id, DeliveryID: "adapter:" + job.id + ":failed", Kind: "needs_attention", ErrorCode: errorCode, Summary: summary})
 		return
 	}
 	if !validExecutionResult(job.submission, result, service.draftURLPolicy) {
@@ -685,14 +767,19 @@ func (service *Service) run(ctx context.Context, job *serviceJob) {
 		job.stateMu.Lock()
 		checkpoint := job.publication
 		job.stateMu.Unlock()
-		if checkpoint == nil || result.HeadSHA != checkpoint.HeadSHA || result.PatchSHA256 != checkpoint.PatchSHA256 ||
-			result.ChangedFileCount != checkpoint.ChangedFileCount || result.DiffBytes != checkpoint.DiffBytes ||
-			result.VerificationProfileSHA256 != checkpoint.VerificationProfileSHA256 || result.VerificationOutputSHA256 != checkpoint.VerificationOutputSHA256 || result.VerificationOutputBytes != checkpoint.VerificationOutputBytes || !reflect.DeepEqual(result.VerificationCriteria, checkpoint.VerificationCriteria) {
+		if !matchesPublicationCheckpoint(result, checkpoint) {
 			service.deliverTerminal(ctx, job, domain.AgentTaskAdapterEvent{AttemptID: parseAdapterUUID(job.submission.AttemptID), AdapterJobID: job.id, DeliveryID: "adapter:" + job.id + ":checkpoint-mismatch", Kind: "needs_attention", ErrorCode: "agent_adapter_result_rejected", Summary: "The Draft result did not match the durable validated publication checkpoint. Inspect the provider branch before retrying."})
 			return
 		}
 	}
 	service.deliverTerminal(ctx, job, completedAdapterEvent(job, result, ":completed"))
+}
+
+func matchesPublicationCheckpoint(result ExecutionResult, checkpoint *PublicationCheckpoint) bool {
+	return checkpoint != nil && result.HeadSHA == checkpoint.HeadSHA && result.PatchSHA256 == checkpoint.PatchSHA256 &&
+		result.ChangedFileCount == checkpoint.ChangedFileCount && result.DiffBytes == checkpoint.DiffBytes &&
+		result.VerificationProfileSHA256 == checkpoint.VerificationProfileSHA256 && result.VerificationOutputSHA256 == checkpoint.VerificationOutputSHA256 &&
+		result.VerificationOutputBytes == checkpoint.VerificationOutputBytes && reflect.DeepEqual(result.VerificationCriteria, checkpoint.VerificationCriteria)
 }
 
 func executionFailureStage(err error) string {

@@ -76,15 +76,24 @@ func NewClient(endpoint, secret, callbackURL string, timeout time.Duration, allo
 	return &Client{endpoint: strings.TrimSuffix(endpoint, "/"), secret: secret, callback: strings.TrimSuffix(callbackURL, "/"), http: httpguard.NoRedirects(nil, timeout)}, nil
 }
 
-// Probe proves only that the configured adapter endpoint currently accepts
-// this runner's signing secret. It does not run a model, claim a task, inspect
-// provider credentials, or prove that a sandbox can publish a Draft PR.
+// Probe checks the signed adapter endpoint and a latched model access failure.
+// The periodic worker heartbeat does not invoke or spend tokens on a model.
 func (client *Client) Probe(ctx context.Context) error {
+	return client.probePath(ctx, "/v1/open-review/health")
+}
+
+// CheckExecutionReady checks cached sandbox/model availability before leasing
+// a new attempt. It never claims a task or proves Draft publication.
+func (client *Client) CheckExecutionReady(ctx context.Context) error {
+	return client.probePath(ctx, "/v1/open-review/readiness")
+}
+
+func (client *Client) probePath(ctx context.Context, path string) error {
 	if client == nil {
 		return fmt.Errorf("agent adapter client is not configured")
 	}
 	body := []byte("{}")
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.endpoint+"/v1/open-review/health", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.endpoint+path, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create agent adapter probe: %w", err)
 	}

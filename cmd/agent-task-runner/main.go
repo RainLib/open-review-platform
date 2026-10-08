@@ -120,18 +120,16 @@ func main() {
 			if err != nil {
 				return err
 			}
-			attempt, err := database.ClaimAgentTaskAttempt(ctx, workerID, request, lease)
-			if errors.Is(err, store.ErrNoQueuedAgentTask) {
-				if adapter == nil {
-					return nil
-				}
-				// A prior delivery may have attached this exact job and lost the
-				// Start response. Retry only while its original lease is live and
-				// the one-use control-plane start gate remains unclaimed.
-				return retryPendingAdapterStart(ctx, database, adapter, workerID, request)
+			var configuredAdapter agentTaskReadyAdapter
+			if adapter != nil {
+				configuredAdapter = adapter
 			}
+			attempt, err := claimReadyAgentTaskAttempt(ctx, database, configuredAdapter, workerID, request, lease)
 			if err != nil {
 				return err
+			}
+			if attempt == nil {
+				return nil
 			}
 			done := reporter.BeginTask()
 			defer done()
@@ -159,6 +157,49 @@ type agentTaskDispatchStore interface {
 
 type agentTaskStartRecoveryStore interface {
 	PendingAgentTaskAdapterStart(context.Context, string, domain.AgentTaskExecutionRequest) (*domain.AgentTaskAttempt, error)
+}
+
+type agentTaskReadyStore interface {
+	agentTaskStartRecoveryStore
+	ClaimAgentTaskAttempt(context.Context, string, domain.AgentTaskExecutionRequest, time.Duration) (*domain.AgentTaskAttempt, error)
+	HoldAgentTaskExecutionForReadiness(context.Context, string, domain.AgentTaskExecutionRequest) error
+}
+
+type agentTaskReadyAdapter interface {
+	agentTaskDispatchAdapter
+	CheckExecutionReady(context.Context) error
+}
+
+func claimReadyAgentTaskAttempt(ctx context.Context, database agentTaskReadyStore, adapter agentTaskReadyAdapter, workerID string, request domain.AgentTaskExecutionRequest, lease time.Duration) (*domain.AgentTaskAttempt, error) {
+	// An attached reservation may have an ambiguous Start response. Recover
+	// only that same job before applying readiness to any new execution.
+	if adapter != nil {
+		pending, err := database.PendingAgentTaskAdapterStart(ctx, workerID, request)
+		if err == nil {
+			return nil, adapter.Start(ctx, pending.ID, pending.AdapterJobID)
+		}
+		if !errors.Is(err, store.ErrNoQueuedAgentTask) {
+			return nil, err
+		}
+	}
+	if adapter == nil || adapter.CheckExecutionReady(ctx) != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		err := database.HoldAgentTaskExecutionForReadiness(ctx, workerID, request)
+		if errors.Is(err, store.ErrNoQueuedAgentTask) {
+			if adapter != nil {
+				return nil, retryPendingAdapterStart(ctx, database, adapter, workerID, request)
+			}
+			return nil, nil
+		}
+		return nil, err
+	}
+	attempt, err := database.ClaimAgentTaskAttempt(ctx, workerID, request, lease)
+	if errors.Is(err, store.ErrNoQueuedAgentTask) {
+		return nil, retryPendingAdapterStart(ctx, database, adapter, workerID, request)
+	}
+	return attempt, err
 }
 
 type agentTaskDispatchAdapter interface {

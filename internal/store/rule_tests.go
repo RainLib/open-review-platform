@@ -72,31 +72,10 @@ func (s *PostgresStore) CreateRuleTestRun(ctx context.Context, actor, tenantSlug
 	if err != nil {
 		return domain.RuleTestRun{}, err
 	}
-	versionRows, err := s.pool.Query(ctx, `SELECT id FROM rule_versions WHERE rule_set_id = $1`, ruleSetID)
+	sources, err = s.replaceRuleSetSources(ctx, ruleSetID, sources, rules.Source{VersionID: ruleVersionID.String(), Precedence: input.Precedence, Rules: candidateRules})
 	if err != nil {
-		return domain.RuleTestRun{}, fmt.Errorf("list candidate rule-set versions: %w", err)
+		return domain.RuleTestRun{}, err
 	}
-	replaced := map[string]bool{}
-	for versionRows.Next() {
-		var id uuid.UUID
-		if err := versionRows.Scan(&id); err != nil {
-			versionRows.Close()
-			return domain.RuleTestRun{}, fmt.Errorf("scan candidate rule-set version: %w", err)
-		}
-		replaced[id.String()] = true
-	}
-	if err := versionRows.Err(); err != nil {
-		versionRows.Close()
-		return domain.RuleTestRun{}, fmt.Errorf("iterate candidate rule-set versions: %w", err)
-	}
-	versionRows.Close()
-	filtered := sources[:0]
-	for _, source := range sources {
-		if !replaced[source.VersionID] {
-			filtered = append(filtered, source)
-		}
-	}
-	sources = append(filtered, rules.Source{VersionID: ruleVersionID.String(), Precedence: input.Precedence, Rules: candidateRules})
 	compiled, err := rules.Compile(sources)
 	if err != nil {
 		return domain.RuleTestRun{}, fmt.Errorf("%w: candidate composition: %v", ErrInvalidRuleImpact, err)
@@ -160,7 +139,7 @@ func (s *PostgresStore) CreateRuleTestRun(ctx context.Context, actor, tenantSlug
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO outbox_messages (aggregate_type, aggregate_id, topic, dedupe_key, payload)
-		VALUES ('rule_test_run', $1, 'rule.test.requested', $2, jsonb_build_object('test_run_id', $1::text))`,
+		VALUES ('rule_test_run', $1::uuid, 'rule.test.requested', $2, jsonb_build_object('test_run_id', $1::uuid::text))`,
 		testRunID, "rule-test:"+testRunID.String()+":requested"); err != nil {
 		return domain.RuleTestRun{}, fmt.Errorf("queue rule test run: %w", err)
 	}

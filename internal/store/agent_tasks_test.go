@@ -47,29 +47,37 @@ func TestAgentTaskPlanPermissionsReflectSourceRoleAndSeparateApproval(t *testing
 		Plans:           []domain.AgentTaskPlan{{State: "awaiting_approval", CreatedBy: "owner"}},
 		Classifications: []domain.AgentTaskClassification{{Decision: "requires_human", RiskLevel: "medium"}},
 	}
-	viewer := agentTaskPlanPermissions(detail, "viewer", "viewer")
+	viewer := agentTaskPlanPermissions(detail, "viewer", "viewer", false)
 	if viewer.CanCreatePlan || viewer.CanApprovePlan || viewer.CreateBlockReason != "reviewer_role_required" || viewer.ApproveBlockReason != "owner_admin_required" {
 		t.Fatalf("viewer received plan actions: %#v", viewer)
 	}
-	reviewer := agentTaskPlanPermissions(detail, "reviewer", "reviewer")
+	reviewer := agentTaskPlanPermissions(detail, "reviewer", "reviewer", false)
 	if !reviewer.CanCreatePlan || reviewer.CanApprovePlan || reviewer.ApproveBlockReason != "owner_admin_required" {
 		t.Fatalf("reviewer actions incorrect: %#v", reviewer)
 	}
-	owner := agentTaskPlanPermissions(detail, "owner", "owner")
-	if !owner.CanCreatePlan || !owner.CanApprovePlan {
-		t.Fatalf("medium-risk owner should be able to approve: %#v", owner)
+	owner := agentTaskPlanPermissions(detail, "owner", "owner", false)
+	if !owner.CanCreatePlan || owner.CanApprovePlan {
+		t.Fatalf("author self-approval should be denied by default: %#v", owner)
 	}
 	detail.Classifications[0].RiskLevel = "high"
-	owner = agentTaskPlanPermissions(detail, "owner", "owner")
+	owner = agentTaskPlanPermissions(detail, "owner", "owner", false)
 	if owner.CanApprovePlan || owner.ApproveBlockReason != "separate_approver_required" {
 		t.Fatalf("high-risk plan creator approved their own plan: %#v", owner)
 	}
-	admin := agentTaskPlanPermissions(detail, "admin", "another-admin")
+	admin := agentTaskPlanPermissions(detail, "admin", "another-admin", false)
 	if !admin.CanApprovePlan {
 		t.Fatalf("independent admin should be able to approve: %#v", admin)
 	}
+	owner = agentTaskPlanPermissions(detail, "owner", "owner", true)
+	if !owner.CanApprovePlan {
+		t.Fatalf("enabled self-approval still blocked: %#v", owner)
+	}
+	reviewer = agentTaskPlanPermissions(detail, "reviewer", "owner", true)
+	if reviewer.CanApprovePlan {
+		t.Fatal("self-approval opt-in widened reviewer role")
+	}
 	detail.Task.SourceState = "pending"
-	admin = agentTaskPlanPermissions(detail, "admin", "another-admin")
+	admin = agentTaskPlanPermissions(detail, "admin", "another-admin", false)
 	if admin.CanCreatePlan || admin.CreateBlockReason != "source_not_ready" {
 		t.Fatalf("unfrozen source exposed plan creation: %#v", admin)
 	}

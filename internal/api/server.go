@@ -155,6 +155,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/tenants/{slug}/members/{subject}", s.upsertMembership)
 	mux.HandleFunc("PATCH /v1/tenants/{slug}/members/{subject}/activation", s.setMembershipActivation)
 	mux.HandleFunc("GET /v1/tenants/{slug}/members", s.listMemberships)
+	mux.HandleFunc("GET /v1/tenants/{slug}/approval-policy", s.getWorkspaceApprovalPolicy)
+	mux.HandleFunc("PUT /v1/tenants/{slug}/approval-policy", s.saveWorkspaceApprovalPolicy)
 	mux.HandleFunc("POST /v1/tenants/{slug}/invitations", s.createWorkspaceInvitation)
 	mux.HandleFunc("GET /v1/tenants/{slug}/invitations", s.listWorkspaceInvitations)
 	mux.HandleFunc("POST /v1/tenants/{slug}/invitations/{invitationID}/revoke", s.revokeWorkspaceInvitation)
@@ -3663,7 +3665,7 @@ func (s *Server) decideRuleApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	request, err := s.store.DecideRuleApproval(r.Context(), principal.Subject, r.PathValue("slug"), requestID, input)
 	if errors.Is(err, store.ErrForbidden) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "an independent rule administrator is required"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "a rule administrator is required; requester decisions also require workspace rule self-approval to be enabled"})
 		return
 	}
 	if errors.Is(err, store.ErrNotFound) {

@@ -10,6 +10,10 @@ import (
 	"strings"
 )
 
+// Tool calls usually produce small messages. Leave room for planning, coding
+// and repair turns within the unchanged per-job output reservation limit.
+const anthropicModelBrokerOutputTokens = 4096
+
 // The Claude child can reach this one Messages endpoint on the private Docker
 // network. It receives a per-job capability, never the deployment's API key.
 func (broker *modelBroker) handleAnthropic(writer http.ResponseWriter, request *http.Request) {
@@ -25,7 +29,18 @@ func (broker *modelBroker) handleAnthropic(writer http.ResponseWriter, request *
 		http.Error(writer, "model capability is invalid", http.StatusUnauthorized)
 		return
 	}
+	broker.requestMu.Lock()
+	defer broker.requestMu.Unlock()
+	if blocked := broker.blockedUpstream(); blocked.status != 0 {
+		status := blocked.status
+		if status < 400 || status > 599 {
+			status = http.StatusBadGateway
+		}
+		http.Error(writer, "model upstream requires correction before a new approved plan", status)
+		return
+	}
 	if broker.requests.Add(1) > modelBrokerRequestLimit {
+		broker.blockUpstream(modelUpstreamObservation{status: http.StatusTooManyRequests})
 		http.Error(writer, "model request budget exhausted", http.StatusTooManyRequests)
 		return
 	}
@@ -74,8 +89,8 @@ func (broker *modelBroker) handleAnthropic(writer http.ResponseWriter, request *
 			return
 		}
 	}
-	if outputTokens == 0 || outputTokens > modelBrokerOutputTokens {
-		outputTokens = modelBrokerOutputTokens
+	if outputTokens == 0 || outputTokens > anthropicModelBrokerOutputTokens {
+		outputTokens = anthropicModelBrokerOutputTokens
 		fields["max_tokens"] = []byte(strconv.Itoa(outputTokens))
 	}
 	if raw, present := fields["thinking"]; present && string(raw) != "null" {
@@ -100,6 +115,7 @@ func (broker *modelBroker) handleAnthropic(writer http.ResponseWriter, request *
 	// long stream or a provider that omits usage data to evade the job budget.
 	if broker.outputTokens.Add(int64(outputTokens)) > modelBrokerTotalOutputTokens ||
 		broker.requestBytes.Add(int64(len(body))) > modelBrokerTotalRequestBytes {
+		broker.blockUpstream(modelUpstreamObservation{status: http.StatusTooManyRequests})
 		http.Error(writer, "model job budget exhausted", http.StatusTooManyRequests)
 		return
 	}
@@ -121,7 +137,7 @@ func (broker *modelBroker) handleAnthropic(writer http.ResponseWriter, request *
 	if strings.Contains(request.Header.Get("Accept"), "text/event-stream") {
 		upstream.Header.Set("Accept", "text/event-stream")
 	}
-	response, err := broker.transport.Do(upstream)
+	response, err := broker.sendModelRequest(upstream, body, outputTokens)
 	if err != nil {
 		http.Error(writer, "model upstream request failed", http.StatusBadGateway)
 		return
@@ -139,11 +155,13 @@ func (broker *modelBroker) handleAnthropic(writer http.ResponseWriter, request *
 		writer.Header().Set("Content-Type", contentType)
 	}
 	writer.WriteHeader(response.StatusCode)
+	usage := anthropicUsage{streaming: strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream"), ceiling: int64(outputTokens)}
 	buffer := make([]byte, 32<<10)
 	remaining := int64(modelBrokerResponseBytes)
 	for remaining > 0 {
 		count, readErr := response.Body.Read(buffer[:min(int64(len(buffer)), remaining)])
 		if count > 0 {
+			usage.write(buffer[:count])
 			if _, writeErr := writer.Write(buffer[:count]); writeErr != nil {
 				return
 			}
@@ -153,6 +171,13 @@ func (broker *modelBroker) handleAnthropic(writer http.ResponseWriter, request *
 			}
 		}
 		if readErr != nil {
+			if readErr != io.EOF {
+				broker.observeUpstream(-1, "transport_error")
+				broker.blockUpstream(modelUpstreamObservation{status: -1, errorType: "transport_error"})
+			}
+			if readErr == io.EOF && response.StatusCode == http.StatusOK {
+				broker.outputTokens.Add(-usage.refund())
+			}
 			return
 		}
 	}

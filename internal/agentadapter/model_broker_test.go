@@ -99,7 +99,7 @@ func TestModelBrokerKeepsUpstreamCredentialOutOfCodingJob(t *testing.T) {
 	}
 }
 
-func TestModelBrokerRefusesRedirectsAndExhaustedBudget(t *testing.T) {
+func TestModelBrokerRefusesRedirectsAndStopsRepeatingDeniedRoute(t *testing.T) {
 	var redirected atomic.Int32
 	other := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		redirected.Add(1)
@@ -128,9 +128,6 @@ func TestModelBrokerRefusesRedirectsAndExhaustedBudget(t *testing.T) {
 		}
 		response.Body.Close()
 		want := http.StatusBadGateway
-		if index == modelBrokerRequestLimit {
-			want = http.StatusTooManyRequests
-		}
 		if response.StatusCode != want {
 			t.Fatalf("request %d got %d; want %d", index, response.StatusCode, want)
 		}

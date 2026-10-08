@@ -70,17 +70,22 @@ func validAgentModelName(value string) bool {
 }
 
 type modelBroker struct {
-	config        ModelBrokerConfig
-	token         string
-	listener      net.Listener
-	advertiseHost string
-	server        *http.Server
-	requests      atomic.Int32
-	outputTokens  atomic.Int64
-	requestBytes  atomic.Int64
-	transport     *http.Client
-	stop          chan struct{}
-	closeOnce     sync.Once
+	config         ModelBrokerConfig
+	token          string
+	listener       net.Listener
+	advertiseHost  string
+	server         *http.Server
+	requests       atomic.Int32
+	outputTokens   atomic.Int64
+	requestBytes   atomic.Int64
+	upstreamStatus atomic.Int32
+	upstreamState  modelUpstreamState
+	requestMu      sync.Mutex
+	transport      *http.Client
+	stop           chan struct{}
+	failure        chan struct{}
+	failureOnce    sync.Once
+	closeOnce      sync.Once
 }
 
 func startModelBroker(ctx context.Context, config ModelBrokerConfig) (*modelBroker, error) {
@@ -105,7 +110,7 @@ func startModelBrokerOn(ctx context.Context, config ModelBrokerConfig, bindAddre
 	if client == nil {
 		client = &http.Client{Transport: &http.Transport{Proxy: nil, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 60 * time.Second}}
 	}
-	broker := &modelBroker{config: config, token: hex.EncodeToString(secret), listener: listener, advertiseHost: advertiseHost, transport: httpguard.NoRedirects(client, 0), stop: make(chan struct{})}
+	broker := &modelBroker{config: config, token: hex.EncodeToString(secret), listener: listener, advertiseHost: advertiseHost, transport: httpguard.NoRedirects(client, 0), stop: make(chan struct{}), failure: make(chan struct{})}
 	broker.server = &http.Server{Handler: http.HandlerFunc(broker.handle), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second}
 	go func() { _ = broker.server.Serve(listener) }()
 	go func() {
@@ -134,6 +139,7 @@ func (broker *modelBroker) Close() error {
 	broker.closeOnce.Do(func() {
 		close(broker.stop)
 		err = broker.server.Close()
+		broker.transport.CloseIdleConnections()
 	})
 	return err
 }
@@ -152,7 +158,21 @@ func (broker *modelBroker) handle(writer http.ResponseWriter, request *http.Requ
 		http.Error(writer, "model capability is invalid", http.StatusUnauthorized)
 		return
 	}
+	// Serialize authenticated model calls through completion. An SDK may send
+	// concurrent retries; they must see the terminal latch before reserving
+	// more budget or reaching upstream.
+	broker.requestMu.Lock()
+	defer broker.requestMu.Unlock()
+	if blocked := broker.blockedUpstream(); blocked.status != 0 {
+		status := blocked.status
+		if status < 400 || status > 599 {
+			status = http.StatusBadGateway
+		}
+		http.Error(writer, "model upstream requires correction before a new approved plan", status)
+		return
+	}
 	if broker.requests.Add(1) > modelBrokerRequestLimit {
+		broker.blockUpstream(modelUpstreamObservation{status: http.StatusTooManyRequests})
 		http.Error(writer, "model request budget exhausted", http.StatusTooManyRequests)
 		return
 	}
@@ -206,6 +226,7 @@ func (broker *modelBroker) handle(writer http.ResponseWriter, request *http.Requ
 	// or a streamed response is interrupted after generation has begun.
 	if broker.outputTokens.Add(int64(outputTokens)) > modelBrokerTotalOutputTokens ||
 		broker.requestBytes.Add(int64(len(body))) > modelBrokerTotalRequestBytes {
+		broker.blockUpstream(modelUpstreamObservation{status: http.StatusTooManyRequests})
 		http.Error(writer, "model job budget exhausted", http.StatusTooManyRequests)
 		return
 	}
@@ -225,7 +246,7 @@ func (broker *modelBroker) handle(writer http.ResponseWriter, request *http.Requ
 	if strings.Contains(request.Header.Get("Accept"), "text/event-stream") {
 		upstream.Header.Set("Accept", "text/event-stream")
 	}
-	response, err := broker.transport.Do(upstream)
+	response, err := broker.sendModelRequest(upstream, body, outputTokens)
 	if err != nil {
 		http.Error(writer, "model upstream request failed", http.StatusBadGateway)
 		return
@@ -257,6 +278,10 @@ func (broker *modelBroker) handle(writer http.ResponseWriter, request *http.Requ
 			}
 		}
 		if readErr != nil {
+			if readErr != io.EOF {
+				broker.observeUpstream(-1, "transport_error")
+				broker.blockUpstream(modelUpstreamObservation{status: -1, errorType: "transport_error"})
+			}
 			return
 		}
 	}

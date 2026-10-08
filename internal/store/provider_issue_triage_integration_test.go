@@ -749,3 +749,56 @@ func TestProviderIssueAnalysisRecoversConsumedDeliveryAfterConnectionRestored(t 
 		t.Fatalf("old consumed delivery leaked into new attempt: %#v %v", page, err)
 	}
 }
+
+func TestProviderIssueLegacyRouteDefaultsSurviveFrozenSnapshotReadback(t *testing.T) {
+	databaseURL := os.Getenv("OPEN_REVIEW_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("OPEN_REVIEW_TEST_DATABASE_URL is not configured")
+	}
+	ctx := context.Background()
+	postgres, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer postgres.Close()
+	tenantID, installationID, configurationID := uuid.New(), uuid.New(), uuid.New()
+	// An older, still-valid route has no tenant-concurrency field. Preserve the
+	// immutable JSON/hash while applying the domain's safe runtime default.
+	raw := json.RawMessage(`{"enabled":true,"provider":"openai-compatible","protocol":"openai-chat","base_url":"https://models.example/v1/chat/completions","model":"fixed","credential_ref":"env://OPEN_REVIEW_MODEL_SECRET_PRIMARY","effort":"low","max_prompt_tokens":8000,"token_budget":128000,"subtask_timeout_minutes":2}`)
+	canonical, hash, valid := domain.CanonicalReviewConfig(domain.ReviewConfigModels, raw)
+	if !valid {
+		t.Fatal("legacy route must remain valid")
+	}
+	batch := &pgx.Batch{}
+	batch.Queue("INSERT INTO tenants(id,slug,name) VALUES($1,$2,'Legacy model route')", tenantID, "legacy-triage-"+tenantID.String()[:8])
+	batch.Queue("INSERT INTO provider_installations(id,tenant_id,provider,external_id,repository_scope,automatic_reviews,api_base_url,credential_ref,verification_state) VALUES($1,$2,'github',$3,'RainLib/*',TRUE,'https://api.github.com','github-app','verified')", installationID, tenantID, "legacy-triage-"+tenantID.String())
+	batch.Queue("INSERT INTO review_configurations(id,tenant_id,section,scope_kind,scope_ref,active) VALUES($1,$2,'models','tenant','',TRUE)", configurationID, tenantID)
+	batch.Queue("INSERT INTO review_configuration_versions(configuration_id,revision,content,content_sha256,created_by) VALUES($1,1,$2::jsonb,$3,'owner')", configurationID, canonical, hash)
+	if err := postgres.pool.SendBatch(ctx, batch).Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = postgres.pool.Exec(context.Background(), "DELETE FROM tenants WHERE id=$1", tenantID) }()
+	event := domain.ProviderIssueEvent{Provider: domain.ProviderGitHub, APIBaseURL: "https://api.github.com", DeliveryID: "legacy-triage-" + uuid.NewString(), EventName: "issues", InstallationExternalID: "legacy-triage-" + tenantID.String(), Repository: "RainLib/open-review-platform", IssueNumber: 27, Action: "opened", Title: "Criterion evidence must match", Body: "Acceptance criteria: reject duplicate results", Author: "alice", Labels: []string{}, Payload: json.RawMessage("{}"), ReceivedAt: time.Now().UTC()}
+	outcome, err := postgres.EnqueueProviderIssueAnalysis(ctx, event)
+	if err != nil || outcome.Skipped {
+		t.Fatalf("admission failed: %v %#v", err, outcome)
+	}
+	loaded, err := postgres.ProviderIssueAnalysis(ctx, outcome.Job.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range []domain.ProviderIssueAnalysisJob{outcome.Job, loaded} {
+		if !job.ModelRoute.Valid() || job.ModelRoute.MaxConcurrentRuns != 2 || job.ModelRouteSHA256 != hash {
+			t.Fatalf("legacy runtime route became unavailable: %#v", job.ModelRoute)
+		}
+	}
+	var storedRaw []byte
+	var storedHash string
+	if err := postgres.pool.QueryRow(ctx, "SELECT model_route,model_route_sha256 FROM provider_issue_analysis_jobs WHERE id=$1", outcome.Job.ID).Scan(&storedRaw, &storedHash); err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]json.RawMessage
+	if json.Unmarshal(storedRaw, &stored) != nil || stored["max_concurrent_runs"] != nil || storedHash != hash {
+		t.Fatal("runtime defaults rewrote the frozen route provenance")
+	}
+}

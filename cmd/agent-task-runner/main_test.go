@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
 	"github.com/RainLib/open-review-platform/internal/store"
@@ -14,6 +15,79 @@ import (
 type dispatchStoreProbe struct {
 	actions   *[]string
 	attachErr error
+}
+
+type readinessStoreProbe struct {
+	actions  *[]string
+	pending  *domain.AgentTaskAttempt
+	holdErr  error
+	claimErr error
+}
+
+func (probe readinessStoreProbe) PendingAgentTaskAdapterStart(context.Context, string, domain.AgentTaskExecutionRequest) (*domain.AgentTaskAttempt, error) {
+	*probe.actions = append(*probe.actions, "pending")
+	if probe.pending != nil {
+		return probe.pending, nil
+	}
+	return nil, store.ErrNoQueuedAgentTask
+}
+func (probe readinessStoreProbe) HoldAgentTaskExecutionForReadiness(context.Context, string, domain.AgentTaskExecutionRequest) error {
+	*probe.actions = append(*probe.actions, "hold")
+	return probe.holdErr
+}
+func (probe readinessStoreProbe) ClaimAgentTaskAttempt(context.Context, string, domain.AgentTaskExecutionRequest, time.Duration) (*domain.AgentTaskAttempt, error) {
+	*probe.actions = append(*probe.actions, "claim")
+	if probe.claimErr != nil {
+		return nil, probe.claimErr
+	}
+	return &domain.AgentTaskAttempt{ID: uuid.New()}, nil
+}
+
+type readinessAdapterProbe struct {
+	dispatchAdapterProbe
+	readyErr error
+}
+
+func (probe readinessAdapterProbe) CheckExecutionReady(context.Context) error {
+	*probe.actions = append(*probe.actions, "readiness")
+	return probe.readyErr
+}
+
+func TestPreflightHoldsBeforeClaimAndRecoversOnlyAttachedStart(t *testing.T) {
+	for _, tc := range []struct {
+		name                                  string
+		readyErr, holdErr                     error
+		pending, absent, wantAttempt, wantErr bool
+		want                                  []string
+	}{
+		{name: "ready", wantAttempt: true, want: []string{"pending", "readiness", "claim"}},
+		{name: "model denied", readyErr: errors.New("403"), want: []string{"pending", "readiness", "hold"}},
+		{name: "adapter absent", absent: true, want: []string{"hold"}},
+		{name: "store failure", readyErr: errors.New("403"), holdErr: errors.New("DB failed"), wantErr: true, want: []string{"pending", "readiness", "hold"}},
+		{name: "old delivery", readyErr: errors.New("403"), holdErr: store.ErrNoQueuedAgentTask, want: []string{"pending", "readiness", "hold", "pending"}},
+		{name: "ambiguous start", pending: true, readyErr: errors.New("403"), want: []string{"pending", "start"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actions := []string{}
+			database := readinessStoreProbe{actions: &actions, holdErr: tc.holdErr}
+			if tc.pending {
+				database.pending = &domain.AgentTaskAttempt{ID: uuid.New(), AdapterJobID: "original-job"}
+			}
+			var adapter agentTaskReadyAdapter
+			var startID uuid.UUID
+			var startJob string
+			if !tc.absent {
+				adapter = readinessAdapterProbe{dispatchAdapterProbe: dispatchAdapterProbe{actions: &actions, startAttemptID: &startID, startJobID: &startJob}, readyErr: tc.readyErr}
+			}
+			attempt, err := claimReadyAgentTaskAttempt(context.Background(), database, adapter, "worker", domain.AgentTaskExecutionRequest{}, time.Minute)
+			if (attempt != nil) != tc.wantAttempt || (err != nil) != tc.wantErr || !reflect.DeepEqual(actions, tc.want) {
+				t.Fatalf("attempt=%v err=%v actions=%v", attempt, err, actions)
+			}
+			if tc.pending && (startID != database.pending.ID || startJob != database.pending.AdapterJobID) {
+				t.Fatal("recovery did not use original reservation")
+			}
+		})
+	}
 }
 
 func (probe dispatchStoreProbe) MarkAgentTaskAttemptNeedsAttention(context.Context, uuid.UUID, string, string, string) error {

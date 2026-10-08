@@ -375,6 +375,10 @@ func (s *PostgresStore) ListRuleApprovalRequests(ctx context.Context, actor, ten
 	if err != nil {
 		return nil, err
 	}
+	approvalPolicy, err := s.GetWorkspaceApprovalPolicy(ctx, actor, tenantSlug)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT request.id,
 		       rule_set.id,
@@ -427,7 +431,7 @@ func (s *PostgresStore) ListRuleApprovalRequests(ctx context.Context, actor, ten
 		); err != nil {
 			return nil, fmt.Errorf("scan rule approval request: %w", err)
 		}
-		item.CanDecide = canManageRules(role) && item.State == "pending" && item.RequestedBy != actor && item.ActorDecision == ""
+		item.CanDecide = canManageRules(role) && item.State == "pending" && (item.RequestedBy != actor || approvalPolicy.AllowRuleSelfApproval) && item.ActorDecision == ""
 		item.CanPublish = canManageRules(role) && item.State == "approved" && item.VersionState == "approved"
 		requests = append(requests, item)
 	}
@@ -515,11 +519,12 @@ func (s *PostgresStore) PreviewRuleVersionImpact(ctx context.Context, actor, ten
 	result.BaselineSHA256 = baseline.SHA256
 	result.BaselineRuleCount = len(baseline.Snapshot.Rules)
 
-	candidateSources := append(append([]rules.Source(nil), baselineSources...), rules.Source{
-		VersionID:  "candidate:" + result.RuleVersionID.String(),
-		Precedence: input.Precedence,
-		Rules:      candidateRules,
+	candidateSources, err := s.replaceRuleSetSources(ctx, ruleSetID, baselineSources, rules.Source{
+		VersionID: result.RuleVersionID.String(), Precedence: input.Precedence, Rules: candidateRules,
 	})
+	if err != nil {
+		return domain.RuleImpactPreview{}, err
+	}
 	candidate, compileErr := rules.Compile(candidateSources)
 	if compileErr != nil {
 		result.Conflict = compileErr.Error()
@@ -568,6 +573,34 @@ func (s *PostgresStore) PreviewRuleVersionImpact(ctx context.Context, actor, ten
 		result.Uncertainty = append(result.Uncertainty, "No historical runs were available for this repository.")
 	}
 	return result, nil
+}
+
+// Preview and isolated replay replace the selected policy's prior versions.
+// Durable version IDs remain intact for exception matching and provenance.
+func (s *PostgresStore) replaceRuleSetSources(ctx context.Context, ruleSetID uuid.UUID, sources []rules.Source, candidate rules.Source) ([]rules.Source, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id FROM rule_versions WHERE rule_set_id = $1`, ruleSetID)
+	if err != nil {
+		return nil, fmt.Errorf("list candidate rule-set versions: %w", err)
+	}
+	defer rows.Close()
+	replaced := map[string]bool{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan candidate rule-set version: %w", err)
+		}
+		replaced[id.String()] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate candidate rule-set versions: %w", err)
+	}
+	filtered := make([]rules.Source, 0, len(sources)+1)
+	for _, source := range sources {
+		if !replaced[source.VersionID] {
+			filtered = append(filtered, source)
+		}
+	}
+	return append(filtered, candidate), nil
 }
 
 func ruleSourceVersions(sources []rules.Source) map[string]int {
@@ -680,6 +713,8 @@ func impactRuleCounts(candidateRules []rules.Rule) domain.RuleImpactCounts {
 }
 
 func diffEffectiveRuleKeys(baseline, candidate rules.Snapshot) (added, changed, removed []string) {
+	// The Console contract uses arrays even when there are no differences.
+	added, changed, removed = []string{}, []string{}, []string{}
 	baselineSignatures := effectiveRuleSignatures(baseline)
 	candidateSignatures := effectiveRuleSignatures(candidate)
 	for key, signature := range candidateSignatures {
@@ -775,8 +810,8 @@ func (s *PostgresStore) RequestRuleApproval(ctx context.Context, actor, tenantSl
 	return result, nil
 }
 
-// DecideRuleApproval records one independent reviewer decision. The requester
-// cannot self-approve, and an approved request only unlocks publication after
+// DecideRuleApproval records one authorized reviewer decision. Requester votes
+// require the workspace opt-in; an approved request only unlocks publication after
 // the configured number of matching-content approvals has committed.
 func (s *PostgresStore) DecideRuleApproval(ctx context.Context, actor, tenantSlug string, requestID uuid.UUID, input domain.RuleApprovalDecisionInput) (domain.RuleApprovalRequest, error) {
 	input.Decision = strings.ToLower(strings.TrimSpace(input.Decision))
@@ -814,7 +849,11 @@ func (s *PostgresStore) DecideRuleApproval(ctx context.Context, actor, tenantSlu
 	if result.State != "pending" || result.ContentSHA256 != currentVersionSHA256 {
 		return domain.RuleApprovalRequest{}, ErrConflict
 	}
-	if result.RequestedBy == actor {
+	approvalPolicy, err := workspaceApprovalPolicyTx(ctx, tx, tenantID)
+	if err != nil {
+		return domain.RuleApprovalRequest{}, err
+	}
+	if result.RequestedBy == actor && !approvalPolicy.AllowRuleSelfApproval {
 		return domain.RuleApprovalRequest{}, ErrForbidden
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO rule_approvals (request_id, approver_subject, decision, content_sha256, comment) VALUES ($1, $2, $3, $4, $5)`, result.ID, actor, input.Decision, result.ContentSHA256, input.Comment); isUniqueViolation(err) {
@@ -849,7 +888,7 @@ func (s *PostgresStore) DecideRuleApproval(ctx context.Context, actor, tenantSlu
 			result.DecidedAt = &now
 		}
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_approval.decided', $3, jsonb_build_object('decision', $4::text, 'content_sha256', $5::text))`, tenantID, actor, result.ID.String(), input.Decision, result.ContentSHA256); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (tenant_id, actor_subject, action, target, metadata) VALUES ($1, $2, 'rule_approval.decided', $3, jsonb_build_object('decision', $4::text, 'content_sha256', $5::text, 'self_approval', $6::bool, 'approval_policy_revision', $7::int))`, tenantID, actor, result.ID.String(), input.Decision, result.ContentSHA256, result.RequestedBy == actor, approvalPolicy.Revision); err != nil {
 		return domain.RuleApprovalRequest{}, fmt.Errorf("audit rule approval decision: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

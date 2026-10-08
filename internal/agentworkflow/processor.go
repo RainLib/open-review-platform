@@ -4,6 +4,7 @@ package agentworkflow
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,11 @@ type Processor struct {
 }
 
 func (p Processor) RunOnce(ctx context.Context) (bool, error) {
+	if backend, ok := p.Store.(publicationRecoveryStore); ok {
+		if worked, err := p.recoverPublication(ctx, backend); worked || err != nil {
+			return worked, err
+		}
+	}
 	target, err := p.Store.ClaimAgentWorkflow(ctx, p.WorkerID)
 	if errors.Is(err, store.ErrNoQueuedAgentTask) {
 		return false, nil
@@ -43,7 +49,7 @@ func (p Processor) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	event, state, err := p.readDraft(ctx, *target)
+	event, state, _, err := p.readDraft(ctx, *target)
 	if err != nil {
 		return true, p.Store.FinishAgentWorkflowObservation(ctx, p.WorkerID, *target, "", "unavailable")
 	}
@@ -55,22 +61,48 @@ func (p Processor) RunOnce(ctx context.Context) (bool, error) {
 	}
 	return true, p.Store.FinishAgentWorkflowObservation(ctx, p.WorkerID, *target, event.HeadSHA, state)
 }
-func (p Processor) readDraft(ctx context.Context, target store.AgentWorkflowTarget) (domain.InboundEvent, string, error) {
+
+type publicationRecoveryStore interface {
+	ClaimAgentPublicationRecovery(context.Context, string) (*store.AgentPublicationRecoveryTarget, error)
+	FinishAgentPublicationRecovery(context.Context, string, store.AgentPublicationRecoveryTarget, domain.InboundEvent, string, string) error
+}
+
+func (p Processor) recoverPublication(ctx context.Context, backend publicationRecoveryStore) (bool, error) {
+	target, err := backend.ClaimAgentPublicationRecovery(ctx, p.WorkerID)
+	if errors.Is(err, store.ErrNoQueuedAgentTask) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	event, state, draftURL, readErr := p.readDraft(ctx, target.Workflow)
+	reason := ""
+	if readErr != nil {
+		reason = "provider_unavailable"
+	} else if state == "open" && event.IsDraft && event.HeadSHA == target.Workflow.Task.SourceBaseSHA && event.HeadSHA != target.Checkpoint.HeadSHA {
+		reason = "provider_head_pending"
+	} else if state != "open" || event.HeadSHA != target.Checkpoint.HeadSHA || !event.IsDraft {
+		reason = "publication_recovery_evidence_mismatch"
+	}
+	return true, backend.FinishAgentPublicationRecovery(ctx, p.WorkerID, *target, event, draftURL, reason)
+}
+
+func (p Processor) readDraft(ctx context.Context, target store.AgentWorkflowTarget) (domain.InboundEvent, string, string, error) {
 	job := target.Job
 	event := domain.InboundEvent{Provider: job.Provider, APIBaseURL: job.APIBaseURL, InstallationExternalID: job.InstallationExternalID, Repository: job.Repository, ReviewNumber: job.ReviewNumber, DeliveryID: "agent-rereview:" + target.Attempt.ID.String() + ":" + target.Acceptance.HeadSHA, EventName: "agent_delivery", Payload: json.RawMessage(`{}`), ReceivedAt: time.Now().UTC(), TriggerKind: "manual", ActorKind: "system", ActorSubject: target.Task.RequestedBy}
 	base, err := url.Parse(strings.TrimSuffix(job.APIBaseURL, "/"))
 	if err != nil || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || (base.Scheme != "https" && !(p.AllowHTTP && base.Scheme == "http")) || job.CredentialRef == "" || p.Resolver == nil {
-		return event, "", fmt.Errorf("provider origin or credential unavailable")
+		return event, "", "", fmt.Errorf("provider origin or credential unavailable")
 	}
 	token, err := p.Resolver.Resolve(ctx, job)
 	if err != nil || token == "" {
-		return event, "", fmt.Errorf("provider read unavailable")
+		return event, "", "", fmt.Errorf("provider read unavailable")
 	}
 	endpoint := ""
 	parts := strings.Split(job.Repository, "/")
 	for _, part := range parts {
 		if part == "" || part == "." || part == ".." {
-			return event, "", fmt.Errorf("invalid repository")
+			return event, "", "", fmt.Errorf("invalid repository")
 		}
 	}
 	if job.Provider == domain.ProviderGitHub && len(parts) == 2 && base.Scheme == "https" && (base.Path == "" || base.Path == "/api/v3") {
@@ -78,7 +110,7 @@ func (p Processor) readDraft(ctx context.Context, target store.AgentWorkflowTarg
 	} else if job.Provider == domain.ProviderGitLab && strings.HasSuffix(base.Path, "/api/v4") {
 		endpoint = base.String() + "/projects/" + url.PathEscape(job.Repository) + "/merge_requests/" + strconv.Itoa(job.ReviewNumber)
 	} else {
-		return event, "", fmt.Errorf("invalid provider base")
+		return event, "", "", fmt.Errorf("invalid provider base")
 	}
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if job.Provider == domain.ProviderGitHub {
@@ -93,24 +125,26 @@ func (p Processor) readDraft(ctx context.Context, target store.AgentWorkflowTarg
 	}
 	response, err := httpguard.NoRedirects(client, 20*time.Second).Do(request)
 	if err != nil {
-		return event, "", fmt.Errorf("provider unavailable")
+		return event, "", "", fmt.Errorf("provider unavailable")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return event, "", fmt.Errorf("provider read failed")
+		return event, "", "", fmt.Errorf("provider read failed")
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (256<<10)+1))
 	if err != nil || len(raw) > 256<<10 {
-		return event, "", fmt.Errorf("provider response invalid")
+		return event, "", "", fmt.Errorf("provider response invalid")
 	}
-	state := ""
+	state, draftURL := "", ""
 	if job.Provider == domain.ProviderGitHub {
 		var result struct {
-			Number int    `json:"number"`
-			State  string `json:"state"`
-			Draft  bool   `json:"draft"`
-			Merged bool   `json:"merged"`
-			Head   struct {
+			Body    string `json:"body"`
+			HTMLURL string `json:"html_url"`
+			Number  int    `json:"number"`
+			State   string `json:"state"`
+			Draft   bool   `json:"draft"`
+			Merged  bool   `json:"merged"`
+			Head    struct {
 				SHA, Ref string
 				Repo     struct {
 					FullName string `json:"full_name"`
@@ -124,9 +158,13 @@ func (p Processor) readDraft(ctx context.Context, target store.AgentWorkflowTarg
 			}
 		}
 		if json.Unmarshal(raw, &result) != nil || result.Number != job.ReviewNumber || result.Head.Repo.FullName != job.Repository || result.Base.Repo.FullName != job.Repository || result.Head.Ref != target.Task.ExecutionBranch || result.Base.Ref != job.BaseRef {
-			return event, "", fmt.Errorf("Draft identity changed")
+			return event, "", "", fmt.Errorf("Draft identity changed")
 		}
 		event.HeadSHA, event.HeadRef, event.BaseSHA, event.BaseRef, event.IsDraft = result.Head.SHA, result.Head.Ref, result.Base.SHA, result.Base.Ref, result.Draft
+		draftURL = result.HTMLURL
+		if target.RequireDraftOwnership && !ownedDraftDescription(result.Body, target.Task.ExecutionBranch) {
+			return event, "", "", fmt.Errorf("Draft ownership changed")
+		}
 		state = result.State
 		if state == "open" && !result.Draft {
 			state = "ready"
@@ -141,6 +179,8 @@ func (p Processor) readDraft(ctx context.Context, target store.AgentWorkflowTarg
 		event.CloneURL = cloneBase + "/" + job.Repository + ".git"
 	} else {
 		var result struct {
+			Description     string `json:"description"`
+			WebURL          string `json:"web_url"`
 			IID             int    `json:"iid"`
 			State           string `json:"state"`
 			SHA             string `json:"sha"`
@@ -155,9 +195,13 @@ func (p Processor) readDraft(ctx context.Context, target store.AgentWorkflowTarg
 			} `json:"diff_refs"`
 		}
 		if json.Unmarshal(raw, &result) != nil || result.IID != job.ReviewNumber || result.SourceBranch != target.Task.ExecutionBranch || result.SourceProjectID == 0 || result.SourceProjectID != result.TargetProjectID || result.TargetBranch != job.BaseRef {
-			return event, "", fmt.Errorf("Draft identity changed")
+			return event, "", "", fmt.Errorf("Draft identity changed")
 		}
 		event.HeadSHA, event.HeadRef, event.BaseSHA, event.BaseRef, event.IsDraft = result.SHA, result.SourceBranch, result.DiffRefs.BaseSHA, result.TargetBranch, result.Draft
+		draftURL = result.WebURL
+		if target.RequireDraftOwnership && !ownedDraftDescription(result.Description, target.Task.ExecutionBranch) {
+			return event, "", "", fmt.Errorf("Draft ownership changed")
+		}
 		state = result.State
 		if state == "opened" {
 			state = "open"
@@ -168,12 +212,17 @@ func (p Processor) readDraft(ctx context.Context, target store.AgentWorkflowTarg
 		event.CloneURL = strings.TrimSuffix(base.String(), "/api/v4") + "/" + job.Repository + ".git"
 	}
 	if state != "open" && state != "ready" && state != "merged" && state != "closed" {
-		return event, "", fmt.Errorf("provider state invalid")
+		return event, "", "", fmt.Errorf("provider state invalid")
 	}
 	if !validProviderCommit(event.BaseSHA) || !validProviderCommit(event.HeadSHA) || !(domain.AgentTaskSourceSnapshot{BaseRef: event.BaseRef, BaseSHA: event.BaseSHA}).Valid() || !(domain.AgentTaskSourceSnapshot{BaseRef: event.HeadRef, BaseSHA: event.HeadSHA}).Valid() {
-		return event, "", fmt.Errorf("provider returned invalid immutable source")
+		return event, "", "", fmt.Errorf("provider returned invalid immutable source")
 	}
-	return event, state, nil
+	return event, state, draftURL, nil
+}
+
+func ownedDraftDescription(description, branch string) bool {
+	digest := sha256.Sum256([]byte(branch))
+	return strings.Contains(description, "<!-- open-review-agent:"+hex.EncodeToString(digest[:])+" -->")
 }
 
 func validProviderCommit(sha string) bool {

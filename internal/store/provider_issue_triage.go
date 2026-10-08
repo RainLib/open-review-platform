@@ -633,7 +633,7 @@ func (s *PostgresStore) EnqueueProviderIssueAnalysis(ctx context.Context, event 
 		return domain.ProviderIssueAnalysisEnqueue{}, fmt.Errorf("upsert provider issue analysis: %w", err)
 	}
 	job.InstallationExternalID, job.CredentialRef = installation.ExternalID, installation.CredentialRef
-	if err := json.Unmarshal(modelJSON, &job.ModelRoute); err != nil {
+	if job.ModelRoute, err = domain.DecodeModelRoute(modelJSON); err != nil {
 		return domain.ProviderIssueAnalysisEnqueue{}, fmt.Errorf("decode stored provider issue model route: %w", err)
 	}
 	if err := json.Unmarshal(promptJSON, &job.PromptConfig); err != nil {
@@ -726,7 +726,7 @@ func (s *PostgresStore) ProviderIssueAnalysis(ctx context.Context, jobID uuid.UU
 	if err != nil {
 		return domain.ProviderIssueAnalysisJob{}, fmt.Errorf("load provider issue analysis: %w", err)
 	}
-	if err := json.Unmarshal(modelJSON, &job.ModelRoute); err != nil {
+	if job.ModelRoute, err = domain.DecodeModelRoute(modelJSON); err != nil {
 		return domain.ProviderIssueAnalysisJob{}, fmt.Errorf("decode provider issue analysis model route: %w", err)
 	}
 	if err := json.Unmarshal(promptJSON, &job.PromptConfig); err != nil {

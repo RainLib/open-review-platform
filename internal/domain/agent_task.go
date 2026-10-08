@@ -132,8 +132,10 @@ type AgentTaskPlan struct {
 }
 
 type AgentTaskDetail struct {
-	Acceptance *AgentTaskAcceptance `json:"acceptance,omitempty"`
-	Task       AgentTask            `json:"task"`
+	ExecutionBlock  *AgentTaskExecutionBlock  `json:"execution_block,omitempty"`
+	ExecutionBudget *AgentTaskExecutionBudget `json:"execution_budget,omitempty"`
+	Acceptance      *AgentTaskAcceptance      `json:"acceptance,omitempty"`
+	Task            AgentTask                 `json:"task"`
 	// The review target is the Issue's frozen base branch. For feedback tasks,
 	// source_base_ref is the Draft head instead and must never be used as target.
 	TargetBranch           string                           `json:"target_branch,omitempty"`
@@ -144,6 +146,21 @@ type AgentTaskDetail struct {
 	LinkedReviews          []AgentTaskLinkedReview          `json:"linked_reviews"`
 	Feedback               *AgentTaskFeedbackReference      `json:"feedback,omitempty"`
 	PlanPermissions        AgentTaskPlanPermissions         `json:"plan_permissions"`
+}
+
+// A preflight block is recorded before leasing an attempt. It belongs only to
+// the task revision held by that check, never to a later plan or execution.
+type AgentTaskExecutionBlock struct {
+	Code       string    `json:"code"`
+	Message    string    `json:"message"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+type AgentTaskExecutionBudget struct {
+	Used                 int `json:"used"`
+	Limit                int `json:"limit"`
+	SuccessfulDeliveries int `json:"successful_deliveries"`
+	AttentionAttempts    int `json:"attention_attempts"`
 }
 
 // AgentTaskPublicationCheckpoint proves only that an adapter validated a

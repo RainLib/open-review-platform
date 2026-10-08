@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -443,6 +444,15 @@ func (s *PostgresStore) GetAgentTask(ctx context.Context, actor, tenantSlug stri
 	}
 	defer rows.Close()
 	detail := domain.AgentTaskDetail{Task: task, Plans: []domain.AgentTaskPlan{}, Classifications: []domain.AgentTaskClassification{}, Attempts: []domain.AgentTaskAttempt{}, PublicationCheckpoints: []domain.AgentTaskPublicationCheckpoint{}, LinkedReviews: []domain.AgentTaskLinkedReview{}}
+	if task.State == "needs_attention" {
+		var block domain.AgentTaskExecutionBlock
+		blockErr := s.pool.QueryRow(ctx, `SELECT metadata->>'code',metadata->>'message',created_at FROM audit_events WHERE tenant_id=$1 AND target=$2 AND action='agent_task.execution_preflight_blocked' AND metadata->>'task_revision'=$3 ORDER BY created_at DESC LIMIT 1`, task.TenantID, task.ID.String(), strconv.Itoa(task.Revision)).Scan(&block.Code, &block.Message, &block.RecordedAt)
+		if blockErr == nil {
+			detail.ExecutionBlock = &block
+		} else if !errors.Is(blockErr, pgx.ErrNoRows) {
+			return domain.AgentTaskDetail{}, blockErr
+		}
+	}
 	if task.OriginKind == "issue" && task.SourceState == "ready" {
 		detail.TargetBranch = task.SourceBaseRef
 	}
@@ -598,13 +608,18 @@ func (s *PostgresStore) GetAgentTask(ctx context.Context, actor, tenantSlug stri
 	} else if !errors.Is(acceptanceErr, pgx.ErrNoRows) {
 		return domain.AgentTaskDetail{}, acceptanceErr
 	}
-	detail.PlanPermissions = agentTaskPlanPermissions(detail, role, actor)
+	approvalPolicy, err := s.GetWorkspaceApprovalPolicy(ctx, actor, tenantSlug)
+	if err != nil {
+		return domain.AgentTaskDetail{}, err
+	}
+	detail.PlanPermissions = agentTaskPlanPermissions(detail, role, actor, approvalPolicy.AllowAgentPlanSelfApproval)
 	if task.Workflow.Enabled {
-		var used int
-		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(a.attempt),0) FROM agent_task_attempts a JOIN agent_tasks t ON t.id=a.task_id WHERE t.tenant_id=$1 AND t.execution_branch=$2`, task.TenantID, task.ExecutionBranch).Scan(&used); err != nil {
+		budget := domain.AgentTaskExecutionBudget{Limit: task.Workflow.MaxTaskAttempts}
+		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(a.attempt),0),count(*) FILTER(WHERE a.state='succeeded'),count(*) FILTER(WHERE a.state='needs_attention') FROM agent_task_attempts a JOIN agent_tasks t ON t.id=a.task_id WHERE t.tenant_id=$1 AND t.execution_branch=$2`, task.TenantID, task.ExecutionBranch).Scan(&budget.Used, &budget.SuccessfulDeliveries, &budget.AttentionAttempts); err != nil {
 			return domain.AgentTaskDetail{}, err
 		}
-		if used >= task.Workflow.MaxTaskAttempts {
+		detail.ExecutionBudget = &budget
+		if budget.Used >= task.Workflow.MaxTaskAttempts {
 			detail.PlanPermissions.CanCreatePlan = false
 			detail.PlanPermissions.CanApprovePlan = false
 			detail.PlanPermissions.CreateBlockReason = "execution_budget_exhausted"
@@ -614,7 +629,7 @@ func (s *PostgresStore) GetAgentTask(ctx context.Context, actor, tenantSlug stri
 	return detail, nil
 }
 
-func agentTaskPlanPermissions(detail domain.AgentTaskDetail, role, actor string) domain.AgentTaskPlanPermissions {
+func agentTaskPlanPermissions(detail domain.AgentTaskDetail, role, actor string, allowSelfApproval bool) domain.AgentTaskPlanPermissions {
 	result := domain.AgentTaskPlanPermissions{}
 	var latestClassification domain.AgentTaskClassification
 	if len(detail.Classifications) > 0 {
@@ -638,7 +653,7 @@ func agentTaskPlanPermissions(detail domain.AgentTaskDetail, role, actor string)
 		result.ApproveBlockReason = "no_pending_plan"
 	} else if latestClassification.Decision != "requires_human" {
 		result.ApproveBlockReason = "classification_not_eligible"
-	} else if (latestClassification.RiskLevel == "high" || latestClassification.RiskLevel == "critical") && detail.Plans[0].CreatedBy == actor {
+	} else if !allowSelfApproval && detail.Plans[0].CreatedBy == actor {
 		result.ApproveBlockReason = "separate_approver_required"
 	} else {
 		result.CanApprovePlan = true
@@ -797,18 +812,20 @@ func approveAgentTaskPlanTx(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, 
 	if classification.Decision != "requires_human" {
 		return domain.AgentTaskPlan{}, ErrInvalidAgentTaskPlan
 	}
-	if classification.RiskLevel == "high" || classification.RiskLevel == "critical" {
-		var createdBy string
-		err = tx.QueryRow(ctx, `SELECT created_by FROM agent_task_plans WHERE id=$1 AND task_id=$2 AND revision=$3 AND state='awaiting_approval'`, planID, task.ID, input.Revision).Scan(&createdBy)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.AgentTaskPlan{}, ErrConflict
-		}
-		if err != nil {
-			return domain.AgentTaskPlan{}, fmt.Errorf("load high-risk agent plan creator: %w", err)
-		}
-		if createdBy == actor {
-			return domain.AgentTaskPlan{}, ErrForbidden
-		}
+	approvalPolicy, err := workspaceApprovalPolicyTx(ctx, tx, tenantID)
+	if err != nil {
+		return domain.AgentTaskPlan{}, err
+	}
+	var createdBy string
+	err = tx.QueryRow(ctx, `SELECT created_by FROM agent_task_plans WHERE id=$1 AND task_id=$2 AND revision=$3 AND state='awaiting_approval'`, planID, task.ID, input.Revision).Scan(&createdBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AgentTaskPlan{}, ErrConflict
+	}
+	if err != nil {
+		return domain.AgentTaskPlan{}, fmt.Errorf("load agent plan creator: %w", err)
+	}
+	if createdBy == actor && !approvalPolicy.AllowAgentPlanSelfApproval {
+		return domain.AgentTaskPlan{}, ErrForbidden
 	}
 	result, err := scanAgentTaskPlan(tx.QueryRow(ctx, `UPDATE agent_task_plans SET state='approved',approved_by=$3,approved_at=now() WHERE id=$1 AND task_id=$2 AND revision=$4 AND state='awaiting_approval' AND revision=(SELECT MAX(revision) FROM agent_task_plans WHERE task_id=$2) RETURNING `+agentTaskPlanColumns, planID, task.ID, actor, input.Revision))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -831,7 +848,7 @@ func approveAgentTaskPlanTx(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, 
 	if err = queueAgentTaskSourceProviderComment(ctx, tx, task, "approved", "", ""); err != nil {
 		return domain.AgentTaskPlan{}, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO audit_events(tenant_id,actor_subject,action,target,metadata) VALUES($1,$2,'agent_task.plan_approved',$3,jsonb_build_object('task_id',$4::text,'plan_revision',$5::int,'plan_sha256',$6::text))`, tenantID, actor, result.ID.String(), task.ID, result.Revision, result.PlanSHA256); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO audit_events(tenant_id,actor_subject,action,target,metadata) VALUES($1,$2,'agent_task.plan_approved',$3,jsonb_build_object('task_id',$4::text,'plan_revision',$5::int,'plan_sha256',$6::text,'self_approval',$7::bool,'approval_policy_revision',$8::int))`, tenantID, actor, result.ID.String(), task.ID, result.Revision, result.PlanSHA256, createdBy == actor, approvalPolicy.Revision); err != nil {
 		return domain.AgentTaskPlan{}, err
 	}
 	return result, nil
@@ -2287,8 +2304,12 @@ func (s *PostgresStore) ProcessAgentTaskCommand(ctx context.Context, event domai
 		if classification.Decision != "requires_human" {
 			return reject("the latest admission classification does not permit human plan approval")
 		}
-		if (classification.RiskLevel == "high" || classification.RiskLevel == "critical") && plan.CreatedBy == actorSubject {
-			return reject("high-risk plans require an owner/admin other than the plan author")
+		approvalPolicy, err := workspaceApprovalPolicyTx(ctx, tx, installation.TenantID)
+		if err != nil {
+			return domain.AgentTaskCommandOutcome{}, err
+		}
+		if !approvalPolicy.AllowAgentPlanSelfApproval && plan.CreatedBy == actorSubject {
+			return reject("plan authors require another owner/admin to approve unless the workspace owner enables Agent plan self-approval")
 		}
 		approved, err := approveAgentTaskPlanTx(ctx, tx, installation.TenantID, actorSubject, role, task, plan.ID, domain.AgentTaskPlanApprovalInput{Revision: plan.Revision})
 		if err != nil {

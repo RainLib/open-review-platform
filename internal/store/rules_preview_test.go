@@ -33,3 +33,11 @@ func TestDiffEffectiveRuleKeys(t *testing.T) {
 		t.Fatalf("unexpected diff: added=%v changed=%v removed=%v", added, changed, removed)
 	}
 }
+
+func TestDiffEffectiveRuleKeysEmptyDifferencesMarshalAsArrays(t *testing.T) {
+	added, changed, removed := diffEffectiveRuleKeys(rules.Snapshot{}, rules.Snapshot{})
+	data, err := json.Marshal(map[string][]string{"added": added, "changed": changed, "removed": removed})
+	if err != nil || string(data) != `{"added":[],"changed":[],"removed":[]}` {
+		t.Fatalf("empty preview differences must be JSON arrays: %s error=%v", data, err)
+	}
+}

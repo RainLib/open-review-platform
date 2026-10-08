@@ -352,15 +352,88 @@ func TestStartedAdapterJobNeverReexecutesAfterRestart(t *testing.T) {
 }
 
 type fixturePublicationReconciler struct {
+	checkpoint   *PublicationCheckpoint
 	result       ExecutionResult
 	err          error
 	reconcileRun atomic.Int32
 	executeRun   atomic.Int32
 }
 
-func (fixture *fixturePublicationReconciler) Execute(context.Context, string, Submission) (ExecutionResult, error) {
+func (fixture *fixturePublicationReconciler) Execute(ctx context.Context, _ string, _ Submission) (ExecutionResult, error) {
 	fixture.executeRun.Add(1)
+	if fixture.checkpoint != nil {
+		if err := retainPublicationCheckpoint(ctx, *fixture.checkpoint); err != nil {
+			return ExecutionResult{}, err
+		}
+		return ExecutionResult{}, fmt.Errorf("provider draft confirmation unavailable")
+	}
 	return ExecutionResult{}, fmt.Errorf("recovery must not run a coding executor")
+}
+
+func TestPublicationConfirmationFailureReadsOnceWithoutExecutingAgain(t *testing.T) {
+	for _, scenario := range []string{"exact", "changed head", "changed criteria", "unavailable"} {
+		t.Run(scenario, func(t *testing.T) {
+			terminal := make(chan domain.AgentTaskAdapterEvent, 1)
+			callback := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var event domain.AgentTaskAdapterEvent
+				if json.NewDecoder(r.Body).Decode(&event) == nil && (event.Kind == "completed" || event.Kind == "needs_attention") {
+					terminal <- event
+				}
+				w.WriteHeader(204)
+			}))
+			defer callback.Close()
+			checkpoint := PublicationCheckpoint{HeadSHA: strings.Repeat("a", 40), PatchSHA256: strings.Repeat("b", 64), ChangedFileCount: 1, DiffBytes: 100,
+				VerificationProfileSHA256: strings.Repeat("c", 64), VerificationOutputSHA256: strings.Repeat("d", 64), VerificationOutputBytes: 42,
+				VerificationCriteria: []domain.AgentCriterionResult{{Criterion: "Keep original evidence", Status: "passed", Evidence: "Independent check passed"}}}
+			result := ExecutionResult{Summary: "Confirmed existing Draft", HeadSHA: checkpoint.HeadSHA, PullRequestURL: "https://github.com/acme/widgets/pull/7", PullRequestNumber: 7,
+				PatchSHA256: checkpoint.PatchSHA256, ChangedFileCount: checkpoint.ChangedFileCount, DiffBytes: checkpoint.DiffBytes,
+				VerificationProfileSHA256: checkpoint.VerificationProfileSHA256, VerificationOutputSHA256: checkpoint.VerificationOutputSHA256,
+				VerificationOutputBytes: checkpoint.VerificationOutputBytes, VerificationCriteria: checkpoint.VerificationCriteria}
+			fixture := &fixturePublicationReconciler{checkpoint: &checkpoint, result: result}
+			if scenario == "changed head" {
+				fixture.result.HeadSHA = strings.Repeat("e", 40)
+			}
+			if scenario == "changed criteria" {
+				fixture.result.VerificationCriteria = []domain.AgentCriterionResult{{Criterion: "Unapproved replacement", Status: "passed", Evidence: "Other check passed"}}
+			}
+			if scenario == "unavailable" {
+				fixture.err = fmt.Errorf("provider unavailable")
+			}
+			config := ServiceConfig{Secret: "0123456789abcdef0123456789abcdef", CallbackURL: callback.URL + "/events", StartGateURL: callback.URL + "/starts", ReceiptDir: t.TempDir(), Executor: fixture, HeartbeatEvery: time.Hour}
+			service, err := NewService(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+			service.callbackClient = callback.Client()
+			adapter := httptest.NewServer(service.Handler())
+			defer adapter.Close()
+			submission := testSubmission(uuid.New(), uuid.New(), config.CallbackURL)
+			fixture.result.BranchName = submission.Task.BranchName
+			jobID := submitAdapterRequest(t, config.Secret, adapter.URL+"/v1/open-review/tasks", submission)
+			job := service.byJob[jobID]
+			job.stateMu.Lock()
+			job.status = "started"
+			job.stateMu.Unlock()
+			service.active.Add(1)
+			service.run(context.Background(), job)
+			select {
+			case event := <-terminal:
+				want := "needs_attention"
+				if scenario == "exact" {
+					want = "completed"
+				}
+				if event.Kind != want {
+					t.Fatalf("unsafe confirmation: %+v", event)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("publication confirmation never completed")
+			}
+			if fixture.executeRun.Load() != 1 || fixture.reconcileRun.Load() != 1 {
+				t.Fatal("coding replayed or unbounded provider confirmation")
+			}
+		})
+	}
 }
 
 func (fixture *fixturePublicationReconciler) ReconcilePublication(context.Context, string, Submission, PublicationCheckpoint) (ExecutionResult, error) {

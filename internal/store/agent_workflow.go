@@ -162,10 +162,11 @@ func requireAgentWorkflowCriteriaTx(ctx context.Context, tx pgx.Tx, task domain.
 // The read-only provider worker leases delivery observation separately from
 // coding. It cannot re-run a CLI or grant write capability.
 type AgentWorkflowTarget struct {
-	Task       domain.AgentTask
-	Attempt    domain.AgentTaskAttempt
-	Job        domain.ReviewJob
-	Acceptance domain.AgentTaskAcceptance
+	RequireDraftOwnership bool
+	Task                  domain.AgentTask
+	Attempt               domain.AgentTaskAttempt
+	Job                   domain.ReviewJob
+	Acceptance            domain.AgentTaskAcceptance
 }
 
 func (s *PostgresStore) ClaimAgentWorkflow(ctx context.Context, worker string) (*AgentWorkflowTarget, error) {

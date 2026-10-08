@@ -1311,3 +1311,38 @@ func TestIsolatedExecutorEnvironmentDoesNotLeakAdapterOrProviderSecrets(t *testi
 		}
 	}
 }
+
+func TestPipelineStopsCodingProcessOnTerminalModelFailure(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl required for synthetic coding process")
+	}
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"type":"permission_error"}}`))
+	}))
+	defer upstream.Close()
+	root := t.TempDir()
+	binary := filepath.Join(root, "fixed-claude")
+	// A CLI would otherwise back off for thirty seconds after the denied request.
+	script := `#!/bin/sh
+curl --silent --max-time 5 -H "X-Api-Key: $ANTHROPIC_API_KEY" -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":64}' "$ANTHROPIC_BASE_URL/v1/messages" >/dev/null
+sleep 30
+touch continued-after-terminal-failure
+exit 0
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pipeline := Pipeline{ExecutorKind: "claude", ClaudeBinary: binary, ClaudeModelBroker: ModelBrokerConfig{APIBaseURL: upstream.URL + "/v1", APIKey: "synthetic-key", Model: "fixed", WireAPI: "anthropic", HTTPClient: upstream.Client()}}
+	parent, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	started := time.Now()
+	err := pipeline.runAgent(parent, root, Submission{})
+	code, summary := executionFailureResult(err)
+	if err == nil || code != "agent_adapter_model_upstream_failed" || !strings.Contains(summary, "HTTP 403") || time.Since(started) > 5*time.Second || parent.Err() != nil {
+		t.Fatalf("terminal process cancellation failed: err=%v code=%s elapsed=%s parent=%v", err, code, time.Since(started), parent.Err())
+	}
+	if _, err := os.Stat(filepath.Join(root, "continued-after-terminal-failure")); !os.IsNotExist(err) {
+		t.Fatal("coding process continued after terminal broker failure")
+	}
+}
