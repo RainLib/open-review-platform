@@ -1,0 +1,59 @@
+{
+  "issue": "https://github.com/RainLib/open-review-platform/issues/27",
+  "task_id": "1a1a7c80-867d-4b91-a175-35873804bb07",
+  "source_ref": "main",
+  "source_sha": "b50da27acbf01289e3990fdd863d9743babc7ce6",
+  "plan_revision": 1,
+  "plan_sha256": "7c2a9fad76ef0ac89b470a4920aae85a7d0bb36b9f66f3c6525546b562a0af73",
+  "planner": "deterministic automatic planner; Jev classification and Owner approval precede execution",
+  "attempt_id": "5cbfc8d1-ff27-47d9-a906-4b445def7ee7",
+  "attempt_state": "succeeded",
+  "shared_execution_budget_used": 1,
+  "shared_execution_budget_limit": 5,
+  "draft_pr": "https://github.com/RainLib/open-review-platform/pull/28",
+  "head_sha": "a3edf61fa8703dacc9668d0cc10b773c700a93d5",
+  "changed_files": ["internal/domain/agent_workflow.go", "internal/domain/agent_workflow_acceptance_test.go"],
+  "diff_bytes": 9320,
+  "patch_sha256": "0d0a8b8febcf8dbb2ba75bf32a238dfe1fed4d38cf74999c9e9b62592945e9d4",
+  "verification_profile_sha256": "f5adf8cd78add7899aceb427d7c27a589c8f2359e80ec86dae86150b8b1f50f4",
+  "verification_output_sha256": "331f073e0e031235010e8f3185f6177ea02bd7aca7121b179fcbbd83ab807dc4",
+  "verification_output_bytes": 2791,
+  "verification_criteria": [
+    {"criterion": "Reject duplicate approved criteria and unapproved evidence so verification is a one-to-one mapping.", "status": "passed", "evidence": "TestApprovedCriteriaBijection: pass"},
+    {"criterion": "Reject missing, failed, malformed or duplicate verification results.", "status": "passed", "evidence": "TestRejectInvalidResults: pass"},
+    {"criterion": "Keep valid complete passing evidence accepted.", "status": "passed", "evidence": "TestPreserveValidResults: pass"}
+  ],
+  "automatic_repair_evidence": {
+    "source": "Docker daemon die events for adapter-owned sandbox children within this attempt; one active formal attempt in this interval",
+    "raw_intermediate_test_output_retained": false,
+    "sequence": [
+      {"unix_time": 1791458722, "container": "openreview-agent-d4a36aadf2485baafb5a1299", "phase": "initial coding", "exit_code": 0, "image_id": "sha256:b7bf05f46e23f4da638ef929f8f0aeaca6a83597914142823f684cb34b001f21"},
+      {"unix_time": 1791458735, "container": "openreview-agent-d17fd60f7ab726180b3f0b63", "phase": "initial independent verification", "exit_code": 1, "image_id": "sha256:cd1ebe7bb06262e6bfb9040c0d6b5a289cc2b5d4ae3edd99fc5af41423844864"},
+      {"unix_time": 1791458778, "container": "openreview-agent-8d7366c849e446a947af4663", "phase": "automatic repair coding", "exit_code": 0, "image_id": "sha256:b7bf05f46e23f4da638ef929f8f0aeaca6a83597914142823f684cb34b001f21"},
+      {"unix_time": 1791458792, "container": "openreview-agent-efca1026766fe9a4dbc8786e", "phase": "repaired independent verification", "exit_code": 0, "image_id": "sha256:cd1ebe7bb06262e6bfb9040c0d6b5a289cc2b5d4ae3edd99fc5af41423844864"}
+    ]
+  },
+  "independent_ci": {
+    "runner": "manual independent pinned networkless Go runner; not GitHub Actions",
+    "context": "Acceptance / Go domain tests",
+    "state": "success",
+    "tests_passed": 104,
+    "exit_code": 0,
+    "image_id": "sha256:5aaa5e907cfe820c938d39c79a76b8ae9fefcdebd3ff15e370af2c74d0642478",
+    "output_sha256": "ce39591f5dfcb7d11471cacafd910d102635712719f7cba6cf6e02f5c33f5c83",
+    "head_matches_at_completion": true,
+    "pending_status_id": 55884686296,
+    "terminal_status_id": 55884711076
+  },
+  "review_run_id": "28a555fc-8205-4fc6-a65d-517c56354c07",
+  "review_state": "completed",
+  "review_gate": "success",
+  "review_findings": 0,
+  "acceptance_before_feedback": "awaiting_acceptance",
+  "feedback_decision": "changes_requested",
+  "feedback_child_task_id": "752e7811-060b-4bf0-a240-ae391233b8e0",
+  "feedback_plan_sha256": "5717c34c0440427ebd3905b4fd07adca6232c364f0caa942046129aded98b1bf",
+  "human_acceptance": "pending",
+  "merged": false,
+  "historical_issue20_budget_modified": false
+}

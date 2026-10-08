@@ -1,0 +1,33 @@
+{
+  "coding_duration_seconds": 68.697782733,
+  "coding_passed": true,
+  "error_code": "",
+  "model": "aliyun/glm-5.3",
+  "provider_publication": false,
+  "requests": 11,
+  "safe_summary": "",
+  "source_head_sha": "4eb4a3c7019203086a75e9d7a95fa448533848b5",
+  "verification": {
+    "Criteria": [
+      {
+        "criterion": "Reject duplicate approved criteria and unapproved evidence so verification is a one-to-one mapping.",
+        "status": "passed",
+        "evidence": "TestApprovedCriteriaBijection: pass"
+      },
+      {
+        "criterion": "Reject missing, failed, malformed or duplicate verification results.",
+        "status": "passed",
+        "evidence": "TestRejectInvalidResults: pass"
+      },
+      {
+        "criterion": "Keep valid complete passing evidence accepted.",
+        "status": "passed",
+        "evidence": "TestPreserveValidResults: pass"
+      }
+    ],
+    "ProfileSHA256": "f5adf8cd78add7899aceb427d7c27a589c8f2359e80ec86dae86150b8b1f50f4",
+    "OutputSHA256": "55e329883094fc6ae229f7190bca2c57be177c8932415a163355c38c99cfaa28",
+    "OutputBytes": 2791
+  },
+  "verification_passed": true
+}

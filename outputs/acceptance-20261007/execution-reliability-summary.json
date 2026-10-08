@@ -1,0 +1,109 @@
+{
+  "scope": "Execution reliability optimization; no new business attempt or provider publication",
+  "current_frozen_budget": {
+    "used": 5,
+    "limit": 5,
+    "successful_deliveries": 1,
+    "attention_attempts": 4
+  },
+  "known_real_clone_model_failure": {
+    "http_status": 403,
+    "error_type": "AccessDenied.Unpurchased",
+    "account_or_gateway_routing_cause": "not confirmed"
+  },
+  "improvements": {
+    "preflight_before_attempt_lease": true,
+    "blocked_preflight_creates_attempt": false,
+    "fatal_upstream_4xx_job_circuit_breaker": true,
+    "model_access_denial_process_latch": true,
+    "process_latch_survives_restart": false,
+    "transient_retries_per_broker_request": 2,
+    "retry_ceiling_increases": false,
+    "heartbeat_model_calls": false,
+    "signed_model_readiness_cache_seconds": 60,
+    "sanitized_error_enums": true,
+    "shared_budget_console_readback": true,
+    "terminal_failure_cancels_coding": true,
+    "authenticated_requests_serialized": true,
+    "sdk_retry_multiplication_prevented": true,
+    "local_budget_exhaustion_also_stops_coding": true
+  },
+  "tests": {
+    "adapter_runner_store_domain_unit": "passed",
+    "adapter_runner_race": "passed",
+    "new_readiness_execution_denial_race": "passed",
+    "isolated_preflight_and_workflow": "passed",
+    "isolated_workspace_approval_regression": "passed",
+    "frontend_regressions": {
+      "passed": 29,
+      "failed": 0
+    },
+    "eslint": "passed",
+    "production_build": "passed"
+  },
+  "live_readiness": {
+    "configured": true,
+    "health": {
+      "duration_ms": 8,
+      "http_status": 204
+    },
+    "health_after": {
+      "duration_ms": 0,
+      "http_status": 204
+    },
+    "readiness": {
+      "duration_ms": 1614,
+      "http_status": 204
+    }
+  },
+  "images": {
+    "agent-task-adapter": {
+      "tag": "open-review-platform-agent-task-adapter:acceptance-20261008-reliability-v4",
+      "image_id": "sha256:a0ab3fc2b39d076d048eac482b906a1c29dd59ccba37ac446d7757a0a76b3846"
+    },
+    "agent-task-runner": {
+      "tag": "open-review-platform-agent-task-runner:acceptance-20261008-reliability",
+      "image_id": "sha256:3a1b02d5e950b02aef00c023ef46d31d1c7dedadce990b273bb65d713a6ef682"
+    },
+    "control-api": {
+      "tag": "open-review-platform-core:acceptance-20261008-reliability-v2",
+      "image_id": "sha256:a9d5e4000d375eb7f38545020587e923e7aada079c75acae10743dc599b9db93"
+    },
+    "console": {
+      "tag": "open-review-platform-console:acceptance-20261008-reliability-v3",
+      "image_id": "sha256:a2a1409fdb6ecfa018281326c87684633e254f1c977da0dd59b1ec1287047e49"
+    }
+  },
+  "feedback_acceptance_closed": false,
+  "source_committed_or_pushed_this_round": false,
+  "screenshot": "feedback-budget-continuation.png",
+  "live_console_readback": {
+    "budget_used": 5,
+    "budget_limit": 5,
+    "successful_deliveries": 1,
+    "attention_attempts": 4,
+    "source": "authenticated Owner console after final deployment"
+  },
+  "latest_live_readiness": {
+    "health": {
+      "duration_ms": 3,
+      "http_status": 204,
+      "transport_failed": false
+    },
+    "health_after": {
+      "duration_ms": 0,
+      "http_status": 204,
+      "transport_failed": false
+    },
+    "readiness": {
+      "duration_ms": 1415,
+      "http_status": 204,
+      "transport_failed": false
+    },
+    "adapter_image_id": "sha256:a0ab3fc2b39d076d048eac482b906a1c29dd59ccba37ac446d7757a0a76b3846"
+  },
+  "latest_adapter_image": {
+    "tag": "open-review-platform-agent-task-adapter:acceptance-20261008-reliability-v4",
+    "image_id": "sha256:a0ab3fc2b39d076d048eac482b906a1c29dd59ccba37ac446d7757a0a76b3846"
+  }
+}

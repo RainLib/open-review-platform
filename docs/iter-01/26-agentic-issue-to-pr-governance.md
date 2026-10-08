@@ -158,6 +158,8 @@ source ready + plan ──> awaiting_approval
 awaiting_approval + owner|admin + 精确 plan revision ──> admitted
 ```
 
+工作区的 `Settings → Approvals` 可分别设置 Agent 计划作者、规则版本申请人是否允许自审批。两项默认均为 `false`；仅 Owner 可以更新，需提供 `expected_revision`，冲突返回 409。对应 API 为 `GET/PUT /v1/tenants/{slug}/approval-policy`，字段为 `allow_agent_plan_self_approval` 和 `allow_rule_self_approval`。Agent 作者在所有风险等级下默认都需要另一位 Owner/Admin；启用后仍须手动批准准确计划，不能自动执行。规则每位审批人仅一票，人数门槛和内容 hash 校验保持有效。设置和审批在同一事务边界检查；审计记录设置 revision、作者是否自批及准确内容摘要。关闭开关阻止后续自审批，不撤销已有批准。模型路由、规则例外、灰度和数据治理的独立审批不受这两个设置影响。
+
 命令或 label-driven webhook 中的 Issue 标题、正文和 labels 会冻结为分类证据 hash，并交给
 `deterministic-v3` 硬门控。它会给出 `rejected`、`needs_context` 或 `requires_human`、风险等级、规则置信度
 和规则理由；命中 prompt-injection/secret-exfiltration 模式会硬拒绝，缺少足够问题上下文时不会生成计划，
@@ -370,3 +372,5 @@ Agent Work 的任务详情现在只读关联成功发布的 Agent attempt 与同
 Issue revision 的持久化任务/attempt/Draft PR 证据；`cancel`/`stop` 会 supersede 活跃 lease，使
 迟到 adapter callback 不能再写入结果。每个命令都回复稳定链接至 Console Task Detail，并说明“当前阶段、
 是否有 provider 写入、下一门控及 Owner”。这与现有 Review 评论的快速 ACK、异步完成和可点击证据保持一致。
+
+执行前可用性检查先于 attempt lease：签名 readiness 检查固定沙箱和固定模型的完整响应；失败以准确 task/plan revision/hash 原子暂停并审计，不消耗执行次数。周期心跳不调用模型。401/403 在当前 adapter 进程阻断后续检查，需要修正配置再重启；429/部分 5xx 最多追加两次相同请求且消耗原有模型预算；重试仍失败后锁定本次 job 并取消编码进程。并发 SDK 请求串行检查阻断状态，不再触达上游或预留预算。传输失败及响应读取中断立即停止，不重放不确定的生成。可用性探测不能代替逐项验证、发布及需求接受。

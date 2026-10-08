@@ -1,8 +1,7 @@
-# Iteration 01 — SaaS 化与企业审查平台设计包
+# Iteration 01 — 企业审查平台设计与实施记录
 
-> 状态：**待设计评审（Design Review）**<br>
-> 范围：产品、体验、架构、协议和交付门禁；**不包含前端或后端实现**<br>
-> 设计基线日期：2026-09-17
+> 原始设计基线日期：2026-09-17。早期设计稿包含提案与评审门禁，后续文档记录实际实现和分层验收，不代表全部设计均已上线。<br>
+> 当前开源介绍与架构总览：[English README](../../README.md) / [中文 README](../../README_CN.md)。私有部署的核心范围不包含购买与支付流程。
 
 ## 1. 目标
 
@@ -59,6 +58,9 @@
 | [27-private-deployment-core-flow-audit.md](27-private-deployment-core-flow-audit.md) | 私有化核心链路审计与证据边界 | 产品、后端、验收负责人 |
 | [28-agent-delivery-workflow-closure.md](28-agent-delivery-workflow-closure.md) | Agent 计划、验证、修复、再审与验收首轮闭环 | 后端、平台、验收负责人 |
 | [29-agent-recovery-and-criterion-evidence.md](29-agent-recovery-and-criterion-evidence.md) | 人工退回、CI 修复、故障恢复与逐项独立证据 | 后端、平台、验收负责人 |
+| [30-private-deployment-live-acceptance.md](30-private-deployment-live-acceptance.md) | 私有部署实测、自审批配置、执行可靠性与当前验收边界 | 后端、SRE、验收负责人 |
+| [31-agent-feedback-revalidation-request.md](31-agent-feedback-revalidation-request.md) | 新正式任务、真实反馈、准确 head 再审与只读发布确认恢复 | 后端、平台、验收负责人 |
+| [32-console-workflow-i18n-validation.md](32-console-workflow-i18n-validation.md) | 核心界面中英文、源码检查、部署与待登录复验 | 前端、验收负责人 |
 
 ## 4. 视觉设计稿
 

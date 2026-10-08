@@ -1,0 +1,190 @@
+{
+  "task": {
+    "id": "752e7811-060b-4bf0-a240-ae391233b8e0",
+    "state": "completed",
+    "revision": 7,
+    "execution_branch": "agent/1a1a7c80-867d-4b91-a175-35873804bb07"
+  },
+  "attempt": {
+    "id": "0729c89e-6239-44a4-898f-5803becf61d8",
+    "state": "succeeded",
+    "head_sha": "59d409b71463f1e13c73657167a90f850ca871a1",
+    "diff_bytes": 7480,
+    "deadline_at": "2026-10-08T12:03:00.326333+00:00",
+    "finished_at": "2026-10-08T11:36:05.035894+00:00",
+    "patch_sha256": "126870d0f2ec48c5b5242c5c789fd8837865346f70e992857c64700cf2b1082f",
+    "adapter_job_id": "adapter-edd544ccaee45991b1dce516d07e440e2645",
+    "result_summary": "Recovered the existing owned Draft at the signed validated checkpoint by a fresh provider read; no coding or provider write was repeated. Original publication failure remains in recovery and audit records.",
+    "adapter_started_at": "2026-10-08T11:33:00.34781+00:00",
+    "changed_file_count": 1,
+    "verification_output_bytes": 2791,
+    "verification_output_sha256": "1b12b6a2c379bcf1e2591c5538ab66afca0338ae33d7ab1352df9d02d7c6e059",
+    "verification_profile_sha256": "f5adf8cd78add7899aceb427d7c27a589c8f2359e80ec86dae86150b8b1f50f4"
+  },
+  "acceptance": {
+    "state": "awaiting_acceptance",
+    "decision": "",
+    "head_sha": "59d409b71463f1e13c73657167a90f850ca871a1",
+    "decided_at": null,
+    "review_run_id": "578d526d-d47f-4f75-8db6-1157b945ed4d",
+    "provider_state": "open",
+    "provider_head_sha": "59d409b71463f1e13c73657167a90f850ca871a1",
+    "provider_observed_at": "2026-10-08T12:11:57.425363+00:00"
+  },
+  "checkpoint": {
+    "head_sha": "59d409b71463f1e13c73657167a90f850ca871a1",
+    "recorded_at": "2026-10-08T11:36:01.779908+00:00",
+    "verification_criteria": [
+      {
+        "status": "passed",
+        "evidence": "TestApprovedCriteriaBijection: pass",
+        "criterion": "Reject duplicate approved criteria and unapproved evidence so verification is a one-to-one mapping."
+      },
+      {
+        "status": "passed",
+        "evidence": "TestRejectInvalidResults: pass",
+        "criterion": "Reject missing, failed, malformed or duplicate verification results."
+      },
+      {
+        "status": "passed",
+        "evidence": "TestPreserveValidResults: pass",
+        "criterion": "Keep valid complete passing evidence accepted."
+      }
+    ]
+  },
+  "latest_review": {
+    "gate": "success",
+    "state": "completed",
+    "run_id": "578d526d-d47f-4f75-8db6-1157b945ed4d",
+    "head_sha": "59d409b71463f1e13c73657167a90f850ca871a1",
+    "created_at": "2026-10-08T12:04:06.951148+00:00",
+    "finished_at": "2026-10-08T12:08:25.341911+00:00",
+    "job_attempts": 1,
+    "trigger_kind": "retry",
+    "finding_count": 0,
+    "blocking_findings": 0
+  },
+  "prior_failed_review": {
+    "state": "failed",
+    "run_id": "ce3dbbbe-db13-4eb2-b851-a4e7b773a4fe",
+    "head_sha": "59d409b71463f1e13c73657167a90f850ca871a1",
+    "finished_at": "2026-10-08T11:49:50.183716+00:00",
+    "job_attempts": 3,
+    "error_message": "review execution timed out after 5m0s"
+  },
+  "provider_observation": {
+    "state": "observed",
+    "checks": [
+      {
+        "url": "https://github.com/RainLib/open-review-platform/runs/113301141572",
+        "kind": "check_run",
+        "name": "Open Review / Analysis",
+        "state": "success",
+        "origin": "open_review"
+      },
+      {
+        "url": "https://github.com/RainLib/open-review-platform/pull/28",
+        "kind": "commit_status",
+        "name": "Acceptance / Go domain tests",
+        "state": "success",
+        "origin": "independent"
+      }
+    ],
+    "head_sha": "59d409b71463f1e13c73657167a90f850ca871a1",
+    "truncated": false,
+    "observed_at": "2026-10-08T12:08:26.165471+00:00"
+  },
+  "publication_recovery": {
+    "state": "verified",
+    "reason": "exact_owned_draft_confirmed",
+    "created_at": "2026-10-08T12:01:06.280618+00:00",
+    "updated_at": "2026-10-08T12:01:08.642745+00:00",
+    "read_attempt": 1,
+    "original_error_code": "agent_adapter_execution_failed",
+    "original_error_message": "The adapter stopped at stage draft_publication without a completed delivery receipt. Review adapter health and the provider before approving a new retry plan."
+  },
+  "shared_execution_budget_used": 2,
+  "snapshot_at": "2026-10-08T12:12:06.477658+00:00",
+  "issue_url": "https://github.com/RainLib/open-review-platform/issues/27",
+  "root_task_id": "1a1a7c80-867d-4b91-a175-35873804bb07",
+  "initial_delivery_receipt": "new-formal-initial-delivery.json",
+  "feedback_plan_revision": 1,
+  "feedback_plan_sha256": "5717c34c0440427ebd3905b4fd07adca6232c364f0caa942046129aded98b1bf",
+  "feedback_plan_approval": "actual authenticated Owner approved exact revision",
+  "feedback_kind": "real Owner changes_requested; same Draft and execution branch",
+  "feedback_changed_files": [
+    "internal/domain/agent_workflow_acceptance_test.go"
+  ],
+  "feedback_production_code_changed": false,
+  "feedback_added_test_lines": 175,
+  "feedback_new_tests": [
+    "TestCriteriaVerifiedInclusiveBoundaries",
+    "TestCriteriaVerifiedTwentyDistinctCriteria"
+  ],
+  "shared_execution_budget_limit": 5,
+  "draft_pr": {
+    "baseRefName": "main",
+    "headRefOid": "59d409b71463f1e13c73657167a90f850ca871a1",
+    "isDraft": true,
+    "mergedAt": null,
+    "number": 28,
+    "state": "OPEN",
+    "url": "https://github.com/RainLib/open-review-platform/pull/28"
+  },
+  "independent_ci": {
+    "runner": "manual independent pinned networkless Go container; not GitHub Actions",
+    "context": "Acceptance / Go domain tests",
+    "state": "success",
+    "test_and_subtest_pass_events": 117,
+    "exit_code": 0,
+    "output_sha256": "c9b80ec0483fdf04987110b32fa121216b0288b3186d74427b49f686caf485cc",
+    "image_id": "sha256:5aaa5e907cfe820c938d39c79a76b8ae9fefcdebd3ff15e370af2c74d0642478",
+    "pending_status_id": 55885280729,
+    "terminal_status_id": 55885305841,
+    "head_matches_at_completion": true
+  },
+  "recovery_semantics": {
+    "coding_replayed": false,
+    "provider_writes_replayed": false,
+    "new_attempt_created": false,
+    "budget_reset": false,
+    "original_failed_callback_and_audit_retained": true,
+    "maximum_read_attempts": 3,
+    "checkpoint_validated_before_execution_deadline": true,
+    "scope": "existing owned feedback Draft with durable signed checkpoint"
+  },
+  "runtime_fixes": [
+    {
+      "name": "legacy frozen Issue model route runtime defaults",
+      "source": "internal/store/provider_issue_triage.go",
+      "persisted_snapshot_or_hash_modified": false,
+      "isolated_postgresql_regressions": "legacy route readback and edit supersession passed"
+    },
+    {
+      "name": "read-only publication confirmation recovery",
+      "migration": "000117_agent_publication_read_recovery.sql",
+      "migration_live_applied_at": "2026-10-08T11:59:36.834671Z",
+      "unit_and_race": "agentadapter and agentworkflow passed",
+      "isolated_postgresql": "10 recovery fencing/budget subcases plus existing full workflow acceptance test passed",
+      "live": "same existing attempt recovered by 1 provider read; current-head review and independent CI passed"
+    }
+  ],
+  "deployment": {
+    "adapter_image": "open-review-platform-agent-task-adapter:acceptance-20261008-reliability-v5",
+    "adapter_image_id": "sha256:de4d0269b88bb7a2f40ad0f9ae8880a9adfb913345f98116a151af8e31b60fd3",
+    "compact_image": "open-review-platform-compact-review:acceptance-20261008-publication-recovery",
+    "compact_image_id": "sha256:e9b825289c70d431798b9e76f856e492670e0baa1f128f7cdcca0d2d5aa65269"
+  },
+  "human_acceptance": "pending explicit final user decision; evidence prepared in Console",
+  "screenshot": "new-formal-awaiting-acceptance.png",
+  "main_remote_sha": "b50da27acbf01289e3990fdd863d9743babc7ce6",
+  "local_implementation_changes_committed_or_pushed": false,
+  "historical_issue20_budget_modified": false,
+  "limits": [
+    "Immediate Draft confirmation failure cause is unconfirmed; current read-only recovery is proven.",
+    "Initial failing verifier raw stdout is not retained; daemon events and final signed receipt prove fail-repair-pass sequence.",
+    "Manual independent CI does not prove automatic GitHub Actions on Agent branches.",
+    "Final human requirement acceptance and merge are pending.",
+    "Rules Shadow/Canary/rollback, CI-diagnostic Agent repair, historical DLQ recovery, GitLab and offline deployment are not accepted by this round."
+  ]
+}

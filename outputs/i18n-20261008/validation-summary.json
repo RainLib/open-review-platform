@@ -1,0 +1,89 @@
+{
+  "checked_at_utc": "2026-10-08T14:09:32.224788+00:00",
+  "baseline_commit": "b50da27acbf01289e3990fdd863d9743babc7ce6",
+  "uncommitted_changes": true,
+  "scope": "Console core workflow first i18n batch; en and zh-CN",
+  "catalog_messages": 882,
+  "static_source_files": 27,
+  "local_checks": {
+    "workflow_tests": {
+      "passed": 35,
+      "failed": 0
+    },
+    "typescript": "passed",
+    "eslint": "passed",
+    "production_build": "passed"
+  },
+  "runtime": {
+    "console_image": "open-review-platform-console:acceptance-20261008-i18n-v2",
+    "image_id": "sha256:09ebd38feab0f797763f5e723c0748de76baa824bebc1fbdc4f196da2c7ff2ba",
+    "health": "healthy",
+    "public_health_http": 200,
+    "backend_changed_in_this_i18n_round": false
+  },
+  "browser_checks": [
+    {
+      "candidate": "i18n-v1",
+      "case": "Agent English to Chinese, Chinese refresh persists",
+      "result": "passed"
+    },
+    {
+      "candidate": "i18n-v1",
+      "case": "five frozen plan sections identical across languages",
+      "result": "passed"
+    },
+    {
+      "candidate": "i18n-v1",
+      "case": "approval settings and shared tabs in Chinese",
+      "result": "passed"
+    },
+    {
+      "candidate": "i18n-v1",
+      "case": "rule library and draft fields render in Chinese",
+      "result": "passed"
+    },
+    {
+      "candidate": "i18n-v1",
+      "case": "unsaved Agent policy execution minutes survive language change",
+      "result": "failed",
+      "observed": "35 changed back to saved 30 without a save"
+    },
+    {
+      "candidate": "i18n-v2",
+      "case": "unsaved input regression recheck",
+      "result": "pending_login",
+      "fix": "locale removed from repository lookup effects; localized error presentation is applied when rendering, without rehydrating draft state"
+    }
+  ],
+  "acceptance_before": {
+    "state": "awaiting_acceptance",
+    "task_id": "752e7811-060b-4bf0-a240-ae391233b8e0",
+    "decision": "",
+    "head_sha": "59d409b71463f1e13c73657167a90f850ca871a1",
+    "review_run_id": "578d526d-d47f-4f75-8db6-1157b945ed4d"
+  },
+  "acceptance_after": {
+    "state": "awaiting_acceptance",
+    "task_id": "752e7811-060b-4bf0-a240-ae391233b8e0",
+    "decision": "",
+    "head_sha": "59d409b71463f1e13c73657167a90f850ca871a1",
+    "review_run_id": "578d526d-d47f-4f75-8db6-1157b945ed4d"
+  },
+  "acceptance_unchanged": true,
+  "deployment_note": "The first console recreation omitted base Compose files and briefly removed port 3110. Reapplied the five-file original Compose combination; restored health and real logged-in pages. Final v2 deployment used all five files.",
+  "current_blocker": "Existing organization SSO session became unavailable before final v2 browser regression checks; user login requested. Final human requirement acceptance also remains undecided.",
+  "screenshots": {
+    "agent-zh-CN.png": {
+      "sha256": "b9eb7ea675b117554158c11339e1bed00261d5a6f45c5f607789bcb4a9339b5d",
+      "bytes": 103995
+    },
+    "approval-settings-zh-CN.png": {
+      "sha256": "20afb1fc07dd22430cd207add4c5e01307c016da32c20f3f9144bec8bf68cdc4",
+      "bytes": 59993
+    },
+    "login-expired.png": {
+      "sha256": "620d7af745b6940a1fe7328021f0bcc9719b34b57cd0971aa37099051ef8de8b",
+      "bytes": 24762
+    }
+  }
+}

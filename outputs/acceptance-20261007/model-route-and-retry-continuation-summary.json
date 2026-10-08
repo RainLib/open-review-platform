@@ -1,0 +1,199 @@
+{
+  "date": "2026-10-08",
+  "same_existing_gateway_and_key": true,
+  "production_route_changed": false,
+  "production_model": "aliyun/glm-5.3",
+  "catalog_is_not_access_proof": true,
+  "old_formal_shared_budget": {
+    "used": 5,
+    "limit": 5,
+    "successful_deliveries": 1,
+    "attention_attempts": 4
+  },
+  "route_probes": [
+    {
+      "error_type": "AccessDenied.Unpurchased",
+      "http_status": 403,
+      "provider_publication": false,
+      "request_failed": false,
+      "response_bytes": 178,
+      "tool_execution": false,
+      "upstream_calls": 1,
+      "upstream_status": 403,
+      "variant": "aliyun-glm-5.3-full",
+      "request_sha256": "4a343af4f237fad0dbfe59ecf1fd7cc2912ab672daac3a5e0cd57e5a5dd9cbf5"
+    },
+    {
+      "error_type": "",
+      "http_status": 200,
+      "provider_publication": false,
+      "request_failed": false,
+      "response_bytes": 6533,
+      "tool_execution": false,
+      "upstream_calls": 1,
+      "upstream_status": 200,
+      "variant": "aliyun-glm-5.3-compatible",
+      "request_sha256": "ba349a17b0c5f981f46ce2c1e84c7987d7043da77185521779a7f6176b3e1f85"
+    },
+    {
+      "error_type": "",
+      "http_status": 200,
+      "provider_publication": false,
+      "request_failed": false,
+      "response_bytes": 6608,
+      "tool_execution": false,
+      "upstream_calls": 1,
+      "upstream_status": 200,
+      "variant": "aliyun-glm-5.2-full",
+      "request_sha256": "6ad5d979838305518ec1d7f25580e52a5aea24e45a8d10229bd9cf4dbce082b9"
+    },
+    {
+      "error_type": "",
+      "http_status": 200,
+      "provider_publication": false,
+      "request_failed": false,
+      "response_bytes": 3135,
+      "tool_execution": false,
+      "upstream_calls": 1,
+      "upstream_status": 200,
+      "variant": "aliyun-glm-5.3-no-thinking",
+      "request_sha256": "dfbdb0e88a3a42caa2173db1f72e7455460f9e040a1627f7b080d3d752aa9490"
+    },
+    {
+      "error_type": "",
+      "http_status": 200,
+      "provider_publication": false,
+      "request_failed": false,
+      "response_bytes": 11555,
+      "tool_execution": false,
+      "upstream_calls": 1,
+      "upstream_status": 200,
+      "variant": "aliyun-glm-5.3-no-output-config",
+      "request_sha256": "4c90ce7c1ae353961994f9998671af0683e6ab1e127a1360deb84ae3a3705bf4"
+    },
+    {
+      "error_type": "",
+      "http_status": 200,
+      "provider_publication": false,
+      "request_failed": false,
+      "response_bytes": 6864,
+      "tool_execution": false,
+      "upstream_calls": 1,
+      "upstream_status": 200,
+      "variant": "aliyun-glm-5.3-no-context-management",
+      "request_sha256": "8e8697b5c47526199ee479de2a9783d39fb0afb43b13ba4a82c6085c20ab6f7f"
+    },
+    {
+      "error_type": "",
+      "http_status": 200,
+      "provider_publication": false,
+      "request_failed": false,
+      "response_bytes": 7418,
+      "tool_execution": false,
+      "upstream_calls": 1,
+      "upstream_status": 200,
+      "variant": "aliyun-glm-5.3-no-metadata",
+      "request_sha256": "64ff004e664f961d018ac4f1bc4cd0f7c13771753dc7dbae4eada46329305334"
+    },
+    {
+      "error_type": "",
+      "http_status": 200,
+      "provider_publication": false,
+      "request_failed": false,
+      "response_bytes": 5813,
+      "tool_execution": false,
+      "upstream_calls": 1,
+      "upstream_status": 200,
+      "variant": "aliyun-glm-5.3-full-repeat",
+      "request_sha256": "4a343af4f237fad0dbfe59ecf1fd7cc2912ab672daac3a5e0cd57e5a5dd9cbf5"
+    }
+  ],
+  "finding": "The exact same captured request body first received HTTP 403 and later HTTP 200; an individual request extension cannot be identified as the cause. Provider eligibility/routing cause remains unconfirmed.",
+  "isolated_feedback_coding_and_verification": {
+    "coding_duration_seconds": 68.697782733,
+    "coding_passed": true,
+    "error_code": "",
+    "model": "aliyun/glm-5.3",
+    "provider_publication": false,
+    "requests": 11,
+    "safe_summary": "",
+    "source_head_sha": "4eb4a3c7019203086a75e9d7a95fa448533848b5",
+    "verification": {
+      "Criteria": [
+        {
+          "criterion": "Reject duplicate approved criteria and unapproved evidence so verification is a one-to-one mapping.",
+          "status": "passed",
+          "evidence": "TestApprovedCriteriaBijection: pass"
+        },
+        {
+          "criterion": "Reject missing, failed, malformed or duplicate verification results.",
+          "status": "passed",
+          "evidence": "TestRejectInvalidResults: pass"
+        },
+        {
+          "criterion": "Keep valid complete passing evidence accepted.",
+          "status": "passed",
+          "evidence": "TestPreserveValidResults: pass"
+        }
+      ],
+      "ProfileSHA256": "f5adf8cd78add7899aceb427d7c27a589c8f2359e80ec86dae86150b8b1f50f4",
+      "OutputSHA256": "55e329883094fc6ae229f7190bca2c57be177c8932415a163355c38c99cfaa28",
+      "OutputBytes": 2791
+    },
+    "verification_passed": true
+  },
+  "provider_publication": false,
+  "formal_feedback_loop_closed": false,
+  "source_committed": false,
+  "pre_fix_sdk_retry_multiplication": {
+    "coding_duration_seconds": 153.721102937,
+    "coding_passed": false,
+    "error_code": "agent_adapter_model_budget_exhausted",
+    "model": "zhipu/glm-5.3",
+    "provider_publication": false,
+    "requests": 16,
+    "safe_summary": "Coding stopped at the fixed model budget (requests 21, output reservation 86016 tokens, input 186518 bytes). No completed delivery receipt was produced. Retry requires a new approved plan.",
+    "source_head_sha": "4eb4a3c7019203086a75e9d7a95fa448533848b5"
+  },
+  "improvements": {
+    "confirmed_transient_retries_max": 2,
+    "terminal_failure_cancels_coding": true,
+    "sdk_retries_after_terminal_failure_reach_upstream": false,
+    "authenticated_requests_serialized": true,
+    "local_budget_exhaustion_also_stops_coding": true,
+    "uncertain_transport_and_interrupted_reads_replayed": false,
+    "trusted_parent_context_preserved": true,
+    "successful_child_exit_can_override_terminal_failure": false,
+    "sdk_retry_multiplication_prevented": true
+  },
+  "checks": {
+    "adapter_race": "passed",
+    "runner_race": "passed",
+    "api_store_unit": "passed",
+    "diff_check": "passed"
+  },
+  "diagnostic_resources_cleaned": true,
+  "latest_live_readiness": {
+    "health": {
+      "duration_ms": 3,
+      "http_status": 204,
+      "transport_failed": false
+    },
+    "health_after": {
+      "duration_ms": 0,
+      "http_status": 204,
+      "transport_failed": false
+    },
+    "readiness": {
+      "duration_ms": 1415,
+      "http_status": 204,
+      "transport_failed": false
+    },
+    "adapter_image_id": "sha256:a0ab3fc2b39d076d048eac482b906a1c29dd59ccba37ac446d7757a0a76b3846"
+  },
+  "latest_adapter_image": {
+    "tag": "open-review-platform-agent-task-adapter:acceptance-20261008-reliability-v4",
+    "image_id": "sha256:a0ab3fc2b39d076d048eac482b906a1c29dd59ccba37ac446d7757a0a76b3846"
+  },
+  "screenshot": "feedback-budget-continuation.png"
+}

@@ -1,0 +1,127 @@
+{
+  "baseline_main_sha": "b50da27acbf01289e3990fdd863d9743babc7ce6",
+  "rule_version_id": "bd100e51-5831-47d3-a302-6aa9bd6d21d5",
+  "candidate_rule_snapshot_sha256": "88528daa0fc7601f5fc49a965d9cbe014407756c78767bb538ecbead46dc908a",
+  "model_route_sha256": "13dbd9c69d70e75d113f5314a8aff9857fa02bc357b848fa1e0a051916d850af",
+  "failing_head": "fc2a13d3b9bdda0b3a43a10a5115e9ae9dd84d4f",
+  "fixed_head": "1662840ab7255e4d51ea6a64fd03b9a6a5188506",
+  "isolated_replay_before": 1,
+  "isolated_replay_after": 0,
+  "provider_artifacts_unchanged_on_both_replays": true,
+  "agent_task": "fc7de38a-b94a-4369-b447-a0a1a21ce8e3",
+  "agent_plan_sha256": "f2bf92ce8dab8185bc532ec08619201af55c0f75f2665eafe229177235e38e21",
+  "agent_execution": "Initial formal delivery, signed verification, exact-head review and independent CI succeeded. Feedback isolation coding and three fixed verifier criteria now pass on the unchanged model route. Formal feedback publication remains pending: old shared frozen budget is exhausted at 5/5.",
+  "backup_sha256": "48f861f45faebdd28373fe433f099343d87dac32c910b4ebbfccd53796a19f52",
+  "schema_version": 116,
+  "approval_policy": {
+    "revision": 2,
+    "allow_agent_plan_self_approval": true,
+    "allow_rule_self_approval": true,
+    "default_for_other_workspaces": false
+  },
+  "agent_plan_revision": 3,
+  "agent_attempts": [
+    {
+      "id": "db45fbb2-2383-41ff-8da2-c273151c5096",
+      "plan_revision": 1,
+      "state": "needs_attention",
+      "diagnosed_cause": "model reservation budget exhausted"
+    },
+    {
+      "id": "c7261896-b7dc-4cc8-a5f2-d977c900d7eb",
+      "plan_revision": 2,
+      "state": "needs_attention",
+      "stage": "git_metadata"
+    },
+    {
+      "id": "ac0f36f0-914f-4b6e-acda-1a719041e9c9",
+      "plan_revision": 3,
+      "state": "succeeded"
+    }
+  ],
+  "active_rule_binding_id": "d17f1a40-4872-4488-892f-4fe4b3ba6a3b",
+  "formal_rule_gate": {
+    "failed_head": "9727bb992d457b9cc74ba8747690d79288f47693",
+    "failed_review": "df86c4b9-cc88-4920-be5b-6fd70d0eb514",
+    "blocking_count": 1,
+    "fixed_head": "19d551e956389aaedad919fb060a1bf7e7d5de91",
+    "passed_review": "3dcc38b1-a254-4e11-a4dd-1b4ec4a59132",
+    "findings_after_fix": 0
+  },
+  "actual_github_actions": {
+    "failure_run": 37707410405,
+    "success_run": 37708176338,
+    "branch_scope": "feature/acceptance-rules-20261007"
+  },
+  "agent_loop_closed": false,
+  "verified_at": "2026-10-08T01:27:38.265315+00:00",
+  "agent_draft_pr": 26,
+  "agent_head_sha": "4eb4a3c7019203086a75e9d7a95fa448533848b5",
+  "agent_review_id": "5b9df1ec-8d44-4c42-858e-8955ea660793",
+  "agent_initial_ci": {
+    "state": "success",
+    "passed_test_and_subtest_events": 100,
+    "runner": "manual independent pinned networkless runner"
+  },
+  "agent_initial_review": {
+    "id": "5b9df1ec-8d44-4c42-858e-8955ea660793",
+    "state": "completed",
+    "gate": "success",
+    "findings": 0
+  },
+  "agent_acceptance_feedback": {
+    "decision": "changes_requested",
+    "reason": "Strengthen malformed-result tests so they reach field validation instead of only cardinality rejection.",
+    "child_task": "f983f70e-83da-4cb4-ac06-83f60aac7fc1",
+    "inherited_criteria_count": 3,
+    "plan_sha256": "e78e91e6fe82b66de6327fb007cb3ce5b5d47948f8b4ee73ea25c35e9e48101f",
+    "plan_approved": true,
+    "state": "needs_attention",
+    "final_attempt": "a2813493-5009-4a46-a24f-f41f121f5ce9",
+    "retry_plan_revision": 2,
+    "retry_plan_sha256": "2607474b7b7abfa5f39a80e5c137626ab700d6b8a74da551ad01ae964b85a36b",
+    "error_code": "agent_adapter_model_upstream_failed",
+    "upstream_http_status": 403,
+    "cumulative_attempts_used": 5,
+    "cumulative_attempts_limit": 5,
+    "same_draft_head_preserved": true,
+    "final_acceptance": "not_completed"
+  },
+  "adapter_image": "open-review-platform-agent-task-adapter:acceptance-20261008-reliability",
+  "adapter_image_digest": "sha256:41e3709eba142342a1e911b0e10f3e30806b49cf100e063d0e80e7bc3f446a1a",
+  "execution_budget": {
+    "used": 5,
+    "limit": 5,
+    "successful_deliveries": 1,
+    "attention_attempts": 4,
+    "historical_attempts_preserved": true
+  },
+  "execution_reliability": {
+    "preflight_before_attempt_lease": true,
+    "preflight_consumes_task_attempts": false,
+    "transient_model_retries": 2,
+    "permanent_model_denial_circuit_breaker": true,
+    "heartbeat_model_calls": false,
+    "business_feedback_verified_after_changes": false,
+    "known_upstream_error_type": "AccessDenied.Unpurchased"
+  },
+  "reliability_deployment_images": {
+    "agent-task-adapter": {
+      "tag": "open-review-platform-agent-task-adapter:acceptance-20261008-reliability",
+      "image_id": "sha256:41e3709eba142342a1e911b0e10f3e30806b49cf100e063d0e80e7bc3f446a1a"
+    },
+    "agent-task-runner": {
+      "tag": "open-review-platform-agent-task-runner:acceptance-20261008-reliability",
+      "image_id": "sha256:3a1b02d5e950b02aef00c023ef46d31d1c7dedadce990b273bb65d713a6ef682"
+    },
+    "control-api": {
+      "tag": "open-review-platform-core:acceptance-20261008-reliability-v2",
+      "image_id": "sha256:a9d5e4000d375eb7f38545020587e923e7aada079c75acae10743dc599b9db93"
+    },
+    "console": {
+      "tag": "open-review-platform-console:acceptance-20261008-reliability-v3",
+      "image_id": "sha256:a2a1409fdb6ecfa018281326c87684633e254f1c977da0dd59b1ec1287047e49"
+    }
+  },
+  "isolated_feedback_verification": "agent-feedback-isolated-verified.json"
+}
