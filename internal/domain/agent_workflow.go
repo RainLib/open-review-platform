@@ -139,15 +139,30 @@ func ValidCriterionResults(results []AgentCriterionResult) bool {
 	return true
 }
 func CriteriaVerified(criteria []string, results []AgentCriterionResult) bool {
-	if len(criteria) == 0 || len(results) != len(criteria) || !ValidCriterionResults(results) {
+	if len(criteria) == 0 || len(results) != len(criteria) || len(criteria) > 20 || !ValidCriterionResults(results) {
 		return false
 	}
-	passed := map[string]bool{}
+	// Approved criteria must be unique and well-formed so verification stays
+	// a one-to-one mapping: duplicate approved criteria cannot stand in for
+	// distinct unapproved evidence.
+	approved := map[string]bool{}
+	for _, c := range criteria {
+		if len(strings.TrimSpace(c)) < 1 || c != strings.TrimSpace(c) || strings.ContainsRune(c, 0) || approved[c] {
+			return false
+		}
+		approved[c] = true
+	}
+	// Every result must correspond to an approved criterion and must have
+	// passed; equal unique counts then force a bijection.
+	matched := map[string]bool{}
 	for _, r := range results {
-		passed[r.Criterion] = r.Status == "passed"
+		if !approved[r.Criterion] || r.Status != "passed" || matched[r.Criterion] {
+			return false
+		}
+		matched[r.Criterion] = true
 	}
 	for _, c := range criteria {
-		if !passed[c] {
+		if !matched[c] {
 			return false
 		}
 	}
