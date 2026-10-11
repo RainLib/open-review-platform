@@ -142,12 +142,21 @@ func CriteriaVerified(criteria []string, results []AgentCriterionResult) bool {
 	if len(criteria) == 0 || len(results) != len(criteria) || !ValidCriterionResults(results) {
 		return false
 	}
-	passed := map[string]bool{}
-	for _, r := range results {
-		passed[r.Criterion] = r.Status == "passed"
-	}
+	// Verification is a strict one-to-one mapping: every approved criterion
+	// must be distinct and be backed by exactly one passing result, and every
+	// result must correspond to an approved criterion.
+	approved := map[string]bool{}
 	for _, c := range criteria {
-		if !passed[c] {
+		if approved[c] {
+			return false
+		}
+		approved[c] = true
+	}
+	if len(approved) != len(results) {
+		return false
+	}
+	for _, r := range results {
+		if !approved[r.Criterion] || r.Status != "passed" {
 			return false
 		}
 	}
