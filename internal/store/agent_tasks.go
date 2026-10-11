@@ -34,7 +34,7 @@ const agentFeedbackTargetBranchSQL = `WITH RECURSIVE ancestry AS (
 	WHERE child.depth<3 AND parent.tenant_id=child.tenant_id AND parent.provider=child.provider
 	  AND parent.api_base_url=child.api_base_url AND parent.repository=child.repository
 )
-SELECT source_base_ref FROM ancestry WHERE origin_kind='issue' AND parent_task_id IS NULL AND source_state='ready' AND depth>0`
+SELECT source_base_ref FROM ancestry WHERE origin_kind IN ('issue','campaign') AND parent_task_id IS NULL AND source_state='ready' AND depth>0`
 const agentTaskClassificationColumns = `id,task_id,task_revision,source_revision,decision,risk_level,confidence,reasons,evaluation,next_action,snapshot_sha256,classifier_version,created_at`
 const agentTaskAttemptColumns = `id,task_id,plan_id,task_revision,plan_revision,attempt,state,worker_id,adapter_job_id,locked_until,deadline_at,error_code,error_message,result_summary,branch_name,head_sha,pull_request_url,pull_request_number,patch_sha256,changed_file_count,diff_bytes,verification_profile_sha256,verification_output_sha256,verification_output_bytes,created_at,started_at,finished_at,updated_at`
 const agentTaskPlanColumns = `id,task_id,revision,state,summary,sections,plan_sha256,created_by,COALESCE(approved_by,''),approved_at,created_at`
@@ -453,7 +453,7 @@ func (s *PostgresStore) GetAgentTask(ctx context.Context, actor, tenantSlug stri
 			return domain.AgentTaskDetail{}, blockErr
 		}
 	}
-	if task.OriginKind == "issue" && task.SourceState == "ready" {
+	if (task.OriginKind == "issue" || task.OriginKind == "campaign") && task.SourceState == "ready" {
 		detail.TargetBranch = task.SourceBaseRef
 	}
 	if task.OriginKind == "pull_request" {
@@ -787,6 +787,13 @@ func (s *PostgresStore) ApproveAgentTaskPlan(ctx context.Context, actor, tenantS
 // both admission paths enforce the same risk, revision and duty-separation
 // invariants before queuing execution in their caller's transaction.
 func approveAgentTaskPlanTx(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, actor, role string, task domain.AgentTask, planID uuid.UUID, input domain.AgentTaskPlanApprovalInput) (domain.AgentTaskPlan, error) {
+	var campaignBlocked bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_campaign_targets ct JOIN agent_tasks root ON root.id=ct.task_id JOIN agent_campaigns c ON c.id=ct.campaign_id WHERE root.tenant_id=$1 AND root.execution_branch=$2 AND (c.state<>'active' OR EXISTS(SELECT 1 FROM agent_campaign_targets pending WHERE pending.campaign_id=c.id AND pending.state IN ('scan_queued','scanning'))))`, task.TenantID, task.ExecutionBranch).Scan(&campaignBlocked); err != nil {
+		return domain.AgentTaskPlan{}, err
+	}
+	if campaignBlocked {
+		return domain.AgentTaskPlan{}, ErrConflict
+	}
 	if role != "owner" && role != "admin" {
 		return domain.AgentTaskPlan{}, ErrForbidden
 	}
@@ -1569,6 +1576,13 @@ func (s *PostgresStore) ClaimAgentTaskAttempt(ctx context.Context, workerID stri
 	if err != nil {
 		return nil, fmt.Errorf("load agent task for execution: %w", err)
 	}
+	allowed, e := campaignExecutionAllowedTx(ctx, tx, task)
+	if e != nil {
+		return nil, e
+	}
+	if !allowed {
+		return nil, ErrNoQueuedAgentTask
+	}
 	// The first claimant advances the task revision to executing inside this
 	// transaction. A broker redelivery may reclaim an expired pre-adapter
 	// lease, but an attached job may already have run code and belongs to the
@@ -1589,7 +1603,7 @@ func (s *PostgresStore) ClaimAgentTaskAttempt(ctx context.Context, workerID stri
 		return nil, ErrNoQueuedAgentTask
 	}
 	var planSHA string
-	err = tx.QueryRow(ctx, `SELECT plan_sha256 FROM agent_task_plans WHERE id=$1 AND task_id=$2 AND revision=$3 AND state='approved'`, request.PlanID, request.TaskID, request.PlanRevision).Scan(&planSHA)
+	err = tx.QueryRow(ctx, `SELECT plan_sha256 FROM agent_task_plans WHERE id=$1 AND task_id=$2 AND revision=$3 AND state='approved' AND revision=(SELECT max(revision) FROM agent_task_plans WHERE task_id=$2)`, request.PlanID, request.TaskID, request.PlanRevision).Scan(&planSHA)
 	if errors.Is(err, pgx.ErrNoRows) || planSHA != request.PlanSHA256 {
 		return nil, ErrNoQueuedAgentTask
 	}
@@ -1760,6 +1774,13 @@ func (s *PostgresStore) LoadAgentTaskAttemptTarget(ctx context.Context, attemptI
 		return domain.AgentTaskAttemptTarget{}, fmt.Errorf("load approved agent plan target: %w", err)
 	}
 	target := domain.AgentTaskAttemptTarget{Attempt: attempt, Task: task, Plan: plan}
+	target.Campaign, err = s.loadCampaignBinding(ctx, task)
+	if err != nil {
+		return target, err
+	}
+	if task.OriginKind == "campaign" && (target.Campaign == nil || !target.Campaign.Valid() || target.Campaign.OriginRevision() != task.OriginRevision) {
+		return target, ErrInvalidAgentTask
+	}
 	if task.OriginKind == "pull_request" {
 		var binding domain.AgentTaskFeedbackBinding
 		err = s.pool.QueryRow(ctx, `SELECT comment_external_id,actor_external_id,instruction_sha256,source_review_run_id,system_instruction,internal_repair_kind,internal_repair_key FROM agent_task_feedback_cycles WHERE child_task_id=$1 AND state='received'`, task.ID).Scan(&binding.CommentExternalID, &binding.ActorExternalID, &binding.InstructionSHA256, &binding.SourceReviewRunID, &binding.SystemInstruction, &binding.InternalRepairKind, &binding.InternalRepairKey)
@@ -2756,6 +2777,9 @@ func queueAgentTaskAttemptProviderComment(ctx context.Context, tx pgx.Tx, taskID
 // for source admission, retry recovery, plan submission, and approval.
 // An older queued source result can never overwrite a newer plan revision.
 func queueAgentTaskSourceProviderComment(ctx context.Context, tx pgx.Tx, task domain.AgentTask, status, code, message string) error {
+	if task.OriginKind == "campaign" {
+		return nil
+	}
 	if status != "failed" && status != "ready" && status != "plan" && status != "approved" {
 		return ErrInvalidAgentTask
 	}

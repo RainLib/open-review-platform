@@ -783,6 +783,14 @@ func matchesPublicationCheckpoint(result ExecutionResult, checkpoint *Publicatio
 }
 
 func executionFailureStage(err error) string {
+	var scope *campaignDeploymentScopeFailure
+	if errors.As(err, &scope) {
+		return "campaign_deployment_scope"
+	}
+	var credential *repositoryCredentialFailure
+	if errors.As(err, &credential) {
+		return "repository_credential"
+	}
 	message := err.Error()
 	switch {
 	case strings.Contains(message, "agent produced no allowed source change"):
@@ -965,13 +973,13 @@ func (err callbackStatusError) Error() string {
 }
 
 func (service *Service) validSubmission(submission Submission) bool {
-	if !submission.Limits.Workflow.Valid() {
+	if !submission.Limits.Workflow.Valid() || (submission.Task.Campaign != nil && (!submission.Limits.Workflow.Enabled || !submission.Limits.Workflow.RequireCriterionEvidence)) {
 		return false
 	}
-	if strings.TrimSpace(submission.CallbackURL) != service.callbackURL || parseAdapterUUID(submission.AttemptID) == uuid.Nil || parseAdapterUUID(submission.Task.InstallationID) == uuid.Nil || !submission.Task.Provider.Valid() || strings.TrimSpace(submission.Task.APIBaseURL) == "" || strings.Trim(strings.TrimSpace(submission.Task.Repository), "/") == "" || submission.Task.OriginNumber < 1 || strings.TrimSpace(submission.Task.OriginRevision) == "" || (submission.Task.ExecutorProfile != "codex" && submission.Task.ExecutorProfile != "claude") || !validSourcePair(submission.Task.SourceBaseRef, submission.Task.SourceBaseSHA) || strings.TrimSpace(submission.Task.BranchName) == "" || submission.Plan.Revision < 1 || len(strings.TrimSpace(submission.Plan.SHA256)) != 64 || submission.Limits.MaxAttempts < 1 || submission.Limits.MaxAttempts > 3 || submission.Limits.MaxExecutionSeconds < 60 || submission.Limits.MaxExecutionSeconds > 7200 || !validRFC3339(submission.Limits.DeadlineAt) {
+	if strings.TrimSpace(submission.CallbackURL) != service.callbackURL || parseAdapterUUID(submission.AttemptID) == uuid.Nil || parseAdapterUUID(submission.Task.InstallationID) == uuid.Nil || !submission.Task.Provider.Valid() || strings.TrimSpace(submission.Task.APIBaseURL) == "" || strings.Trim(strings.TrimSpace(submission.Task.Repository), "/") == "" || (submission.Task.OriginKind != "campaign" && submission.Task.OriginNumber < 1) || strings.TrimSpace(submission.Task.OriginRevision) == "" || (submission.Task.ExecutorProfile != "codex" && submission.Task.ExecutorProfile != "claude") || !validSourcePair(submission.Task.SourceBaseRef, submission.Task.SourceBaseSHA) || strings.TrimSpace(submission.Task.BranchName) == "" || submission.Plan.Revision < 1 || len(strings.TrimSpace(submission.Plan.SHA256)) != 64 || submission.Limits.MaxAttempts < 1 || submission.Limits.MaxAttempts > 3 || submission.Limits.MaxExecutionSeconds < 60 || submission.Limits.MaxExecutionSeconds > 7200 || !validRFC3339(submission.Limits.DeadlineAt) {
 		return false
 	}
-	if (submission.Task.OriginKind == "pull_request" && (submission.Task.Feedback == nil || !submission.Task.Feedback.ExecutionValid())) || (submission.Task.OriginKind == "issue" && submission.Task.Feedback != nil) || (submission.Task.OriginKind != "issue" && submission.Task.OriginKind != "pull_request") {
+	if (submission.Task.OriginKind == "pull_request" && (submission.Task.Feedback == nil || !submission.Task.Feedback.ExecutionValid())) || (submission.Task.OriginKind == "issue" && submission.Task.Feedback != nil) || (submission.Task.OriginKind != "issue" && submission.Task.OriginKind != "pull_request" && submission.Task.OriginKind != "campaign") || (submission.Task.OriginKind == "campaign" && (submission.Task.OriginNumber != 0 || submission.Task.Feedback != nil || submission.Task.Campaign == nil || !submission.Task.Campaign.Valid() || submission.Task.OriginRevision != submission.Task.Campaign.OriginRevision())) {
 		return false
 	}
 	planDigest := sha256.Sum256([]byte(submission.Plan.Summary))

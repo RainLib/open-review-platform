@@ -248,6 +248,7 @@ func (c Client) observeGitHubIssueTriage(ctx context.Context, installation domai
 	}
 	state := "unobserved"
 	agentState := "unobserved"
+	checksState := "unobserved"
 	configuration, err := resolver.GitHubAppConfiguration(ctx)
 	if err == nil {
 		hasIssuesEvent := false
@@ -267,6 +268,14 @@ func (c Client) observeGitHubIssueTriage(ctx context.Context, installation domai
 		}
 		result.Receipt["github_issues_permission"] = issuesPermission
 		result.Receipt["github_issues_event"] = hasIssuesEvent
+		switch {
+		case configuration.Permissions["checks"] != "read" && configuration.Permissions["checks"] != "write":
+			checksState = "missing_checks_read"
+		case configuration.Permissions["statuses"] != "read" && configuration.Permissions["statuses"] != "write":
+			checksState = "missing_commit_statuses_read"
+		default:
+			checksState = "app_permissions_declared"
+		}
 		switch {
 		case configuration.Permissions["contents"] != "write":
 			agentState = "missing_contents_write"
@@ -290,6 +299,9 @@ func (c Client) observeGitHubIssueTriage(ctx context.Context, installation domai
 	// This is only the App-level prerequisite. It does not assert that a
 	// repository-scoped token, isolated executor, or provider write succeeded.
 	result.Receipt["agent_coding_app_permission_state"] = agentState
+	// A registration declaration is not an exact-head check observation.
+	result.Receipt["independent_checks_app_permission_state"] = checksState
+	result.Permissions = append(result.Permissions, "independent_checks:"+checksState)
 	result.Permissions = append(result.Permissions, "agent_coding:"+agentState)
 	result.Permissions = append(result.Permissions, "issue_triage:"+state)
 }

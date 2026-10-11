@@ -15,6 +15,11 @@ import (
 )
 
 func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T) {
+	for _, origin := range []string{"issue", "campaign"} {
+		t.Run(origin, func(t *testing.T) { agentWorkflowClosureFixture(t, origin) })
+	}
+}
+func agentWorkflowClosureFixture(t *testing.T, origin string) {
 	if os.Getenv("OPEN_REVIEW_TEST_DATABASE_URL") == "" || os.Getenv("OPEN_REVIEW_TEST_ISOLATED_DATABASE") != "true" {
 		t.Skip("requires an isolated PostgreSQL database")
 	}
@@ -33,7 +38,7 @@ func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T
 		}
 	}
 	exec(`INSERT INTO tenants(id,slug,name) VALUES($1,$2,'Workflow fixture')`, tenant, slug)
-	exec(`INSERT INTO memberships(tenant_id,subject,role,active) VALUES($1,'owner','owner',true),($1,'reviewer','reviewer',true)`, tenant)
+	exec(`INSERT INTO memberships(tenant_id,subject,role,active) VALUES($1,'owner','owner',true),($1,'reviewer','reviewer',true),($1,'campaign-author','admin',true)`, tenant)
 	exec(`INSERT INTO provider_installations(id,tenant_id,provider,external_id,repository_scope,api_base_url,credential_ref,verification_state) VALUES($1,$2,'github',$3,'team/repo','https://api.github.com','fixture','verified')`, installation, tenant, installation.String())
 	workflow := domain.AgentWorkflowPolicy{Enabled: true, RequireCriterionEvidence: true, MaxRepairCycles: 2, MaxTaskAttempts: 3, RequiredChecks: []string{"CI / tests"}}
 	policyInput := domain.AgentTaskPolicyInput{Provider: domain.ProviderGitHub, APIBaseURL: "https://api.github.com", Repository: "team/repo", Mode: "manual", DecisionBackend: "deterministic", Workflow: &workflow, MaxFeedbackCycles: 2}
@@ -46,6 +51,25 @@ func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T
 	input.OriginRevision = domain.AgentIssueRevision(input.Provider, input.APIBaseURL, input.Repository, input.OriginNumber, issue.Title, issue.Body)
 	issue.Revision = input.OriginRevision
 	task, err := s.CreateAgentTask(ctx, "reviewer", slug, input)
+	var campaignID uuid.UUID
+	var campaignTarget domain.AgentCampaignTarget
+	if origin == "campaign" {
+		// The unused Issue task stays separate; campaign requests have no Issue number.
+		_, _ = s.pool.Exec(ctx, `UPDATE agent_tasks SET state='cancelled' WHERE id=$1`, task.ID)
+		exec(`INSERT INTO provider_repository_inventory(installation_id,external_id,name) VALUES($1,'repo','team/repo')`, installation)
+		c, e := s.CreateAgentCampaign(ctx, "campaign-author", slug, domain.AgentCampaignInput{IdempotencyKey: uuid.NewString(), Title: "Verify campaign closure", Mode: "docs", Requirements: issue.Body, AcceptanceCriteria: []string{"Retry exactly twice", "Show the final failure"}, Paths: []string{"README.md"}, Repositories: []domain.AgentCampaignRepository{{InstallationID: installation, Repository: "team/repo"}}, Concurrency: 1})
+		if e != nil {
+			t.Fatal(e)
+		}
+		campaignID = c.ID
+		_, campaignTarget, e = s.ClaimAgentCampaignScan(ctx, "campaign-scan")
+		if e != nil {
+			t.Fatal(e)
+		}
+		task = campaignTarget.PlanningTask
+		task.Workflow = workflow
+	}
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,16 +79,31 @@ func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T
 	if !task.Workflow.Enabled {
 		t.Fatal("workflow was not frozen on admission")
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE agent_tasks SET workflow='{}' WHERE id=$1`, task.ID); err == nil {
+	if _, err := s.pool.Exec(ctx, `UPDATE agent_tasks SET workflow='{}' WHERE id=$1`, task.ID); err == nil && origin == "issue" {
 		t.Fatal("workflow contract could be widened/changed")
 	}
 	snapshot := domain.AgentTaskSourceSnapshot{BaseRef: "main", BaseSHA: strings.Repeat("a", 40), Issue: &issue}
+	if origin == "campaign" {
+		campaignTarget.Scan = domain.AgentCampaignScan{BaseRef: snapshot.BaseRef, BaseSHA: snapshot.BaseSHA, Complete: true, FilesScanned: 1, Files: []domain.AgentCampaignFile{{Path: "README.md", SHA256: strings.Repeat("1", 64)}}}
+		b := CampaignBinding(domain.AgentCampaign{ID: campaignID, RequestSHA256: strings.Split(task.OriginRevision, ":")[2], Input: domain.AgentCampaignInput{Mode: "docs", Requirements: issue.Body, AcceptanceCriteria: []string{"Retry exactly twice", "Show the final failure"}, Paths: []string{"README.md"}}}, campaignTarget)
+		snapshot.Issue = nil
+		snapshot.Campaign = &b
+	}
 	planSections, err := (agentplan.Planner{}).Generate(ctx, task, snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot.GeneratedPlan = &planSections
-	task, err = s.RecordAgentTaskSourceSnapshot(ctx, task.ID, snapshot)
+	if origin == "campaign" {
+		err = s.FinishAgentCampaignScan(ctx, "campaign-scan", campaignTarget, campaignTarget.Scan, snapshot, "")
+		if err == nil {
+			d, e := s.GetAgentTask(ctx, "owner", slug, task.ID)
+			err = e
+			task = d.Task
+		}
+	} else {
+		task, err = s.RecordAgentTaskSourceSnapshot(ctx, task.ID, snapshot)
+	}
 	if err != nil || task.State != "awaiting_approval" {
 		t.Fatalf("automatic plan: %s %v", task.State, err)
 	}
@@ -195,6 +234,14 @@ func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T
 			t.Fatal(err)
 		}
 	}
+	exec(`UPDATE review_provider_check_observations SET state='queued',error_code='github_commit_status_read_forbidden' WHERE run_id=$1`, runID)
+	lease()
+	observe(event.HeadSHA, "open")
+	a = acceptance("owner")
+	if a.State != "needs_attention" || a.CanDecide || !strings.Contains(a.Reason, "Commit statuses read permission") {
+		t.Fatalf("missing provider permission inferred acceptance or hid recovery: %+v", a)
+	}
+	exec(`UPDATE review_provider_check_observations SET state='observed',error_code='' WHERE run_id=$1`, runID)
 	lease()
 	observe(event.HeadSHA, "open")
 	a = acceptance("owner")
@@ -223,6 +270,12 @@ func TestAgentWorkflowPlansDeliveryRereviewAndRequirementAcceptance(t *testing.T
 	accepted, err := s.DecideAgentTaskAcceptance(ctx, "owner", slug, task.ID, decision)
 	if err != nil || accepted.State != "accepted" || len(accepted.Evidence) != 2 {
 		t.Fatalf("acceptance: %+v %v", accepted, err)
+	}
+	if origin == "campaign" {
+		d, e := s.GetAgentCampaign(ctx, "owner", slug, campaignID)
+		if e != nil || !d.Summary.Closed || d.Summary.Counts["accepted"] != 1 {
+			t.Fatalf("campaign accepted summary: %+v %v", d.Summary, e)
+		}
 	}
 	// Temporary observation loss suspends readiness but preserves the decision.
 	lease()

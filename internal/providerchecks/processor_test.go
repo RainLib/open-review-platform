@@ -2,8 +2,10 @@ package providerchecks
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +13,34 @@ import (
 	"github.com/RainLib/open-review-platform/internal/store"
 	"github.com/google/uuid"
 )
+
+func TestCommitStatusPermissionFailureCannotBecomePartialCISuccess(t *testing.T) {
+	for _, forbiddenEndpoint := range []string{"/status", "/check-runs"} {
+		t.Run(forbiddenEndpoint, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer test-token" {
+					t.Error("read must use the installed provider identity")
+				}
+				if strings.HasSuffix(r.URL.Path, forbiddenEndpoint) {
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = w.Write([]byte(`{"message":"synthetic-secret-provider-body"}`))
+					return
+				}
+				_, _ = fmt.Fprintf(w, `{"total_count":1,"check_runs":[{"name":"CI / tests","head_sha":%q,"status":"completed","conclusion":"success","app":{"id":22}}]}`, testSHA)
+			}))
+			defer server.Close()
+			st := &probeStoreStub{target: &domain.ProviderCheckTarget{RunID: uuid.New(), Attempt: 1, Job: domain.ReviewJob{Provider: domain.ProviderGitHub, APIBaseURL: server.URL, Repository: "RainLib/open-review-platform", HeadSHA: testSHA}}}
+			worked, err := (Processor{Store: st, WorkerID: "worker", Client: Client{Resolver: testResolver{token: "test-token"}, AllowPrivateNetworks: true, AllowInsecureHTTP: true, OwnGitHubAppID: 11}}).RunOnce(context.Background())
+			want := "provider_read_failed"
+			if forbiddenEndpoint == "/status" {
+				want = "github_commit_status_read_forbidden"
+			}
+			if !worked || err == nil || st.completed != nil || st.failedCode != want || strings.Contains(err.Error(), "synthetic-secret") || !st.nextAt.After(time.Now()) {
+				t.Fatalf("partial CI success or unsafe permission diagnostic: worked=%v error=%v completed=%v code=%s", worked, err, st.completed, st.failedCode)
+			}
+		})
+	}
+}
 
 type probeStoreStub struct {
 	target     *domain.ProviderCheckTarget

@@ -7,6 +7,7 @@ import { Download, FileArchive, LoaderCircle, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import type { DataGovernanceJob, DataSource } from "@/lib/control-api";
+import { HelpHint } from "@/components/console/help-hint";
 
 const dateFormatter = new Intl.DateTimeFormat("en", {
   dateStyle: "medium",
@@ -110,8 +111,7 @@ export function AuditExportManager({
       <section className="grid gap-5 rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] lg:grid-cols-[minmax(0,1fr)_300px]">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">Governed disclosure</p>
-          <h2 className="mt-2 text-xl font-semibold tracking-[-0.035em] text-[var(--ls-text)]">Request an encrypted audit export</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--ls-text-secondary)]">Exports are durable, tenant-scoped operations. They record the requester and range, encrypt the generated artifact, require an executor receipt, and audit every authenticated download.</p>
+          <div className="mt-2 flex min-w-0 items-center gap-2"><h2 className="text-xl font-semibold tracking-[-0.035em] text-[var(--ls-text)]">Request an encrypted audit export</h2><HelpHint label="Request an encrypted audit export">Exports are durable, tenant-scoped operations. They record the requester and range, encrypt the generated artifact, require an executor receipt, and audit every authenticated download.</HelpHint></div>
           {source === "live" || source === "demo" ? (
             <form className="mt-5 grid gap-3 sm:grid-cols-2" onSubmit={requestExport}>
               <fieldset className="contents" disabled={!writable}>
@@ -143,7 +143,7 @@ export function AuditExportManager({
       </section>
 
       <section className="overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
-        <div className="flex items-center justify-between border-b border-[var(--ls-line)] px-5 py-4"><div><h2 className="text-sm font-semibold text-[var(--ls-text)]">Audit export jobs</h2><p className="mt-1 text-xs text-[var(--ls-text-tertiary)]">Newest first · a completion state alone does not expose an artifact.</p></div><span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">{auditJobs.length} jobs</span></div>
+        <div className="flex items-center justify-between border-b border-[var(--ls-line)] px-5 py-4"><div><div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">Audit export jobs</h2><HelpHint label="Audit export jobs">Newest first · a completion state alone does not expose an artifact.</HelpHint></div></div><span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">{auditJobs.length} jobs</span></div>
         {auditJobs.length ? <div className="divide-y divide-[var(--ls-line)]">{auditJobs.map((job) => <AuditExportRow job={job} key={job.id} org={org} />)}</div> : <div className="grid min-h-44 place-items-center p-8 text-center"><div><FileArchive className="mx-auto size-5 text-[var(--ls-text-tertiary)]" /><p className="mt-3 text-sm text-[var(--ls-text-secondary)]">No governed audit exports yet.</p></div></div>}
       </section>
     </div>

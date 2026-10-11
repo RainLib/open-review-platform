@@ -74,11 +74,14 @@ func (pipeline Pipeline) Execute(ctx context.Context, jobID string, submission S
 	if submission.Task.ExecutorProfile != pipeline.ExecutorKind {
 		return ExecutionResult{}, fmt.Errorf("task executor profile is not installed by this adapter")
 	}
+	if err := pipeline.checkCampaignDeploymentScope(submission); err != nil {
+		return ExecutionResult{}, err
+	}
 	verificationProfile, err := loadVerificationProfile(pipeline.VerificationProfileFile, submission)
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	if !submission.Limits.Workflow.Valid() {
+	if !submission.Limits.Workflow.Valid() || (submission.Task.Campaign != nil && (!submission.Limits.Workflow.Enabled || !submission.Limits.Workflow.RequireCriterionEvidence)) {
 		return ExecutionResult{}, fmt.Errorf("invalid frozen workflow policy")
 	}
 	if submission.Limits.Workflow.Enabled && verificationProfile == nil {
@@ -146,7 +149,12 @@ func (pipeline Pipeline) Execute(ctx context.Context, jobID string, submission S
 		}
 		defer pipeline.jobModelBroker.Close()
 	}
-	if err = pipeline.runAgent(ctx, workspace, submission); err != nil {
+	if submission.Task.OriginKind == "campaign" && submission.Task.Campaign != nil && submission.Task.Campaign.Mode == "replace" {
+		err = applyCampaignReplacement(workspace, *submission.Task.Campaign)
+	} else {
+		err = pipeline.runAgent(ctx, workspace, submission)
+	}
+	if err != nil {
 		return ExecutionResult{}, fmt.Errorf("run fixed coding-agent profile: %w", err)
 	}
 	if err = pipeline.verifyGitState(ctx, workspace, gitConfig, submission.Task.BranchName, submission.Task.SourceBaseSHA); err != nil {
@@ -273,7 +281,7 @@ func publicationBranchLease(submission Submission) (string, error) {
 	}
 	ref := "refs/heads/" + branch
 	switch submission.Task.OriginKind {
-	case "issue":
+	case "issue", "campaign":
 		return "--force-with-lease=" + ref + ":", nil
 	case "pull_request":
 		if submission.Task.SourceBaseRef != branch || !validSourcePair("commit", submission.Task.SourceBaseSHA) {
@@ -296,7 +304,7 @@ func (pipeline Pipeline) resolveTaskCredential(ctx context.Context, jobID string
 		APIBaseURL: submission.Task.APIBaseURL, Repository: submission.Task.Repository,
 	})
 	if err != nil {
-		return Pipeline{}, fmt.Errorf("resolve scoped adapter credential: %w", err)
+		return Pipeline{}, &repositoryCredentialFailure{cause: err}
 	}
 	// Scope the selected credential to this execution value. The shared
 	// pipeline is never mutated and another repository cannot inherit it.
@@ -342,7 +350,10 @@ func (pipeline Pipeline) verifyOrigin(ctx context.Context, submission Submission
 		Provider: submission.Task.Provider, APIBaseURL: submission.Task.APIBaseURL,
 		Repository: submission.Task.Repository, OriginKind: submission.Task.OriginKind,
 		OriginNumber: submission.Task.OriginNumber, OriginRevision: submission.Task.OriginRevision,
-		ExecutionBranch: submission.Task.BranchName,
+		ExecutionBranch: submission.Task.BranchName, SourceBaseRef: submission.Task.SourceBaseRef, SourceBaseSHA: submission.Task.SourceBaseSHA,
+	}
+	if task.OriginKind == "campaign" && (submission.Task.Campaign == nil || !submission.Task.Campaign.Valid() || task.OriginRevision != submission.Task.Campaign.OriginRevision()) {
+		return fmt.Errorf("invalid signed campaign origin binding")
 	}
 	if strings.HasPrefix(task.OriginRevision, "issue-labels-sha256:") {
 		task.RequestedBy = "policy:auto"
@@ -865,6 +876,9 @@ func (pipeline Pipeline) validatePatch(ctx context.Context, workspace string, su
 		return nil, 0, "", err
 	}
 	files := splitNULPaths(names)
+	if err := pipeline.validateCampaignFiles(ctx, workspace, submission, files); err != nil {
+		return nil, 0, "", err
+	}
 	maxChangedFiles := pipeline.MaxChangedFiles
 	if maxChangedFiles <= 0 {
 		maxChangedFiles = 100
@@ -1040,7 +1054,7 @@ func (pipeline Pipeline) draftDescription(submission Submission, headSHA string,
 // feedback attempt recovers only its exact original Draft at the new head and
 // only while its triggering comment is still unchanged. Neither path writes.
 func (pipeline Pipeline) ReconcilePublication(ctx context.Context, jobID string, submission Submission, checkpoint PublicationCheckpoint) (ExecutionResult, error) {
-	if (submission.Task.OriginKind != "issue" && submission.Task.OriginKind != "pull_request") || !validPublicationCheckpoint(checkpoint) {
+	if (submission.Task.OriginKind != "issue" && submission.Task.OriginKind != "pull_request" && submission.Task.OriginKind != "campaign") || !validPublicationCheckpoint(checkpoint) {
 		return ExecutionResult{}, fmt.Errorf("publication checkpoint is not recoverable")
 	}
 	deadline, err := time.Parse(time.RFC3339Nano, submission.Limits.DeadlineAt)
@@ -1058,7 +1072,7 @@ func (pipeline Pipeline) ReconcilePublication(ctx context.Context, jobID string,
 	if _, _, err = pipeline.cloneURL(submission); err != nil {
 		return ExecutionResult{}, err
 	}
-	if submission.Task.OriginKind == "issue" {
+	if submission.Task.OriginKind == "issue" || submission.Task.OriginKind == "campaign" {
 		if err = pipeline.verifyOrigin(ctx, submission); err != nil {
 			return ExecutionResult{}, fmt.Errorf("origin changed before publication recovery: %w", err)
 		}
@@ -1310,7 +1324,11 @@ func agentDraftDescription(submission Submission, headSHA string, evidence ...dr
 	}
 	code := func(value string) string { return "<code>" + html.EscapeString(value) + "</code>" }
 	var body strings.Builder
-	fmt.Fprintf(&body, "%s\n\n## Outcome\nDraft implementation for %s #%d. **Human review and normal merge gates are still required.**\n\n", agentDraftMarker(submission), submission.Task.OriginKind, submission.Task.OriginNumber)
+	origin := fmt.Sprintf("%s #%d", submission.Task.OriginKind, submission.Task.OriginNumber)
+	if submission.Task.Campaign != nil {
+		origin = "campaign " + submission.Task.Campaign.CampaignID.String()
+	}
+	fmt.Fprintf(&body, "%s\n\n## Outcome\nDraft implementation for %s. **Human review and normal merge gates are still required.**\n\n", agentDraftMarker(submission), origin)
 	fmt.Fprintf(&body, "## Scope\n%d changed file(s), %d diff byte(s). No deployment or merge was performed.\n", len(patch.Files), patch.DiffBytes)
 	if len(patch.Files) > 0 {
 		body.WriteString("\n<details><summary>Changed files</summary>\n\n")
@@ -1332,7 +1350,11 @@ func agentDraftDescription(submission Submission, headSHA string, evidence ...dr
 		body.WriteString("\n</details>\n")
 	}
 	fmt.Fprintf(&body, "\n## Risk\nRepository and Issue content are untrusted. Blast radius starts with %d changed file(s); runtime dependencies and severity were not measured by this adapter.\n", len(patch.Files))
-	fmt.Fprintf(&body, "\n## Acceptance mapping\nIssue #%d acceptance criteria require human verification against this diff; the adapter did not attest product acceptance.\n", submission.Task.OriginNumber)
+	if submission.Task.Campaign != nil {
+		fmt.Fprintf(&body, "\n## Acceptance mapping\nCampaign %s request digest `%s` requires human criterion acceptance at this delivered commit. The adapter did not attest product acceptance.\n", submission.Task.Campaign.CampaignID, submission.Task.Campaign.RequestSHA256)
+	} else {
+		fmt.Fprintf(&body, "\n## Acceptance mapping\nIssue #%d acceptance criteria require human verification against this diff; the adapter did not attest product acceptance.\n", submission.Task.OriginNumber)
+	}
 	fmt.Fprintf(&body, "\n## Invariants\nFrozen source %s → proposed head %s on %s. This workflow did not request a merge.\n", code(submission.Task.SourceBaseSHA), code(headSHA), code(submission.Task.BranchName))
 	body.WriteString("\n## Verification\nPath allowlist, changed-file/diff budgets, whitespace, and basic secret-pattern checks passed before publication. ")
 	if patch.Verification == nil {

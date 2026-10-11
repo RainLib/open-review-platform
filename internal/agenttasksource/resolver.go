@@ -69,6 +69,9 @@ func sourceRetryAfter(value string) time.Duration {
 // immediately before running code and again before publishing a branch, so a
 // changed task request cannot silently reuse an earlier JEV decision.
 func (r Resolver) VerifyOrigin(ctx context.Context, task domain.AgentTask, token string) error {
+	if task.OriginKind == "campaign" {
+		return r.VerifyCampaignBase(ctx, task, token)
+	}
 	if !task.Provider.Valid() || strings.TrimSpace(token) == "" || task.OriginNumber < 1 || strings.TrimSpace(task.OriginRevision) == "" {
 		return fmt.Errorf("agent task origin verification target is invalid")
 	}

@@ -12,6 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RainLib/open-review-platform/internal/agentcampaign"
+	"github.com/RainLib/open-review-platform/internal/agentplan"
+	"github.com/RainLib/open-review-platform/internal/agenttasksource"
 	"github.com/RainLib/open-review-platform/internal/agentworkflow"
 	"github.com/RainLib/open-review-platform/internal/config"
 	"github.com/RainLib/open-review-platform/internal/credentials"
@@ -56,6 +59,25 @@ func main() {
 		ProbeEvery:  durationEnv("PROVIDER_PROBE_INTERVAL", 5*time.Minute),
 		TaskStarted: reporter.BeginTask,
 	}
+	campaignProcessor := agentcampaign.Processor{Store: database, Resolver: agenttasksource.Resolver{Resolver: resolver, AllowGitLabHTTP: cfg.Environment == "development" && cfg.GitLab.AllowHTTP}, Planner: agentplan.FromEnvironment(), WorkerID: workerID + "-campaign"}
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			worked, err := campaignProcessor.RunOnce(ctx)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("Campaign scan processing failed", "error", err)
+			}
+			if worked && err == nil {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 	checksWorkerID := health.EnvironmentWorkerID("PROVIDER_CHECKS_WORKER_ID", "provider-checks-worker")
 	checksReporter := &health.Reporter{
 		Store: database, WorkerID: checksWorkerID, Kind: "provider-checks-worker",

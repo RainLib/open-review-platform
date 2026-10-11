@@ -1,3 +1,4 @@
+import { SectionDisclosure } from "@/components/console/section-disclosure";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -98,11 +99,13 @@ function ReviewContext({ evidence, hasRuleSnapshot, language, org }: { evidence:
   const recentRuns = evidence.related_runs.slice(0, 5);
   const olderRuns = evidence.related_runs.slice(5);
   const zh = language === "zh-CN";
-  return <aside className="luminous-frosted h-fit rounded-[24px] border border-[var(--ls-line-strong)] p-5 shadow-[var(--ls-shadow-float)] xl:sticky xl:top-20">
+  return <aside className="h-fit min-w-0 rounded-xl border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 xl:sticky xl:top-20">
     <h2 className="text-lg font-semibold text-[var(--ls-text)]">{zh ? "审核上下文" : "Review context"}</h2>
     <dl className="mt-4 space-y-3">
       <ContextRow icon={GitPullRequest} label={zh ? "状态" : "State"} value={run.state.replaceAll("_", " ")} />
       <ContextRow icon={GitCommitHorizontal} label={zh ? "当前提交" : "Head"} mono value={shortSHA(run.head_sha)} />
+    </dl>
+    <SectionDisclosure title={zh ? "上下文与运行历史" : "Context and run history"} className="mt-4" bodyClassName="p-3 sm:p-3"><dl className="space-y-3">
       <ContextRow icon={GitCommitHorizontal} label={zh ? "基线" : "Base"} mono value={shortSHA(run.base_sha)} />
       <ContextRow icon={Layers3} label={zh ? "模式" : "Mode"} value={displayReviewMode(run.review_mode)} />
       <ContextRow icon={ShieldCheck} label={zh ? "规则" : "Rules"} value={hasRuleSnapshot ? (zh ? "不可变快照" : "Immutable snapshot") : (zh ? "未附加" : "Not attached")} />
@@ -114,6 +117,7 @@ function ReviewContext({ evidence, hasRuleSnapshot, language, org }: { evidence:
       {olderRuns.length ? <details className="mt-2"><summary className="luminous-focus cursor-pointer list-none rounded-[9px] px-2 py-2 text-xs font-medium text-[var(--ls-accent)] [&::-webkit-details-marker]:hidden">{zh ? `显示较早的 ${olderRuns.length} 次运行` : `Show ${olderRuns.length} older runs`}</summary><div className="mt-1 max-h-64 space-y-1 overflow-y-auto pr-1">{olderRuns.map((related) => <RunHistoryLink currentID={run.id} key={related.id} org={org} run={related} />)}</div></details> : null}
     </div>
     <p className="mt-5 border-t border-[var(--ls-line)] pt-4 text-xs leading-5 text-[var(--ls-text-tertiary)]">{zh ? "新版本不能复用此结论。旧版本页面保留供审计，但不会继续发布过期结果。" : "A newer revision cannot reuse this result. Supersession preserves this page for audit while preventing stale publication."}</p>
+    </SectionDisclosure>
   </aside>;
 }
 

@@ -22,13 +22,13 @@ for (const property of map.properties) {
 const technical = new Set([
   "@openreview implement", "@openreview revise …", "@openreview approve", "CI / tests, CI / build", "Codex", "Claude CLI", "openreview:implement", "UTC", "GitHub", "GitLab", "https://gitlab.example.com/api/v4", "RainLib/open-review-platform", "main", "services/**", "**/generated/**", "security.no-secrets", "security.credentials", "main or release/*", "https://tracker.example/SEC-123", "sha", "Issue",
 ]);
-const components = ["finding-feedback-dashboard", "agent-work-manager", "approval-policy-manager", "copy-evidence-button", "enterprise-settings-tabs", "policy-page-header", "provider-issue-agent-task", "provider-issue-retry", "rule-approval-manager", "rule-binding-manager", "rule-catalog-browser", "rule-exception-manager", "rule-rollout-manager", "rule-set-composer", "rule-set-governance-actions", "rule-test-lab"];
+const components = ["agent-campaign-manager", "help-hint", "finding-feedback-dashboard", "agent-work-manager", "approval-policy-manager", "copy-evidence-button", "enterprise-settings-tabs", "policy-page-header", "provider-issue-agent-task", "provider-issue-retry", "rule-approval-manager", "rule-binding-manager", "rule-catalog-browser", "rule-exception-manager", "rule-rollout-manager", "rule-set-composer", "rule-set-governance-actions", "rule-test-lab"];
 const ruleRoot = "app/(console)/[org]/rules";
 const files = [
   ...components.map(name => `components/console/${name}.tsx`),
   `${ruleRoot}/page.tsx`,
   ...readdirSync(new URL(ruleRoot, appRoot), { withFileTypes: true }).filter(item => item.isDirectory()).map(item => `${ruleRoot}/${item.name}/page.tsx`),
-  "app/(console)/[org]/agent-work/page.tsx", "app/(console)/[org]/settings/approvals/page.tsx", "app/(console)/[org]/provider-issues/page.tsx",
+  "app/(console)/[org]/agent-campaigns/page.tsx", "app/(console)/[org]/agent-work/page.tsx", "app/(console)/[org]/settings/approvals/page.tsx", "app/(console)/[org]/provider-issues/page.tsx",
 ];
 const humanAttributes = new Set(["label", "title", "aria-label", "placeholder", "description", "eyebrow", "emptyTitle", "emptyDetail"]);
 const decode = source => source.replaceAll("&apos;", "'").replaceAll("&quot;", '"').replaceAll("&amp;", "&").replaceAll("&gt;", ">").replaceAll("&lt;", "<");

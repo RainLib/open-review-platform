@@ -1,11 +1,36 @@
 package agentadapter
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
+
+type unavailableCredentialSource struct{ err error }
+
+func (s unavailableCredentialSource) Resolve(context.Context, RepositoryCredentialScope) (RepositoryCredential, error) {
+	return RepositoryCredential{}, s.err
+}
+
+func TestRepositoryCredentialDiagnosticsPreservePhaseWithoutLeakingProviderData(t *testing.T) {
+	secret := errors.New("provider body and token synthetic-secret")
+	pipeline := Pipeline{CredentialSource: unavailableCredentialSource{err: secret}}
+	submission := Submission{}
+	submission.Task.InstallationID = uuid.NewString()
+	_, err := pipeline.resolveTaskCredential(context.Background(), "adapter-test", submission)
+	if err == nil {
+		t.Fatal("credential failure admitted an execution credential")
+	}
+	err = fmt.Errorf("refresh before publication: %w", err)
+	code, summary := executionFailureResult(err)
+	if code != "agent_repository_credential_unavailable" || executionFailureStage(err) != "repository_credential" || !errors.Is(err, secret) || strings.Contains(summary, "synthetic-secret") || !strings.Contains(summary, "installation mapping") {
+		t.Fatalf("unsafe or unactionable credential diagnostic: %s %s", code, summary)
+	}
+}
 
 func TestCodingBudgetDiagnosticsPreserveErrorWithoutLeakingChildData(t *testing.T) {
 	secretError := errors.New("untrusted child output with synthetic-secret")

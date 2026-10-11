@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Bot } from "lucide-react";
 import type { ProviderIssueAnalysisDetail } from "@/lib/control-api";
+import { HelpHint } from "@/components/console/help-hint";
 
 export function ProviderIssueAgentTask({
   admission,
@@ -59,9 +60,7 @@ export function ProviderIssueAgentTask({
       <div className="flex items-start gap-2">
         <Bot className="mt-0.5 size-4 shrink-0 text-[var(--ls-accent)]" />
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-[var(--ls-text)]">{t("Turn this Issue into Agent work")}</h3>
-          <p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">
-            {t(" Creates a candidate from this exact Issue revision. A manual repository policy, source recheck, bounded plan, and owner/admin approval are required before coding can start. ")}</p>
+          <div className="flex min-w-0 items-center gap-2"><h3 className="text-sm font-semibold text-[var(--ls-text)]">{t("Turn this Issue into Agent work")}</h3><HelpHint label={t("Turn this Issue into Agent work")}>{t(" Creates a candidate from this exact Issue revision. A manual repository policy, source recheck, bounded plan, and owner/admin approval are required before coding can start. ")}</HelpHint></div>
         </div>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">

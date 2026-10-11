@@ -19,6 +19,7 @@ The review engine is the pinned [OpenCodeReview](https://github.com/alibaba/open
 | Rule governance | Workspace defaults and repository overrides, immutable rule versions and bindings, approval queues, Test Lab/impact preview, time-bounded exceptions, and Shadow/Canary rollout controls. |
 | Merge gates | Severity-based pass/fail results for the reviewed commit. Enforcing a merge block requires the corresponding provider branch or pipeline protection. |
 | Agent Work | Opt-in source admission, automatic structured planning, exact-plan approval, bounded coding, independent verification, repair, Draft delivery, rereview, and criterion-based human acceptance. |
+| Multi-repository campaigns | Administrator batch checks, literal replacements and documentation updates; frozen repository selections, exact-plan batch approval, concurrency limits, per-repository acceptance, and Markdown/CSV/JSON reports. |
 | Operations | Workspace roles, SSE progress, audit events, API/CLI keys, model/provider probes, usage limits, retention jobs, and repository-routed DingTalk, Feishu, or HTTPS notifications. |
 | Languages | English and Simplified Chinese for the main review and core workflow interfaces; separately configured review/Issue output languages. |
 
@@ -106,6 +107,14 @@ flowchart TD
 - Missing evidence, exhausted budgets, source changes, lost leases, or revoked approval stop advancement. Delivery and final requirement acceptance are separate states. Open Review never auto-merges.
 
 Authors cannot approve their own rule requests or Agent plans by default. A workspace Owner can explicitly enable each self-approval option for a private single-maintainer deployment. Role checks, exact revisions, approval thresholds, duplicate-vote guards, and audit records still apply; disabling the option takes effect for pending approvals.
+
+### Multi-repository campaigns
+
+Open **Agent campaigns** in the Console to check selected repositories or all authorized repositories in a retained, complete installation inventory. A campaign freezes its request, criteria, repository policies and selection before scanning. Read-only scans do not require a coding approval. Changes produce independent repository plans, and coding starts only after an authorized maintainer approves their exact revisions and hashes.
+
+Literal replacements validate before-content digests and match counts, then apply the exact approved replacement. Documentation updates use the existing isolated coding agent. Both modes reuse verification, bounded repair, Draft delivery, exact-head review and independent checks, and human requirement acceptance. Pausing holds new execution leases; cancellation revokes remaining work; retry retains the original attempt budget and requires fresh approval for a failed execution.
+
+Each repository keeps its own outcome. Excluded or unreadable files, incomplete inventories, unavailable checks and exhausted budgets remain visible. A delivered Draft does not close a change campaign. Export timestamped Markdown, CSV or JSON reports to inspect source commits, matches, task/Draft links and acceptance states. See the [campaign operator guide](docs/iter-01/34-agent-campaigns.md) for API contracts, prerequisites and validation boundaries.
 
 ## Security and deployment boundaries
 

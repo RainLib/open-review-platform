@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/RainLib/open-review-platform/internal/domain"
+	"github.com/google/uuid"
 )
 
 type countingCredentialSource struct {
@@ -45,12 +46,15 @@ func (source *countingCredentialSource) Resolve(ctx context.Context, scope Repos
 func TestPipelineExecutePublishesOnlyValidatedDraftChange(t *testing.T) {
 	for _, scenario := range []struct {
 		name               string
+		campaignMode       string
 		changedIssue       bool
 		changedClone       bool
 		checkpointRejected bool
 		branchOccupied     bool
 	}{
 		{name: "draft_created"},
+		{name: "campaign_replace", campaignMode: "replace"},
+		{name: "campaign_base_changed", campaignMode: "replace", changedIssue: true},
 		{name: "issue_changed_before_push", changedIssue: true},
 		{name: "clone_origin_changed_before_push", changedClone: true},
 		{name: "checkpoint_rejected_before_push", checkpointRejected: true},
@@ -96,6 +100,21 @@ func TestPipelineExecutePublishesOnlyValidatedDraftChange(t *testing.T) {
 			var server *httptest.Server
 			server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				switch request.URL.EscapedPath() {
+				case "/api/v4/projects/team%2Fproject/repository/branches/main":
+					readNumber := issueReads.Add(1)
+					expectedToken := token
+					if readNumber > 1 {
+						expectedToken = refreshedToken
+					}
+					if request.Method != "GET" || request.Header.Get("Authorization") != "Bearer "+expectedToken {
+						http.Error(writer, "invalid base read", 401)
+						return
+					}
+					actual := baseSHA
+					if scenario.changedIssue && readNumber > 1 {
+						actual = strings.Repeat("b", 40)
+					}
+					_ = json.NewEncoder(writer).Encode(map[string]any{"commit": map[string]string{"id": actual}})
 				case "/api/v4/projects/team%2Fproject/issues/19":
 					readNumber := issueReads.Add(1)
 					expectedToken := token
@@ -131,7 +150,7 @@ func TestPipelineExecutePublishesOnlyValidatedDraftChange(t *testing.T) {
 						TargetBranch string `json:"target_branch"`
 						Description  string `json:"description"`
 					}
-					if err := json.NewDecoder(request.Body).Decode(&input); err != nil || !strings.HasPrefix(input.Title, "[Draft]") || input.SourceBranch != "agent/test-task" || input.TargetBranch != "main" || !strings.Contains(input.Description, testAgentDraftMarker()) || !strings.Contains(input.Description, "1 changed file(s)") || !strings.Contains(input.Description, "<code>README.md</code>") || !strings.Contains(input.Description, "## Verification") || !strings.Contains(input.Description, "not attested by this adapter") {
+					if err := json.NewDecoder(request.Body).Decode(&input); err != nil || !strings.HasPrefix(input.Title, "[Draft]") || input.SourceBranch != "agent/test-task" || input.TargetBranch != "main" || !strings.Contains(input.Description, testAgentDraftMarker()) || !strings.Contains(input.Description, "1 changed file(s)") || !strings.Contains(input.Description, "<code>README.md</code>") || !strings.Contains(input.Description, "## Verification") || (scenario.campaignMode == "" && !strings.Contains(input.Description, "not attested by this adapter")) {
 						http.Error(writer, "invalid Draft MR", http.StatusBadRequest)
 						return
 					}
@@ -207,6 +226,17 @@ func TestPipelineExecutePublishesOnlyValidatedDraftChange(t *testing.T) {
 			submission.Task.SourceBaseSHA = baseSHA
 			submission.Task.BranchName = "agent/test-task"
 			submission.Plan.Summary = "Append one validated line to README.md."
+			if scenario.campaignMode != "" {
+				h := sha256.Sum256([]byte("Baseline\n"))
+				b := domain.AgentCampaignBinding{CampaignID: uuid.New(), TargetID: uuid.New(), RequestSHA256: strings.Repeat("a", 64), Mode: scenario.campaignMode, Paths: []string{"README.md"}, Search: "Baseline", Replacement: "Baseline updated", Files: []domain.AgentCampaignFile{{Path: "README.md", SHA256: hex.EncodeToString(h[:]), Matches: 1, Bytes: 9}}, Requirements: "Observed behavior: README.md uses an old description. Expected behavior: update only the README documentation and preserve unrelated repository content.", Criteria: []string{"README documentation is updated"}}
+				submission.Task.Campaign = &b
+				submission.Task.OriginKind = "campaign"
+				submission.Task.OriginNumber = 0
+				submission.Task.OriginRevision = b.OriginRevision()
+				submission.Plan.AcceptanceCriteria = b.Criteria
+				submission.Limits.Workflow = domain.AgentWorkflowPolicy{Enabled: true, RequireCriterionEvidence: true, MaxTaskAttempts: 3, MaxRepairCycles: 2, RequiredChecks: []string{"CI / docs"}}
+			}
+
 			submission.Limits.DeadlineAt = time.Now().Add(2 * time.Minute).UTC().Format(time.RFC3339Nano)
 			credentialSource := &countingCredentialSource{inner: FileCredentialSource{Path: credentialFile}, refreshToken: refreshedToken}
 			if scenario.changedClone {
@@ -215,6 +245,50 @@ func TestPipelineExecutePublishesOnlyValidatedDraftChange(t *testing.T) {
 			pipeline := Pipeline{
 				WorkspaceRoot: workspaceRoot, ExecutorKind: "codex", CodexBinary: agentBinary, GitBinary: gitBinary,
 				AllowedPaths: []string{"README.md"}, CredentialSource: credentialSource, GitLabAllowHTTP: true,
+			}
+			if scenario.campaignMode != "" {
+				// The deterministic replacement does not invoke a coding child.
+				// Keep the production sandbox contract intact; the verifier hook
+				// below checks the patch in this provider fixture, not in Docker.
+				pool, err := NewExecutorIdentityPool(10002, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					http.Error(w, "deterministic replacement must not call the model", http.StatusBadRequest)
+				}))
+				defer upstream.Close()
+				pipeline.ExecutorIdentityPool = pool
+				pipeline.DockerSandbox = &DockerSandboxConfig{ImageID: "sha256:" + strings.Repeat("a", 64), InternalNetwork: "fixture-internal", WorkspaceVolume: "fixture-workspaces", AdapterHost: "fixture-adapter"}
+				pipeline.CodeModelBroker = ModelBrokerConfig{APIBaseURL: upstream.URL + "/v1", APIKey: "synthetic-key", Model: "gpt-6-sol", HTTPClient: upstream.Client()}
+				profile := testVerificationProfile()
+				profile.Provider = domain.ProviderGitLab
+				profile.APIBaseURL = submission.Task.APIBaseURL
+				profile.Repository = submission.Task.Repository
+				profile.CriterionReportRequired = true
+				config, err := json.Marshal(verificationProfileFile{Version: 1, Entries: []VerificationProfile{profile}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				profilePath := filepath.Join(root, "campaign-verifier.json")
+				if err = os.WriteFile(profilePath, config, 0600); err != nil {
+					t.Fatal(err)
+				}
+				pipeline.VerificationProfileFile = profilePath
+				pipeline.verifyCommand = func(_ context.Context, workspace string, _ VerificationProfile) (VerificationEvidence, error) {
+					body, err := os.ReadFile(filepath.Join(workspace, "README.md"))
+					if err != nil {
+						return VerificationEvidence{}, err
+					}
+					expected := "Validated fix"
+					if scenario.campaignMode == "replace" {
+						expected = "Baseline updated"
+					}
+					if !strings.Contains(string(body), expected) {
+						return VerificationEvidence{}, &verificationFailure{exit: 1, output: "documentation assertion failed"}
+					}
+					return VerificationEvidence{ProfileSHA256: strings.Repeat("d", 64), OutputSHA256: strings.Repeat("e", 64), OutputBytes: 12, Criteria: []domain.AgentCriterionResult{{Criterion: submission.Plan.AcceptanceCriteria[0], Status: "passed", Evidence: "Independent fixture checked updated README content"}}}, nil
+				}
 			}
 			var checkpoints []string
 			ctx := context.WithValue(context.Background(), publicationLeaseGuardKey{}, publicationLeaseGuard(func(_ context.Context, checkpoint string) error {

@@ -7,6 +7,7 @@ import { TabStateRouter } from "@/components/console/tab-state-router";
 import { getAuditData, getAuditEvent, getDataGovernanceData } from "@/lib/control-api";
 import type { AuditData } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 const dateFormatter = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "medium", timeZone: "UTC" });
 type AuditTab = "events" | "exports";
@@ -35,7 +36,7 @@ export default async function AuditPage({ params, searchParams }: { params: Prom
   start.setUTCDate(start.getUTCDate() - 30);
   const dateInputValue = (value: Date) => value.toISOString().slice(0, 10);
   return <div className="space-y-7">
-    <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end"><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">Governance evidence</p><h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">Audit trail</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">Inspect append-only workspace changes and their recorded metadata.</p></div><DataFreshness detail={data.detail} state={data.source} /></div>
+    <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end"><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">Governance evidence</p><div className="mt-2 flex min-w-0 items-center gap-2"><h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">Audit trail</h1><HelpHint label="Audit trail">Inspect append-only workspace changes and their recorded metadata.</HelpHint></div></div><DataFreshness detail={data.detail} state={data.source} /></div>
     <TabStateRouter className="flex gap-1 overflow-x-auto border-b border-[var(--ls-line)]" label="Audit views"><AuditTabLink href={`/${org}/audit?tab=events`} label="Events" selected={tab === "events"} /><AuditTabLink href={`/${org}/audit?tab=exports`} label="Export jobs" selected={tab === "exports"} /></TabStateRouter>
     {tab === "exports" ? <AuditExportManager detail={governance?.detail} endDate={dateInputValue(today)} jobs={governance?.jobs ?? []} org={org} source={governance?.source ?? "unconfigured"} startDate={dateInputValue(start)} /> : <>
       <form className="grid gap-3 rounded-[16px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-4 shadow-[var(--ls-shadow-control)] sm:grid-cols-2 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto]" method="get"><input name="tab" type="hidden" value="events" /><Field defaultValue={actor} label="Actor" name="actor" placeholder="user subject" /><Field defaultValue={action} label="Action prefix" mono name="action" placeholder="notification_" /><Field defaultValue={target} label="Target contains" mono name="target" placeholder="repository or object" /><Field defaultValue={from} label="From (UTC)" name="from" type="date" /><Field defaultValue={through} label="Through (UTC)" name="through" type="date" /><button className="luminous-focus mt-auto inline-flex h-10 items-center justify-center gap-2 rounded-[10px] bg-[var(--ls-accent)] px-5 text-sm font-medium text-white" type="submit"><Search className="size-4" />Filter</button></form>

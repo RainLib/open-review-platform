@@ -3,6 +3,7 @@ package providerchecks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,20 @@ const (
 var commitSHA = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
 
 type Snapshot = domain.ProviderCheckObservation
+
+type commitStatusReadForbidden struct{}
+
+func (*commitStatusReadForbidden) Error() string {
+	return "GitHub commit-status read returned HTTP 403"
+}
+
+func providerReadFailureCode(err error) string {
+	var denied *commitStatusReadForbidden
+	if errors.As(err, &denied) {
+		return "github_commit_status_read_forbidden"
+	}
+	return "provider_read_failed"
+}
 
 type Client struct {
 	Resolver                  credentials.Resolver
@@ -288,6 +303,9 @@ func (c Client) getJSON(ctx context.Context, endpoint, token string, provider do
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		if provider == domain.ProviderGitHub && response.StatusCode == http.StatusForbidden && strings.HasSuffix(request.URL.Path, "/status") {
+			return &commitStatusReadForbidden{}
+		}
 		return fmt.Errorf("provider checks returned HTTP %d", response.StatusCode)
 	}
 	content, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))

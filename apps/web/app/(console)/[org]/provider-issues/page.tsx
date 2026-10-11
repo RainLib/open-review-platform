@@ -1,4 +1,5 @@
 import { getUiLanguage } from "@/lib/ui-language-server";
+import { HelpHint } from "@/components/console/help-hint";
 import { workflowStatus, workflowText, type WorkflowMessageValues } from "@/lib/workflow-copy";
 import type { UiLanguage } from "@/lib/ui-language";
 import type { ReactNode } from "react";
@@ -72,13 +73,12 @@ export default async function ProviderIssuesPage({
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
               {t(" Provider Issue triage ")}</h1>
+            <HelpHint label={t("Provider Issue triage")}>{t(" AI analysis of Issues authored in GitHub or GitLab. Each row is the latest revision of one provider Issue; code-review finding aggregates remain separate. ")}</HelpHint>
             <DataFreshness
               language={language}
               state={data.source === "live" ? "live" : data.source === "demo" ? "demo" : "unavailable"}
             />
           </div>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            {t(" AI analysis of Issues authored in GitHub or GitLab. Each row is the latest revision of one provider Issue; code-review finding aggregates remain separate. ")}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Link

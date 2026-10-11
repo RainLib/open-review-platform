@@ -12,6 +12,8 @@ import {
 import { getAgentTaskData, getAgentTaskPolicyData, getPlatformHealthData, getProviderInstallationData, getReviewConfigData } from "@/lib/control-api";
 import { agentDraftReviewReadiness, agentInstallationForPolicy, agentInstallationForTask, agentProviderReadiness, agentRepositoryAdmissionReadiness } from "@/lib/agent-task-data";
 import { getDeploymentProfile } from "@/lib/deployment-profile";
+import { SectionDisclosure } from "@/components/console/section-disclosure";
+import { HelpHint } from "@/components/console/help-hint";
 
 export default async function AgentWorkPage({
   params,
@@ -91,13 +93,12 @@ export default async function AgentWorkPage({
     <div className="space-y-5">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
             <h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
               {t(" Agent work ")}</h1>
+            <HelpHint label={t("Agent work")}>{t(" A governed Issue-to-PR control plane. Every request is classified first, then requires a bounded plan and explicit approval before a separately deployed coding executor can receive it. ")}</HelpHint>
             <DataFreshness language={language} state={data.source} />
           </div>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            {t(" A governed Issue-to-PR control plane. Every request is classified first, then requires a bounded plan and explicit approval before a separately deployed coding executor can receive it. ")}</p>
         </div>
         <Link
           className="luminous-focus inline-flex h-10 items-center justify-center gap-2 rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-4 text-sm font-semibold text-[var(--ls-text)] hover:bg-[var(--ls-surface-muted)]"
@@ -106,19 +107,15 @@ export default async function AgentWorkPage({
           <ExternalLink className="size-4 text-[var(--ls-accent)]" />
           {t(" Provider Issue triage ")}</Link>
       </header>
-      <section aria-labelledby="agent-readiness-title" className="overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
-        <div className="border-b border-[var(--ls-line)] px-5 py-4">
-          <h2 className="text-base font-semibold text-[var(--ls-text)]" id="agent-readiness-title">{t("Before the first Agent task")}</h2>
-          <p className="mt-1 text-sm text-[var(--ls-text-secondary)]">{t("Six independent gates. Creating a Draft does not guarantee review admission or a completed feedback cycle.")}</p>
-        </div>
+      <SectionDisclosure title={t("Connection and execution readiness")} description={steps.some(step=>step.attention)?t("Some prerequisites need attention. Open to inspect the next steps."):t("Inspect connections, repository policies and worker readiness.")} count={steps.filter(step=>step.attention).length ? t("Needs attention") : undefined} bodyClassName="p-0 sm:p-0">
         <ol className="grid gap-px bg-[var(--ls-line)] sm:grid-cols-2 xl:grid-cols-3">
           {steps.map((step, index) => (
             <li className="min-w-0 bg-[var(--ls-surface)] px-5 py-4" key={step.label}>
               <div className="flex flex-col items-start gap-2">
-                <span className="text-xs font-semibold tracking-wide text-[var(--ls-text-tertiary)]">0{index + 1} · {t(step.label)}</span>
+                <div className="flex items-center gap-1.5"><span className="text-xs font-semibold tracking-wide text-[var(--ls-text-tertiary)]">0{index + 1} · {t(step.label)}</span><HelpHint label={t(step.label)}>{t(step.detail)}</HelpHint></div>
                 <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${step.attention ? "bg-amber-500/[0.09] text-[var(--ls-warning-text)]" : "bg-[var(--ls-surface-muted)] text-[var(--ls-text-secondary)]"}`}>{t(step.status)}</span>
               </div>
-              <p className="mt-3 min-h-12 text-xs leading-5 text-[var(--ls-text-secondary)]">{t(step.detail)}</p>
+              {step.attention ? <p className="mt-2 text-xs leading-5 text-[var(--ls-warning-text)]">{t(step.detail)}</p> : null}
               <Link className="luminous-focus mt-2 inline-flex min-h-8 items-center text-xs font-semibold text-[var(--ls-accent)] hover:underline" href={step.href}>{t(step.action)} <span aria-hidden="true" className="ml-1">→</span></Link>
             </li>
           ))}
@@ -135,7 +132,7 @@ export default async function AgentWorkPage({
             <p>{t("A signed adapter probe proves endpoint reachability only. Configuration, queue rows, and probe results do not prove model quality, sandbox isolation, provider write access, or a completed Draft PR.")}</p>
           </div>
         </details>
-      </section>
+      </SectionDisclosure>
       {health.source === "live" && executor?.state === "not_configured" ? (
         <aside className="rounded-[14px] border border-[color-mix(in_srgb,var(--ls-warning)_30%,transparent)] bg-[color-mix(in_srgb,var(--ls-warning)_6%,var(--ls-surface))] px-5 py-4 text-sm leading-6 text-[var(--ls-text-secondary)]" role="status">
           <p className="font-semibold text-[var(--ls-text)]">{t("Coding Agent is not connected")}</p>

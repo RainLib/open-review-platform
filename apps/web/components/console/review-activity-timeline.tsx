@@ -8,6 +8,7 @@ import type { RunEvent } from "@/lib/control-api";
 import { formatTime } from "@/lib/format";
 import { filterRunEvents, isRunEvent, mergeRunEvents, visibleRunEventPayload } from "@/lib/review-activity";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 type Connection = "connecting" | "live" | "reconnecting" | "offline" | "snapshot";
 
@@ -101,7 +102,7 @@ export function ReviewActivityTimeline({ initialEvents, org, runID, streamEnable
 
   return <div className="space-y-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h2 className="text-lg font-semibold text-[var(--ls-text)]">Run activity</h2><p className="mt-1 max-w-2xl text-sm leading-6 text-[var(--ls-text-secondary)]">Immutable run transitions, newest first. Model reasoning and credentials are not shown.</p></div>
+      <div><div className="flex min-w-0 items-center gap-2"><h2 className="text-lg font-semibold text-[var(--ls-text)]">Run activity</h2><HelpHint label="Run activity">Immutable run transitions, newest first. Model reasoning and credentials are not shown.</HelpHint></div></div>
       <div className="flex items-center gap-2"><span aria-live="polite" className={cn("inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium", connection === "live" ? "bg-emerald-500/10 text-[var(--ls-success-text)]" : "bg-[var(--ls-surface-muted)] text-[var(--ls-text-secondary)]")}><Radio className="size-3.5" />{label}</span><button className="luminous-focus inline-flex h-9 items-center gap-1.5 rounded-[9px] border border-[var(--ls-line)] px-3 text-xs font-medium text-[var(--ls-accent)] hover:bg-[var(--ls-accent-soft)]" onClick={() => { setRefreshSuggested(false); reconnectAttempts.current = 0; setConnection(streamEnabled ? "connecting" : "snapshot"); setConnectionEpoch((current) => current + 1); router.refresh(); }} type="button"><RotateCw className="size-3.5" />Refresh snapshot</button></div>
     </div>
     {refreshSuggested ? <div className="flex gap-2 rounded-[10px] border border-amber-500/20 bg-amber-500/[0.06] p-3 text-xs leading-5 text-[var(--ls-warning-text)]"><CircleAlert className="mt-0.5 size-4 shrink-0" /><span>A newer revision or interrupted stream was observed. Refresh the durable snapshot to reconcile the complete timeline; an open stream alone does not prove completeness.</span></div> : null}

@@ -17,6 +17,7 @@ import {
 
 import type { ReviewRun, RuleImpactPreview, RuleSet, RuleTestRun } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 const inputClassName =
   "luminous-focus mt-2 h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface-muted)] px-3.5 text-sm text-[var(--ls-text)] outline-none placeholder:text-[var(--ls-text-tertiary)] disabled:cursor-not-allowed disabled:opacity-45";
@@ -179,9 +180,7 @@ export function RuleTestLab({
             <FlaskConical className="size-4" />
           </span>
           <div>
-            <h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Preview an exact policy version")}</h2>
-            <p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">
-              {t(" Compile against one exact provider endpoint and current active bindings without creating a review run or writing to GitHub or GitLab. ")}</p>
+            <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Preview an exact policy version")}</h2><HelpHint label={t("Preview an exact policy version")}>{t(" Compile against one exact provider endpoint and current active bindings without creating a review run or writing to GitHub or GitLab. ")}</HelpHint></div>
           </div>
         </div>
         <div className="mt-5 grid gap-4 lg:grid-cols-4">
@@ -225,9 +224,7 @@ export function RuleTestLab({
           <div className="flex items-start gap-3">
             <span className="grid size-9 place-items-center rounded-[10px] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]"><PlayCircle className="size-4" /></span>
             <div>
-              <h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Run an isolated historical replay")}</h2>
-              <p className="mt-1 max-w-2xl text-xs leading-5 text-[var(--ls-text-secondary)]">
-                {t(" Re-run OCR on an exact completed PR revision with this immutable policy snapshot. The isolated worker has no publisher, check, or merge-gate capability. ")}</p>
+              <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Run an isolated historical replay")}</h2><HelpHint label={t("Run an isolated historical replay")}>{t(" Re-run OCR on an exact completed PR revision with this immutable policy snapshot. The isolated worker has no publisher, check, or merge-gate capability. ")}</HelpHint></div>
             </div>
           </div>
           <span className="w-fit rounded-full bg-[color:color-mix(in_srgb,var(--ls-success)_12%,transparent)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--ls-success)]">{t("Provider writes disabled")}</span>
@@ -249,7 +246,7 @@ export function RuleTestLab({
       </section>
 
       <section className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)]">
-          <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Isolated run history")}</h2><p className="mt-1 text-[11px] text-[var(--ls-text-tertiary)]">{t("Active jobs continue after navigation. Refresh manually to read their latest durable state.")}</p></div><button className="luminous-focus inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[8px] border border-[var(--ls-line-strong)] px-2.5 text-xs text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]" disabled={!enabled || refreshingTestRuns} onClick={() => void refreshTestRuns()} type="button">{refreshingTestRuns ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}{t("Refresh")}</button></div>
+          <div className="flex items-center justify-between gap-3"><div><div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Isolated run history")}</h2><HelpHint label={t("Isolated run history")}>{t("Active jobs continue after navigation. Refresh manually to read their latest durable state.")}</HelpHint></div></div><button className="luminous-focus inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[8px] border border-[var(--ls-line-strong)] px-2.5 text-xs text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]" disabled={!enabled || refreshingTestRuns} onClick={() => void refreshTestRuns()} type="button">{refreshingTestRuns ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}{t("Refresh")}</button></div>
           {!testRunsLoaded ? <p className="mt-4 text-xs text-[var(--ls-text-tertiary)]">{t("Loading durable test receipts…")}</p> : null}
           {testRuns.length ? (
           <div className="mt-4 space-y-2">

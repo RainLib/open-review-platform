@@ -1,5 +1,7 @@
 "use client";
 
+import { SectionDisclosure } from "./section-disclosure";
+
 import { useWorkflowText } from "@/components/console/ui-language-context";
 
 import { useState } from "react";
@@ -7,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { CirclePlus, LoaderCircle, ShieldCheck, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { HelpHint } from "@/components/console/help-hint";
 
 type Enforcement = "mandatory" | "advisory";
 type Severity = "low" | "medium" | "high" | "critical";
@@ -129,16 +132,14 @@ export function RuleSetComposer({
   }
 
   return (
-    <section className="rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6">
+    <SectionDisclosure title={t("New policy draft")} id="create-rule">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
         <div>
           <div className="flex items-center gap-2 text-sm font-medium text-[var(--ls-text)]">
             <span className="grid size-8 place-items-center rounded-[10px] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]">
               <ShieldCheck className="size-4" />
             </span>
-            {t(" New policy draft ")}</div>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            {t(" Compose structured review rules. The server validates the normalized rules before storing an immutable draft; publication still requires governed approval. ")}</p>
+            {t(" New policy draft ")}<HelpHint label={t("New policy draft")}>{t(" Compose structured review rules. The server validates the normalized rules before storing an immutable draft; publication still requires governed approval. ")}</HelpHint></div>
         </div>
         <span className="inline-flex w-fit rounded-full bg-[var(--ls-accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ls-accent)]">
           {t(" Governance draft ")}</span>
@@ -292,6 +293,6 @@ export function RuleSetComposer({
           {message}
         </p>
       ) : null}
-    </section>
+    </SectionDisclosure>
   );
 }

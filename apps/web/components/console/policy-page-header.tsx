@@ -1,5 +1,6 @@
 import { getUiLanguage } from "@/lib/ui-language-server";
 import { workflowText } from "@/lib/workflow-copy";
+import { HelpHint } from "@/components/console/help-hint";
 import Link from "next/link";
 import {
   Activity,
@@ -56,8 +57,7 @@ export async function PolicyPageHeader({
       <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">{t(eyebrow)}</p>
-          <h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">{t(title)}</h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">{t(description)}</p>
+          <div className="mt-2 flex items-center gap-2"><h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">{t(title)}</h1><HelpHint label={t(title)}>{t(description)}</HelpHint></div>
         </div>
         <DataFreshness language={language} state={source === "live" ? "live" : source === "demo" ? "demo" : "unavailable"} />
       </div>

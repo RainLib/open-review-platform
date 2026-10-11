@@ -262,7 +262,7 @@ func (s *PostgresStore) FinishAgentWorkflowObservation(ctx context.Context, work
 			state, reason = "checks_failed", "Review requires attention or reports blocking findings"
 		} else if runState == "completed" && conclusion == "success" && enabled {
 			var observation domain.ProviderCheckObservation
-			probeErr := tx.QueryRow(ctx, `SELECT head_sha,state,checks,truncated,observed_at FROM review_provider_check_observations WHERE run_id=$1`, runID).Scan(&observation.HeadSHA, &observation.State, &observation.Checks, &observation.Truncated, &observation.ObservedAt)
+			probeErr := tx.QueryRow(ctx, `SELECT head_sha,state,checks,truncated,observed_at,error_code FROM review_provider_check_observations WHERE run_id=$1`, runID).Scan(&observation.HeadSHA, &observation.State, &observation.Checks, &observation.Truncated, &observation.ObservedAt, &observation.ErrorCode)
 			if probeErr != nil && !errors.Is(probeErr, pgx.ErrNoRows) {
 				return probeErr
 			}
@@ -271,7 +271,9 @@ func (s *PostgresStore) FinishAgentWorkflowObservation(ctx context.Context, work
 				state, reason = "awaiting_acceptance", "Exact-commit review and independent CI passed; verify each acceptance criterion"
 			} else {
 				reason = checkReason
-				if observation.State == "failed" {
+				if observation.ErrorCode == "github_commit_status_read_forbidden" {
+					state, reason = "needs_attention", "GitHub denied commit-status reads. Check the App's Commit statuses read permission, installation approval and provider limits, then refresh independent checks. No acceptance is inferred."
+				} else if observation.State == "failed" {
 					state, reason = "needs_attention", "Independent CI observation exhausted retries; restore provider access and retry this review"
 				} else if checkReason == "independent_checks_not_passed" {
 					state = "checks_failed"

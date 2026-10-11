@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { CopyEvidenceButton } from "@/components/console/copy-evidence-button";
+import { HelpHint } from "@/components/console/help-hint";
 
 type CommandCardProps = {
   command: string;
@@ -34,12 +35,9 @@ export default async function ReviewCommandsPage({
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">
             Provider operations
           </p>
-          <h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
+          <div className="mt-2 flex min-w-0 items-center gap-2"><h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
             Review commands & shortcuts
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            Start and recover a review from a GitHub pull request or GitLab merge request. Every command is acknowledged first, then runs against the provider&apos;s current revision and the admitted policy snapshot.
-          </p>
+          </h1><HelpHint label="Review commands & shortcuts">Start and recover a review from a GitHub pull request or GitLab merge request. Every command is acknowledged first, then runs against the provider&apos;s current revision and the admitted policy snapshot.</HelpHint></div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Link
@@ -63,10 +61,7 @@ export default async function ReviewCommandsPage({
             <GitPullRequest className="size-4" />
           </span>
           <div>
-            <h2 className="text-base font-semibold text-[var(--ls-text)]">Start a provider review</h2>
-            <p className="mt-1 text-sm leading-6 text-[var(--ls-text-secondary)]">
-              Post one command as a top-level comment on the target PR or MR. Open Review verifies repository scope and permissions before it creates a durable run; a command in quoted text never starts work.
-            </p>
+            <div className="flex min-w-0 items-center gap-2"><h2 className="text-base font-semibold text-[var(--ls-text)]">Start a provider review</h2><HelpHint label="Start a provider review">Post one command as a top-level comment on the target PR or MR. Open Review verifies repository scope and permissions before it creates a durable run; a command in quoted text never starts work.</HelpHint></div>
           </div>
         </div>
         <div className="mt-5 grid gap-3 lg:grid-cols-3">

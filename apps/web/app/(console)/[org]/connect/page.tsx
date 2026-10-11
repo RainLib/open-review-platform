@@ -26,6 +26,7 @@ import {
 } from "@/lib/control-api";
 import { providerIssueTarget } from "@/lib/provider-review-url";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 type ConnectionTab =
   | "installations"
@@ -191,10 +192,7 @@ function RepositoryInventory({
               <GitBranch className="size-4" />
             </span>
             <div>
-              <h2 className="font-semibold text-[var(--ls-text)]">Repository inventory</h2>
-              <p className="mt-1 text-sm text-[var(--ls-text-secondary)]">
-                Read-only metadata synchronized by the provider worker and filtered by this connection’s recorded scope.
-              </p>
+              <div className="flex min-w-0 items-center gap-2"><h2 className="font-semibold text-[var(--ls-text)]">Repository inventory</h2><HelpHint label="Repository inventory">Read-only metadata synchronized by the provider worker and filtered by this connection’s recorded scope.</HelpHint></div>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -329,13 +327,10 @@ function ConnectionActivity({
     <section className="overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
       <div className="flex flex-col justify-between gap-3 border-b border-[var(--ls-line)] px-5 py-4 sm:flex-row sm:items-center">
         <div>
-          <h2 className="text-sm font-semibold text-[var(--ls-text)]">
+          <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">
             Connection activity
-          </h2>
-          <p className="mt-1 text-xs leading-5 text-[var(--ls-text-tertiary)]">
-            Append-only installation and verification events. Credentials,
-            provider payloads, and callback secrets are excluded.
-          </p>
+          </h2><HelpHint label="Connection activity">Append-only installation and verification events. Credentials,
+            provider payloads, and callback secrets are excluded.</HelpHint></div>
         </div>
         <span className="w-fit rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">
           {data.events.length} events · UTC{data.source === "demo" ? " · preview" : ""}
@@ -398,14 +393,11 @@ function WebhookReceipts({
               <RadioTower className="size-4" />
             </span>
             <div>
-              <h2 className="font-semibold text-[var(--ls-text)]">
+              <div className="flex min-w-0 items-center gap-2"><h2 className="font-semibold text-[var(--ls-text)]">
                 Accepted webhook deliveries
-              </h2>
-              <p className="mt-1 max-w-2xl text-sm leading-5 text-[var(--ls-text-secondary)]">
-                Durable callbacks admitted into a review or Issue-analysis job. Raw
+              </h2><HelpHint label="Accepted webhook deliveries">Durable callbacks admitted into a review or Issue-analysis job. Raw
                 payloads, signatures, and provider delivery identifiers are
-                intentionally excluded.
-              </p>
+                intentionally excluded.</HelpHint></div>
             </div>
           </div>
           <Link

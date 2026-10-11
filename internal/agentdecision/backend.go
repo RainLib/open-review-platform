@@ -248,6 +248,11 @@ func EvaluateSnapshot(ctx context.Context, task domain.AgentTask, snapshot domai
 	var title, body string
 	var labels []string
 	switch task.OriginKind {
+	case "campaign":
+		if snapshot.Campaign == nil || !snapshot.Campaign.Valid() {
+			return nil, fmt.Errorf("verified campaign request is missing")
+		}
+		title, body = "Complete workspace campaign", snapshot.Campaign.Requirements+"\nAcceptance criteria:\n"+strings.Join(snapshot.Campaign.Criteria, "\n")
 	case "issue":
 		if snapshot.Issue == nil {
 			return nil, fmt.Errorf("verified Issue snapshot is missing")

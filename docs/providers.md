@@ -3,7 +3,7 @@
 ## GitHub
 
 Configure a GitHub App with pull-request read/write, issues read/write, contents
-read, metadata read, and webhook events for `pull_request`, `issue_comment`,
+read, metadata read, checks read/write and commit statuses read, and webhook events for `pull_request`, `issue_comment`,
 and `issues`. GitHub's current GitHub App registration does not expose a
 selectable `reaction` webhook event; provider reaction feedback therefore
 requires a separate polling/synchronization capability and must not be treated
@@ -11,6 +11,14 @@ as an App-registration checkbox. The control API checks
 `X-Hub-Signature-256` with constant-time HMAC-SHA256 comparison and uses
 `X-GitHub-Delivery` as the idempotency key. Only `opened`, `reopened`, and
 `synchronize` events become review jobs.
+
+Independent check observation reads both Check Runs and combined commit statuses
+at the exact reviewed SHA. The Checks permission does not grant Commit statuses
+access. Existing App installations must accept newly requested permissions;
+otherwise a status read can return HTTP 403 even when the platform's own check
+was published successfully. The provider probe reports the App's declared check
+permissions separately from real check observations. Restoring permission and
+refreshing independent checks does not start another coding attempt.
 
 Production publishing obtains a short-lived installation token from the
 GitHub App private key mounted into the runner, interaction responder,

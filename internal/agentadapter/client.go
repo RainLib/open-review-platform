@@ -34,6 +34,7 @@ type Submission struct {
 		SourceBaseRef   string                           `json:"source_base_ref"`
 		SourceBaseSHA   string                           `json:"source_base_sha"`
 		BranchName      string                           `json:"branch_name"`
+		Campaign        *domain.AgentCampaignBinding     `json:"campaign,omitempty"`
 		Feedback        *domain.AgentTaskFeedbackBinding `json:"feedback,omitempty"`
 	} `json:"task"`
 	Plan struct {
@@ -129,6 +130,7 @@ func (client *Client) Submit(ctx context.Context, target domain.AgentTaskAttempt
 	requestBody.Task.SourceBaseSHA = target.Task.SourceBaseSHA
 	requestBody.Task.BranchName = target.Task.ExecutionBranch
 	requestBody.Task.Feedback = target.Feedback
+	requestBody.Task.Campaign = target.Campaign
 	requestBody.Plan.AcceptanceCriteria = target.Plan.Sections.AcceptanceCriteria
 	requestBody.Plan.Revision = target.Plan.Revision
 	requestBody.Plan.SHA256 = target.Plan.PlanSHA256
@@ -139,7 +141,7 @@ func (client *Client) Submit(ctx context.Context, target domain.AgentTaskAttempt
 	if target.Attempt.DeadlineAt != nil {
 		requestBody.Limits.DeadlineAt = target.Attempt.DeadlineAt.UTC().Format(time.RFC3339Nano)
 	}
-	if target.Task.InstallationID == uuid.Nil || (requestBody.Task.ExecutorProfile != "codex" && requestBody.Task.ExecutorProfile != "claude") || requestBody.Limits.MaxAttempts < 1 || requestBody.Limits.MaxExecutionSeconds < 60 || requestBody.Limits.DeadlineAt == "" || (target.Task.OriginKind == "pull_request" && (target.Feedback == nil || !target.Feedback.ExecutionValid())) || (target.Task.OriginKind == "issue" && target.Feedback != nil) || (target.Task.OriginKind != "issue" && target.Task.OriginKind != "pull_request") {
+	if target.Task.InstallationID == uuid.Nil || (requestBody.Task.ExecutorProfile != "codex" && requestBody.Task.ExecutorProfile != "claude") || requestBody.Limits.MaxAttempts < 1 || requestBody.Limits.MaxExecutionSeconds < 60 || requestBody.Limits.DeadlineAt == "" || (target.Task.OriginKind == "pull_request" && (target.Feedback == nil || !target.Feedback.ExecutionValid())) || (target.Task.OriginKind == "issue" && target.Feedback != nil) || (target.Task.OriginKind != "issue" && target.Task.OriginKind != "pull_request" && target.Task.OriginKind != "campaign") || (target.Task.OriginKind == "campaign" && (target.Campaign == nil || !target.Campaign.Valid() || target.Task.OriginRevision != target.Campaign.OriginRevision())) {
 		return "", fmt.Errorf("agent task execution envelope is invalid")
 	}
 	body, err := json.Marshal(requestBody)

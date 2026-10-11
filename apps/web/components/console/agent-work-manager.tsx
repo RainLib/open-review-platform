@@ -3,6 +3,8 @@
 import { useUiLanguage, useWorkflowStatus, useWorkflowText } from "@/components/console/ui-language-context";
 
 import Link from "next/link";
+import { SectionDisclosure } from "./section-disclosure";
+import { TabStateRouter } from "./tab-state-router";
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -33,6 +35,7 @@ import { CopyEvidenceButton } from "@/components/console/copy-evidence-button";
 import { providerIssueTarget, providerReviewCommentTarget, providerReviewTarget } from "@/lib/provider-review-url";
 import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/format";
+import { FieldLabel, HelpHint } from "@/components/console/help-hint";
 
 type Notice = { tone: "error" | "success"; message: string } | undefined;
 
@@ -70,8 +73,8 @@ export function AgentWorkManager({
   }, [pending, router, startTransition, watching]);
 
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5 xl:grid-cols-[minmax(0,1fr)_430px]">
-      <div className="min-w-0 space-y-5">
+    <div className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-5", (data.selected || data.selectedTaskRequested) && "xl:grid-cols-[320px_minmax(0,1fr)]")}>
+      <div className="min-w-0 space-y-5 order-2 xl:order-1">
         {notice ? <NoticeBanner notice={notice} /> : null}
         {data.source === "partial" ? (
           <div className="flex flex-wrap items-center gap-3 rounded-[12px] border border-amber-500/25 bg-amber-500/[0.045] px-4 py-3 text-sm text-[var(--ls-text-secondary)]" role="status">
@@ -82,68 +85,17 @@ export function AgentWorkManager({
             </button>
           </div>
         ) : null}
-        <section className="scroll-mt-24 overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]" id="agent-repository-admission">
-          <div className="flex flex-col gap-3 border-b border-[var(--ls-line)] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-base font-semibold text-[var(--ls-text)]">
-                {t(" Repository admission ")}</h2>
-              <p className="mt-1 text-sm text-[var(--ls-text-secondary)]">
-                {t(" No policy or Reserved mode admits tasks. Manual mode still requires an approved plan before a coding Agent can start. ")}</p>
-            </div>
-            <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs font-medium text-[var(--ls-text-secondary)]">
-              <ShieldCheck className="size-3.5 text-[var(--ls-accent)]" />{" "}
-              {t(" policy first ")}</span>
-          </div>
-          <PolicyForm
-            disabled={!isOperational || pending || !data.availability.installations || !data.availability.policies}
-            onSaved={() => {
-              setNotice({
-                tone: "success",
-                message:
-                  t("Repository policy saved. Existing tasks remain subject to their frozen classification and plan approval."),
-              });
-              refresh();
-            }}
-            org={org}
-            installations={data.installations}
-            policies={data.policies}
-          />
-          {data.policies.length ? (
-            <div className="divide-y divide-[var(--ls-line)] border-t border-[var(--ls-line)]">
-              {data.policies.length >= 100 ? (
-                <p className="px-5 py-3 text-xs leading-5 text-[var(--ls-text-secondary)]">{t("Showing the first 100 policies. Search and select any authorized repository above to load its exact policy and revision before editing.")}</p>
-              ) : null}
-              {data.policies.map((policy) => (
-                <PolicyRow key={policy.id} policy={policy} />
-              ))}
-            </div>
-          ) : data.availability.policies ? (
-            <div className="space-y-2 px-5 py-5 text-sm text-[var(--ls-text-secondary)]">
-              <p>{t("No repositories are enabled for Agent tasks.")}</p>
-              {data.availability.installations && data.installations.length === 0 ? (
-                <Link className="luminous-focus inline-flex min-h-10 items-center rounded-[9px] font-semibold text-[var(--ls-accent)] hover:underline" href={`/${encodeURIComponent(org)}/connect`}>
-                  {t(" Connect and verify a Git provider ")}<ChevronRight className="ml-1 size-4" />
-                </Link>
-              ) : null}
-            </div>
-          ) : (
-            <p className="px-5 py-5 text-sm text-[var(--ls-warning-text)]">
-              {t(" Repository policies could not be loaded. Editing is paused until their revisions are available. ")}</p>
-          )}
-        </section>
 
-        <section className="overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
-          <div className="flex items-start justify-between gap-4 border-b border-[var(--ls-line)] px-5 py-4">
-            <div>
-              <h2 className="text-base font-semibold text-[var(--ls-text)]">
-                {t(" Agent task queue ")}</h2>
-              <p className="mt-1 text-sm text-[var(--ls-text-secondary)]">
-                {t(" Created by a verified Issue command, an explicitly enabled Issue label, a bounded revise command on an Agent Draft, or a governed API request. No CLI execution occurs here. ")}</p>
-              {watching ? <p className="mt-1 text-xs text-[var(--ls-accent)]">{t("Live progress updates every 8 seconds while this tab is visible.")}</p> : null}
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs font-semibold tabular-nums text-[var(--ls-text-secondary)]">
+
+        <section id="agent-task-queue" className="scroll-mt-24 overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
+          <div className="flex items-start justify-between gap-3 border-b border-[var(--ls-line)] px-5 py-4">
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-2"><h2 className="text-base font-semibold text-[var(--ls-text)]">
+                {t(" Agent task queue ")}</h2><HelpHint label={t(" Agent task queue ")}><p>{t(" Created by a verified Issue command, an explicitly enabled Issue label, a bounded revise command on an Agent Draft, or a governed API request. No CLI execution occurs here. ")}</p>{watching ? <p className="mt-2">{t("Live progress updates every 8 seconds while this tab is visible.")}</p> : null}</HelpHint></div>
+              <span className="mt-2 inline-flex rounded-md bg-[var(--ls-surface-muted)] px-2 py-1 text-xs tabular-nums text-[var(--ls-text-secondary)]">
                 {data.tasks.length} {t(" on page ")}</span>
+            </div>
+            <div className="shrink-0">
               <button
                 aria-label={t("Refresh Agent tasks")}
                 className="luminous-focus inline-flex size-8 items-center justify-center rounded-[9px] border border-[var(--ls-line-strong)] text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)] disabled:opacity-50"
@@ -157,7 +109,7 @@ export function AgentWorkManager({
             </div>
           </div>
           {data.tasks.length ? (
-            <div className="divide-y divide-[var(--ls-line)]">
+            <div className="divide-y divide-[var(--ls-line)] xl:max-h-[65vh] xl:overflow-y-auto">
               {data.tasks.map((task) => (
                 <TaskRow
                   href={`/${encodeURIComponent(org)}/agent-work?task=${encodeURIComponent(task.id)}${data.taskCursor ? `&cursor=${encodeURIComponent(data.taskCursor)}` : ""}`}
@@ -195,8 +147,46 @@ export function AgentWorkManager({
             </nav>
           ) : null}
         </section>
+        <SectionDisclosure id="agent-repository-admission" title={t("Repository admission")} description={t("Configure authorized repositories and execution limits.")} count={data.policies.length} bodyClassName="p-0 sm:p-0">
+          <PolicyForm
+            disabled={!isOperational || pending || !data.availability.installations || !data.availability.policies}
+            onSaved={() => {
+              setNotice({
+                tone: "success",
+                message:
+                  t("Repository policy saved. Existing tasks remain subject to their frozen classification and plan approval."),
+              });
+              refresh();
+            }}
+            org={org}
+            installations={data.installations}
+            policies={data.policies}
+          />
+          {data.policies.length ? (
+            <div className="divide-y divide-[var(--ls-line)] border-t border-[var(--ls-line)]">
+              {data.policies.length >= 100 ? (
+                <p className="px-5 py-3 text-xs leading-5 text-[var(--ls-text-secondary)]">{t("Showing the first 100 policies. Search and select any authorized repository above to load its exact policy and revision before editing.")}</p>
+              ) : null}
+              {data.policies.map((policy) => (
+                <PolicyRow key={policy.id} policy={policy} />
+              ))}
+            </div>
+          ) : data.availability.policies ? (
+            <div className="space-y-2 px-5 py-5 text-sm text-[var(--ls-text-secondary)]">
+              <p>{t("No repositories are enabled for Agent tasks.")}</p>
+              {data.availability.installations && data.installations.length === 0 ? (
+                <Link className="luminous-focus inline-flex min-h-10 items-center rounded-[9px] font-semibold text-[var(--ls-accent)] hover:underline" href={`/${encodeURIComponent(org)}/connect`}>
+                  {t(" Connect and verify a Git provider ")}<ChevronRight className="ml-1 size-4" />
+                </Link>
+              ) : null}
+            </div>
+          ) : (
+            <p className="px-5 py-5 text-sm text-[var(--ls-warning-text)]">
+              {t(" Repository policies could not be loaded. Editing is paused until their revisions are available. ")}</p>
+          )}
+        </SectionDisclosure>
       </div>
-      <TaskInspector
+      {data.selected || data.selectedTaskRequested ? <TaskInspector
         detail={data.selected}
         disabled={!isOperational || pending}
         key={data.selected?.task.id ?? "none"}
@@ -206,7 +196,7 @@ export function AgentWorkManager({
         }}
         org={org}
         selectionUnavailable={data.selectedTaskRequested && !data.availability.selected}
-      />
+      /> : null}
     </div>
   );
 }
@@ -278,7 +268,7 @@ function PolicyForm({
   const provider = installation?.provider ?? "github";
   const baseURL = installation?.api_base_url ?? "";
   const currentInventory =
-    inventory?.installationID === selectedInstallationID && inventory.query === searchTerm ? inventory : undefined;
+    inventory && inventory.installationID === selectedInstallationID && inventory.query === searchTerm ? inventory : undefined;
   const repositories = currentInventory?.repositories ?? [];
   const inventoryState = !selectedInstallationID
     ? "unavailable"
@@ -445,9 +435,8 @@ max_attempts: maxAttempts,
       className="grid min-w-0 gap-3 p-4 sm:grid-cols-2"
     >
       {policies.length ? (
-        <label className="grid gap-1.5 text-xs font-medium text-[var(--ls-text-secondary)] sm:col-span-2">
-          {t(" Edit an existing repository policy ")}<select
-            className="luminous-focus h-10 min-w-0 rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)]"
+        <div className="min-w-0 sm:col-span-2"><FieldLabel htmlFor="agent-policy-selection" label={t(" Edit an existing repository policy ")} help={t("Selection verifies the repository inventory and reloads the exact policy revision before saving.")} /><select id="agent-policy-selection"
+            className="luminous-focus h-10 w-full min-w-0 rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)]"
             disabled={disabled || pending}
             onChange={(event) => {
               const selected = policies.find((item) => item.id === event.target.value);
@@ -477,9 +466,7 @@ max_attempts: maxAttempts,
                 {policy.provider === "github" ? "GitHub" : "GitLab"} · {policy.repository} · {policy.mode}
               </option>
             ))}
-          </select>
-          <span className="text-[11px] font-normal text-[var(--ls-text-tertiary)]">{t("Selection verifies the repository inventory and reloads the exact policy revision before saving.")}</span>
-        </label>
+          </select></div>
       ) : null}
       <div className="min-w-0">
         <select
@@ -515,15 +502,13 @@ max_attempts: maxAttempts,
         ) : null}
       </div>
       <fieldset className="grid gap-3 rounded-xl border border-[var(--ls-line)] p-4 sm:col-span-2">
-        <legend className="px-1 text-sm font-semibold">{t("Task delivery workflow")}</legend>
+        <legend className="px-1 text-sm font-semibold"><span className="flex items-center gap-2">{t("Task delivery workflow")}{workflowEnabled ? <HelpHint label={t("Task delivery workflow")}>{t("New tasks require a deployment-approved verification profile. Initial and repair plans still need owner/admin approval. Blocking findings, diagnosed code CI failures and owner acceptance feedback prepare repair tasks automatically. A blank CI list requires at least one independent check and all observed independent checks to pass. Existing task budgets stay frozen.")}</HelpHint> : null}</span></legend>
         <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={workflowEnabled} disabled={disabled || pending || mode !== "manual"} onChange={event=>setWorkflowEnabled(event.target.checked)} />{t("Auto-plan, verify and repair, re-review, then human acceptance")}</label>
         {workflowEnabled ? <>
-          <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={requireCriterionEvidence} disabled={disabled || pending} onChange={event=>setRequireCriterionEvidence(event.target.checked)} />{t("Require independent evidence for every acceptance criterion")}</label>
-          <p className="text-xs leading-5">{t("The fixed verifier must report a passing result for each criterion. A general test-suite pass alone cannot satisfy this option.")}</p>
+          <div className="flex items-center gap-2"><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={requireCriterionEvidence} disabled={disabled || pending} onChange={event=>setRequireCriterionEvidence(event.target.checked)} />{t("Require independent evidence for every acceptance criterion")}</label><HelpHint label={t("Require independent evidence for every acceptance criterion")}>{t("The fixed verifier must report a passing result for each criterion. A general test-suite pass alone cannot satisfy this option.")}</HelpHint></div>
           <label className="grid gap-1 text-xs">{t("Verification repair cycles")}<input className="luminous-focus h-10 rounded-lg border border-[var(--ls-line)] px-3" type="number" min={0} max={3} value={repairCycles} disabled={disabled || pending} onChange={event=>setRepairCycles(Number(event.target.value))} /></label>
           <label className="grid gap-1 text-xs">{t("Total attempts across plans and feedback")}<input className="luminous-focus h-10 rounded-lg border border-[var(--ls-line)] px-3" type="number" min={1} max={5} value={taskAttempts} disabled={disabled || pending} onChange={event=>setTaskAttempts(Number(event.target.value))} /></label>
           <label className="grid gap-1 text-xs">{t("Required independent CI checks, separated by commas")}<input className="luminous-focus h-10 rounded-lg border border-[var(--ls-line)] px-3" value={requiredChecks} maxLength={1800} disabled={disabled || pending} onChange={event=>setRequiredChecks(event.target.value)} placeholder="CI / tests, CI / build" /></label>
-          <p className="text-xs leading-5 text-[var(--ls-text-secondary)]">{t("New tasks require a deployment-approved verification profile. Initial and repair plans still need owner/admin approval. Blocking findings, diagnosed code CI failures and owner acceptance feedback prepare repair tasks automatically. A blank CI list requires at least one independent check and all observed independent checks to pass. Existing task budgets stay frozen.")}</p>
         </> : null}
       </fieldset>
       <select
@@ -539,8 +524,7 @@ max_attempts: maxAttempts,
         <option value="codex">Codex</option>
         <option value="claude">Claude CLI</option>
       </select>
-      <label className="grid gap-1.5 text-xs font-medium text-[var(--ls-text-secondary)] sm:col-span-2">
-        {t(" Search authorized repositories ")}<input
+      <div className="min-w-0 sm:col-span-2"><FieldLabel htmlFor="agent-repository-search" label={t(" Search authorized repositories ")} help={t("Showing up to 500 matches from this installation. Narrow the search to find larger inventories.")} /><input id="agent-repository-search"
           className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)] placeholder:text-[var(--ls-text-tertiary)]"
           disabled={disabled || pending || !selectedInstallationID}
           maxLength={120}
@@ -554,9 +538,7 @@ max_attempts: maxAttempts,
           placeholder={t("Search by repository name, including beyond the first 500")}
           type="search"
           value={repositorySearch}
-        />
-        <span className="text-[11px] font-normal text-[var(--ls-text-tertiary)]">{t("Showing up to 500 matches from this installation. Narrow the search to find larger inventories.")}</span>
-      </label>
+        /></div>
       <select
         aria-label={t("Verified repository")}
         className="luminous-focus h-10 min-w-0 rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm"
@@ -669,8 +651,8 @@ max_attempts: maxAttempts,
             <option value="deterministic">{t("Rules only (legacy/offline)")}</option>
           </select>
         </label>
-        <span className="leading-5 text-[var(--ls-text-tertiary)]">
-          {t(" Hosted Jev sends verified Issue evidence to TypeSafe. Configure the selected endpoint on the source worker; a missing or invalid response stops admission. No automatic execution is enabled. ")}</span>
+        <HelpHint label={t("Decision backend")}>
+          {t(" Hosted Jev sends verified Issue evidence to TypeSafe. Configure the selected endpoint on the source worker; a missing or invalid response stops admission. No automatic execution is enabled. ")}</HelpHint>
       </div>
       <div className="flex flex-wrap items-center gap-3 border-t border-[var(--ls-line)] pt-3 text-xs text-[var(--ls-text-secondary)] sm:col-span-2">
         <label className="flex items-center gap-2 font-medium text-[var(--ls-text)]">
@@ -691,14 +673,13 @@ max_attempts: maxAttempts,
           placeholder="openreview:implement"
           value={autoAdmissionLabel}
         />
-        <span className="max-w-2xl leading-5 text-[var(--ls-text-tertiary)]">
-          {t(" Creates only a governed candidate. Source capture, decision evaluation, and owner/admin plan approval still block every executor. ")}</span>
+        <HelpHint label={t("Create candidate from labeled Issues")}>
+          {t(" Creates only a governed candidate. Source capture, decision evaluation, and owner/admin plan approval still block every executor. ")}</HelpHint>
       </div>
       <p className="sm:col-span-2 text-xs leading-5 text-[var(--ls-text-tertiary)]">
         {t("Frozen limits: {attempts} isolated execution(s), up to {minutes} minutes each, using {executor}. Manual mode requires classification, a bounded plan and owner/admin approval.", { attempts: maxAttempts, minutes: Math.floor(maxExecutionSeconds / 60), executor: executorProfile })}</p>
-	  <label className="grid gap-1.5 text-sm font-medium text-[var(--ls-text)] sm:col-span-2">
-		{t(" Bounded manual Draft PR feedback cycles ")}<select
-		  className="h-10 rounded-[10px] border border-[var(--ls-line)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)] disabled:cursor-not-allowed disabled:opacity-55"
+	  <div className="min-w-0 sm:col-span-2"><FieldLabel htmlFor="agent-feedback-cycles" label={t(" Bounded manual Draft PR feedback cycles ")} help={<>{t(" A trusted ")}<code>@openreview revise …</code> {t(" on the Draft PR starts a new plan-and-approval cycle; it never auto-runs or merges. ")}</>} /><select id="agent-feedback-cycles"
+		  className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)] disabled:cursor-not-allowed disabled:opacity-55"
 		  disabled={disabled || pending || mode !== "manual"}
 		  onChange={(event) => setMaxFeedbackCycles(Number(event.target.value))}
 		  value={mode === "manual" ? maxFeedbackCycles : 0}
@@ -707,10 +688,7 @@ max_attempts: maxAttempts,
 		  <option value={1}>{t("One revision")}</option>
 		  <option value={2}>{t("Two revisions")}</option>
 		  <option value={3}>{t("Three revisions")}</option>
-		</select>
-		<span className="text-xs font-normal leading-5 text-[var(--ls-text-tertiary)]">
-		  {t(" A trusted ")}<code>@openreview revise …</code> {t(" on the Draft PR starts a new plan-and-approval cycle; it never auto-runs or merges. ")}</span>
-	  </label>
+		</select></div>
       <button
         className="luminous-focus h-10 rounded-[10px] bg-[var(--ls-accent)] px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-2"
         disabled={disabled || pending || !repositoryVerified || !policyReady}
@@ -758,7 +736,7 @@ function TaskRow({
     <Link
       aria-current={selected ? "page" : undefined}
       className={cn(
-        "flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-[var(--ls-surface-muted)]",
+        "luminous-focus flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-[var(--ls-surface-muted)]",
         selected && "bg-[color-mix(in_srgb,var(--ls-accent)_8%,transparent)]",
       )}
       href={href}
@@ -769,18 +747,11 @@ function TaskRow({
         <p className="truncate text-sm font-semibold text-[var(--ls-text)]">
           {task.repository}
           <span className="ml-1.5 font-normal text-[var(--ls-text-secondary)]">
-            #{task.origin_number}
+            {task.origin_kind === "campaign" ? t("Campaign request") : `#${task.origin_number}`}
           </span>
         </p>
-        <p className="mt-1 truncate text-xs text-[var(--ls-text-tertiary)]">
-          {task.origin_kind === "pull_request" ? t("pull request") : "Issue"} {t(" · revision ")}{task.revision} {t(" · requested by ")}{task.requested_by}
-        </p>
-        <p className="mt-1 text-xs text-[var(--ls-text-tertiary)]">
-          {t(" frozen envelope · ")}{task.executor_profile} · {task.max_attempts} {task.max_attempts === 1 ? t("attempt") : t("attempts")} ·{" "}
-          {Math.floor(task.max_execution_seconds / 60)} {t(" min ")}{task.feedback_cycle ? t(" · feedback depth {depth}", { depth: task.feedback_cycle }) : ""}
-        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2"><StatePill state={task.state} /><span className="text-xs text-[var(--ls-text-tertiary)]">{task.executor_profile}</span></div>
       </div>
-      <StatePill state={task.state} />
       <ChevronRight className="size-4 text-[var(--ls-text-tertiary)]" />
     </Link>
   );
@@ -802,6 +773,7 @@ function TaskInspector({
   const t = useWorkflowText();
   const language = useUiLanguage();
   const status = useWorkflowStatus();
+  const [view, setView] = useState(detail?.task.state === "awaiting_approval" ? "plan" : "overview");
   if (selectionUnavailable)
     return (
       <aside className="h-fit rounded-[18px] border border-amber-500/25 bg-amber-500/[0.045] p-6 text-sm text-[var(--ls-text-secondary)]">
@@ -831,7 +803,7 @@ function TaskInspector({
     detail.task.source_state === "ready" &&
     Boolean(detail.task.source_base_ref) &&
     Boolean(detail.task.source_base_sha);
-  const providerTarget = detail.task.origin_kind === "pull_request"
+  const providerTarget = detail.task.origin_kind === "campaign" ? undefined : detail.task.origin_kind === "pull_request"
     ? providerReviewTarget({
         provider: detail.task.provider,
         api_base_url: detail.task.api_base_url,
@@ -860,14 +832,14 @@ function TaskInspector({
     api_base_url: detail.task.api_base_url,
   });
   return (
-    <aside className="h-fit overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
+    <aside className="order-1 min-w-0 h-fit overflow-hidden rounded-[18px] xl:order-2 border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
       <div className="border-b border-[var(--ls-line)] p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-text-tertiary)]">
               {t(" Agent task ")}</p>
             <h2 className="mt-1 text-base font-semibold text-[var(--ls-text)]">
-              {detail.task.repository} #{detail.task.origin_number}
+              {detail.task.repository} {detail.task.origin_kind === "campaign" ? t("Campaign request") : `#${detail.task.origin_number}`}
             </h2>
           </div>
           {providerTarget ? (
@@ -889,18 +861,14 @@ function TaskInspector({
             <RiskPill risk={classification.risk_level} />
           ) : null}
         </div>
-        <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2 text-xs text-[var(--ls-text-tertiary)]">
-          <span>{t("Task ID")}</span>
-          <code className="min-w-0 break-all font-mono">{detail.task.id}</code>
-          <CopyEvidenceButton label={t("Copy task ID")} value={detail.task.id} />
-        </div>
-        <p className="mt-3 text-xs text-[var(--ls-text-tertiary)]">
-          {t(" Frozen policy v")}{detail.task.policy_revision} · {detail.task.decision_backend} {t(" decision · ")}{detail.task.executor_profile} · {detail.task.max_attempts}{" "}
-          {detail.task.max_attempts === 1 ? t("attempt") : t("attempts")} {t(" · up to")}{" "}
-          {Math.floor(detail.task.max_execution_seconds / 60)} {t(" min per attempt ")}{detail.task.feedback_cycle ? t(" · feedback depth {depth}", { depth: detail.task.feedback_cycle }) : detail.task.max_feedback_cycles ? t(" · up to {count} Draft PR feedback cycles", { count: detail.task.max_feedback_cycles }) : t(" · manual Draft PR feedback disabled")}
-        </p>
+
       </div>
-      <div className="space-y-5 p-5">
+      <div className="border-b border-[var(--ls-line)] px-5 pt-3">
+        <TabStateRouter label={t("Task detail views")} className="flex gap-1 overflow-x-auto">
+          {[{key:"overview",label:t("Overview")},{key:"plan",label:t("Plan and approval")},{key:"execution",label:t("Execution history")},{key:"source",label:t("Source and admission")}].map(tab => <button key={tab.key} id={`task-tab-${tab.key}`} role="tab" aria-selected={view === tab.key} aria-controls={`task-panel-${tab.key}`} tabIndex={view === tab.key ? 0 : -1} className={cn("luminous-focus shrink-0 border-b-2 px-3 py-3 text-sm font-medium",view===tab.key?"border-[var(--ls-accent)] text-[var(--ls-accent)]":"border-transparent text-[var(--ls-text-secondary)]")} onClick={()=>setView(tab.key)}>{tab.label}</button>)}
+        </TabStateRouter>
+      </div>
+      <div className="space-y-5 p-4 sm:p-5">
 		{detail.execution_budget ? (
 		  <section className="rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">
 			<h3 className="text-sm font-semibold text-[var(--ls-text)]">{t("Execution budget · ")}{detail.execution_budget.used}/{detail.execution_budget.limit}</h3>
@@ -916,6 +884,124 @@ function TaskInspector({
 			<code className="mt-2 block text-xs text-[var(--ls-text-tertiary)]">{detail.execution_block.code}</code>
 		  </section>
 		) : null}
+
+        <div id="task-panel-overview" role="tabpanel" aria-labelledby="task-tab-overview" hidden={view!=="overview"} className="space-y-5">
+          {!detail.acceptance ? <section className="rounded-lg bg-[var(--ls-surface-muted)] p-4"><h3 className="text-sm font-semibold">{t("Current progress")}</h3><p className="mt-2 text-sm">{status(detail.task.state)}</p>{detail.attempts[0] && detail.attempts[0].state !== "needs_attention" ? <AttemptSummary attempt={detail.attempts[0]} /> : null}</section> : null}
+          {admissionBlocked ? <p role="status" className="rounded-lg border border-amber-500/30 p-4 text-sm text-[var(--ls-warning-text)]">{classification?.decision === "rejected" ? t("This {resource} revision is not eligible for Agent execution.", {resource:t(originGuidance.resource)}) : t("More trusted {resource} context is required before planning.", {resource:t(originGuidance.resource)})}</p> : null}
+        <AcceptanceControls key={`${detail.task.id}:${detail.acceptance?.head_sha}:${detail.acceptance?.revision}`} detail={detail} disabled={disabled} onChanged={onChanged} org={org} />
+
+          {detail.attempts.find(attempt=>attempt.pull_request_url) ? <a className="luminous-focus inline-flex items-center gap-2 rounded-lg bg-[var(--ls-accent)] px-4 py-2.5 text-sm font-medium text-[var(--ls-on-accent)]" href={detail.attempts.find(attempt=>attempt.pull_request_url)?.pull_request_url} target="_blank" rel="noreferrer">{t("Open draft pull request")}<ExternalLink className="size-4" /></a> : null}
+          {detail.attempts[0]?.state === "needs_attention" ? <AttemptSummary attempt={detail.attempts[0]} checkpoint={detail.publication_checkpoints?.find(item=>item.attempt_id===detail.attempts[0].id)} /> : null}
+          {!sourceReady ? <div className="rounded-lg border border-amber-500/30 p-4 text-sm"><p>{t(detail.task.source_state === "failed" ? originGuidance.sourceFailure : originGuidance.sourcePending)}</p><button className="luminous-focus mt-3 font-medium text-[var(--ls-accent)]" onClick={()=>setView("source")}>{t("View source details")}</button></div> : null}
+          {detail.task.state==="awaiting_approval"?<button className="luminous-focus rounded-lg bg-[var(--ls-accent)] px-4 py-2.5 text-sm text-[var(--ls-on-accent)]" onClick={()=>setView("plan")}>{t("Review pending plan")}</button>:null}
+        {detail.attempts.some((attempt) => attempt.state === "succeeded") ? (
+          <section className="rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]">
+              <ClipboardCheck className="size-4 text-[var(--ls-accent)]" />
+              {t(" Code review of Agent changes ")}</h3>
+            {detail.linked_reviews.length ? (
+              <div className="mt-3 space-y-2">
+                {detail.linked_reviews.map((review) => {
+                  const outcome = agentLinkedReviewOutcome(review, language);
+                  return (
+                    <Link
+                      className="luminous-focus flex items-center justify-between gap-3 rounded-[10px] border border-[var(--ls-line)] bg-[var(--ls-surface)] px-3 py-2.5 text-sm hover:border-[var(--ls-line-strong)]"
+                      href={`/${encodeURIComponent(org)}/reviews/${encodeURIComponent(review.run_id)}`}
+                      key={review.run_id}
+                    >
+                      <span className="min-w-0">
+                        <span className="block font-medium text-[var(--ls-text)]">{t("PR #")}{review.review_number} · {outcome.label}</span>
+                        <span className={cn("mt-1 block text-xs leading-5", outcome.tone === "danger" ? "text-[var(--ls-danger-text)]" : outcome.tone === "success" ? "text-[var(--ls-success-text)]" : "text-[var(--ls-text-secondary)]")}>{outcome.detail}</span>
+                        <span className="block truncate font-mono text-[11px] text-[var(--ls-text-tertiary)]">{review.head_sha}</span>
+                      </span>
+                      <ChevronRight className="size-4 shrink-0 text-[var(--ls-text-tertiary)]" />
+                    </Link>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs leading-5 text-[var(--ls-text-secondary)]">
+                {t(" No review run is linked to this exact Agent commit yet. Check webhook delivery and the repository's Draft review policy; marking the PR ready or explicitly requesting a review can start the normal review flow when reviews are enabled. ")}<Link className="font-semibold text-[var(--ls-accent)] hover:underline" href={`/${encodeURIComponent(org)}/review-config/general?${reviewSettingsQuery}`}>{t("Repository review settings")}</Link>
+              </p>
+            )}
+            <p className="mt-2 text-[11px] leading-5 text-[var(--ls-text-tertiary)]">
+              {t(" A linked review is analysis evidence, not permission to merge. Branch protection and human approval remain authoritative. ")}</p>
+          </section>
+        ) : null}
+
+          {isCancellableAgentTask(detail.task.state)?<SectionDisclosure title={t("Task controls")}>        {isCancellableAgentTask(detail.task.state) ? (
+          <TaskCancellation
+            detail={detail}
+            disabled={disabled}
+            onChanged={onChanged}
+            org={org}
+          />
+        ) : null}
+</SectionDisclosure>:null}
+        </div>
+        <div id="task-panel-plan" role="tabpanel" aria-labelledby="task-tab-plan" hidden={view!=="plan"} className="space-y-5">
+        {!sourceReady ? null : admissionBlocked ? (
+          <section className="rounded-[12px] border border-[color-mix(in_srgb,var(--ls-warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--ls-warning)_7%,transparent)] p-4 text-sm leading-6 text-[var(--ls-text-secondary)]">
+            <p className="font-semibold text-[var(--ls-warning-text)]">
+              {classification?.decision === "rejected"
+                ? t("This {resource} revision is not eligible for Agent execution.", {resource: t(originGuidance.resource)})
+                : t("More trusted {resource} context is required before planning.", {resource: t(originGuidance.resource)})}
+            </p>
+            <p className="mt-1">
+              {t(originGuidance.recovery)} {t(" Use ")}<code className="mx-1 rounded bg-[var(--ls-surface)] px-1.5 py-0.5 text-xs">
+                {originGuidance.command}
+              </code>
+              {t(" rather than overriding this classification in the Console. ")}</p>
+          </section>
+        ) : (
+          <PlanControls
+            detail={detail}
+            disabled={disabled}
+            newestPlan={newestPlan}
+            onChanged={onChanged}
+            org={org}
+          />
+        )}
+        </div>
+        <div id="task-panel-execution" role="tabpanel" aria-labelledby="task-tab-execution" hidden={view!=="execution"} className="space-y-5">
+		<AttemptHistory attempts={detail.attempts} checkpoints={detail.publication_checkpoints ?? []} />
+
+        </div>
+        <div id="task-panel-source" role="tabpanel" aria-labelledby="task-tab-source" hidden={view!=="source"} className="space-y-5">
+          <SectionDisclosure title={t("Task identity and limits")}>
+        <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2 text-xs text-[var(--ls-text-tertiary)]">
+          <span>{t("Task ID")}</span>
+          <code className="min-w-0 break-all font-mono">{detail.task.id}</code>
+          <CopyEvidenceButton label={t("Copy task ID")} value={detail.task.id} />
+        </div>
+        <p className="mt-3 text-xs text-[var(--ls-text-tertiary)]">
+          {t(" Frozen policy v")}{detail.task.policy_revision} · {detail.task.decision_backend} {t(" decision · ")}{detail.task.executor_profile} · {detail.task.max_attempts}{" "}
+          {detail.task.max_attempts === 1 ? t("attempt") : t("attempts")} {t(" · up to")}{" "}
+          {Math.floor(detail.task.max_execution_seconds / 60)} {t(" min per attempt ")}{detail.task.feedback_cycle ? t(" · feedback depth {depth}", { depth: detail.task.feedback_cycle }) : detail.task.max_feedback_cycles ? t(" · up to {count} Draft PR feedback cycles", { count: detail.task.max_feedback_cycles }) : t(" · manual Draft PR feedback disabled")}
+        </p>
+          </SectionDisclosure>
+        <section className="rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]">
+            <ShieldCheck className="size-4 text-[var(--ls-accent)]" />
+            {t(" Immutable source ")}</h3>
+          {sourceReady ? (
+            <>
+              <p className="mt-2 text-sm text-[var(--ls-text-secondary)]">
+                {detail.task.source_base_ref}
+              </p>
+              <p className="mt-1 break-all font-mono text-[11px] text-[var(--ls-text-tertiary)]">
+                {detail.task.source_base_sha}
+              </p>
+            </>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-[var(--ls-text-secondary)]">
+              {t(detail.task.source_state === "failed" ? originGuidance.sourceFailure : originGuidance.sourcePending)}
+            </p>
+          )}
+          {detail.task.source_state === "failed" && detail.task.state === "needs_attention" ? (
+            <SourceRetry detail={detail} disabled={disabled} onChanged={onChanged} org={org} />
+          ) : null}
+        </section>
         {detail.feedback ? (
           <section className="rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]">
@@ -998,94 +1084,8 @@ function TaskInspector({
             </p>
           </section>
         ) : null}
-        <AcceptanceControls key={`${detail.task.id}:${detail.acceptance?.head_sha}:${detail.acceptance?.revision}`} detail={detail} disabled={disabled} onChanged={onChanged} org={org} />
-        <section className="rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">
-          <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]">
-            <ShieldCheck className="size-4 text-[var(--ls-accent)]" />
-            {t(" Immutable source ")}</h3>
-          {sourceReady ? (
-            <>
-              <p className="mt-2 text-sm text-[var(--ls-text-secondary)]">
-                {detail.task.source_base_ref}
-              </p>
-              <p className="mt-1 break-all font-mono text-[11px] text-[var(--ls-text-tertiary)]">
-                {detail.task.source_base_sha}
-              </p>
-            </>
-          ) : (
-            <p className="mt-2 text-sm leading-6 text-[var(--ls-text-secondary)]">
-              {t(detail.task.source_state === "failed" ? originGuidance.sourceFailure : originGuidance.sourcePending)}
-            </p>
-          )}
-          {detail.task.source_state === "failed" && detail.task.state === "needs_attention" ? (
-            <SourceRetry detail={detail} disabled={disabled} onChanged={onChanged} org={org} />
-          ) : null}
-        </section>
-		<AttemptHistory attempts={detail.attempts} checkpoints={detail.publication_checkpoints ?? []} />
-        {detail.attempts.some((attempt) => attempt.state === "succeeded") ? (
-          <section className="rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4">
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]">
-              <ClipboardCheck className="size-4 text-[var(--ls-accent)]" />
-              {t(" Code review of Agent changes ")}</h3>
-            {detail.linked_reviews.length ? (
-              <div className="mt-3 space-y-2">
-                {detail.linked_reviews.map((review) => {
-                  const outcome = agentLinkedReviewOutcome(review, language);
-                  return (
-                    <Link
-                      className="luminous-focus flex items-center justify-between gap-3 rounded-[10px] border border-[var(--ls-line)] bg-[var(--ls-surface)] px-3 py-2.5 text-sm hover:border-[var(--ls-line-strong)]"
-                      href={`/${encodeURIComponent(org)}/reviews/${encodeURIComponent(review.run_id)}`}
-                      key={review.run_id}
-                    >
-                      <span className="min-w-0">
-                        <span className="block font-medium text-[var(--ls-text)]">{t("PR #")}{review.review_number} · {outcome.label}</span>
-                        <span className={cn("mt-1 block text-xs leading-5", outcome.tone === "danger" ? "text-[var(--ls-danger-text)]" : outcome.tone === "success" ? "text-[var(--ls-success-text)]" : "text-[var(--ls-text-secondary)]")}>{outcome.detail}</span>
-                        <span className="block truncate font-mono text-[11px] text-[var(--ls-text-tertiary)]">{review.head_sha}</span>
-                      </span>
-                      <ChevronRight className="size-4 shrink-0 text-[var(--ls-text-tertiary)]" />
-                    </Link>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="mt-2 text-xs leading-5 text-[var(--ls-text-secondary)]">
-                {t(" No review run is linked to this exact Agent commit yet. Check webhook delivery and the repository's Draft review policy; marking the PR ready or explicitly requesting a review can start the normal review flow when reviews are enabled. ")}<Link className="font-semibold text-[var(--ls-accent)] hover:underline" href={`/${encodeURIComponent(org)}/review-config/general?${reviewSettingsQuery}`}>{t("Repository review settings")}</Link>
-              </p>
-            )}
-            <p className="mt-2 text-[11px] leading-5 text-[var(--ls-text-tertiary)]">
-              {t(" A linked review is analysis evidence, not permission to merge. Branch protection and human approval remain authoritative. ")}</p>
-          </section>
-        ) : null}
-        {isCancellableAgentTask(detail.task.state) ? (
-          <TaskCancellation
-            detail={detail}
-            disabled={disabled}
-            onChanged={onChanged}
-            org={org}
-          />
-        ) : null}
-        {!sourceReady ? null : admissionBlocked ? (
-          <section className="rounded-[12px] border border-[color-mix(in_srgb,var(--ls-warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--ls-warning)_7%,transparent)] p-4 text-sm leading-6 text-[var(--ls-text-secondary)]">
-            <p className="font-semibold text-[var(--ls-warning-text)]">
-              {classification?.decision === "rejected"
-                ? t("This {resource} revision is not eligible for Agent execution.", {resource: t(originGuidance.resource)})
-                : t("More trusted {resource} context is required before planning.", {resource: t(originGuidance.resource)})}
-            </p>
-            <p className="mt-1">
-              {t(originGuidance.recovery)} {t(" Use ")}<code className="mx-1 rounded bg-[var(--ls-surface)] px-1.5 py-0.5 text-xs">
-                {originGuidance.command}
-              </code>
-              {t(" rather than overriding this classification in the Console. ")}</p>
-          </section>
-        ) : (
-          <PlanControls
-            detail={detail}
-            disabled={disabled}
-            newestPlan={newestPlan}
-            onChanged={onChanged}
-            org={org}
-          />
-        )}
+
+        </div>
       </div>
     </aside>
   );
@@ -1343,7 +1343,7 @@ function AttemptSummary({
           <p className="font-mono text-xs font-semibold text-[var(--ls-warning-text)]">
             {attempt.error_code}
           </p>
-          <p className="mt-1">{attempt.error_message}</p>
+          <p className="mt-1">{t(attempt.error_message ?? "")}</p>
           {needsAttention ? (
             <p className="mt-2">
               {attempt.error_code === "agent_executor_not_configured"

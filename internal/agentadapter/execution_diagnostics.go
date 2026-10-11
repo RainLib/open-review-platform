@@ -5,6 +5,21 @@ import (
 	"fmt"
 )
 
+// Keep broker and provider error bodies out of diagnostics while preserving
+// the phase that needs operator recovery before another execution attempt.
+type repositoryCredentialFailure struct{ cause error }
+
+type campaignDeploymentScopeFailure struct{}
+
+func (*campaignDeploymentScopeFailure) Error() string {
+	return "approved campaign paths are outside the deployment write allowlist"
+}
+
+func (e *repositoryCredentialFailure) Error() string {
+	return "repository credential issuance unavailable"
+}
+func (e *repositoryCredentialFailure) Unwrap() error { return e.cause }
+
 // Model budget diagnostics contain only adapter-owned counters. Child output,
 // upstream response bodies, prompts and credentials never enter a callback.
 type modelBudgetExhaustionError struct {
@@ -77,6 +92,14 @@ func codingModelFailure(err error, broker *modelBroker) error {
 }
 
 func executionFailureResult(err error) (string, string) {
+	var scope *campaignDeploymentScopeFailure
+	if errors.As(err, &scope) {
+		return "agent_campaign_deployment_scope_unavailable", "The approved campaign write paths are outside the deployment-owned path allowlist. Configure the approved paths before approving a retry plan. Coding and provider publication were not started."
+	}
+	var credential *repositoryCredentialFailure
+	if errors.As(err, &credential) {
+		return "agent_repository_credential_unavailable", "The repository coding credential could not be issued or refreshed. Check the deployment-owned coding installation mapping, repository authorization and current task lease before approving a retry plan. No completed delivery receipt was produced."
+	}
 	var budget *modelBudgetExhaustionError
 	if errors.As(err, &budget) {
 		return "agent_adapter_model_budget_exhausted", fmt.Sprintf("Coding stopped at the fixed model budget (requests %d, output reservation %d tokens, input %d bytes). No completed delivery receipt was produced. Retry requires a new approved plan.", budget.requests, budget.reservedTokens, budget.requestBytes)

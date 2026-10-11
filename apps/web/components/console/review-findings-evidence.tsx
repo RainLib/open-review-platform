@@ -8,6 +8,7 @@ import type { ReviewEvidence, ReviewFindingEvidence } from "@/lib/control-api";
 import { blockingFindings, filterReviewFindings, findingPrompt, findingPublicationState, type FindingFilters, type FindingPublicationState, type FindingSeverityView } from "@/lib/review-findings";
 import { providerFileTarget } from "@/lib/provider-review-url";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 function findingsURL(org: string, runID: string, filters: FindingFilters, finding?: string) {
   const params = new URLSearchParams({ tab: "findings" });
@@ -37,7 +38,7 @@ export function ReviewFindingsEvidence({ evidence, filters, focusedFinding, org 
     { id: "low", label: "Low", count: evidence.findings.filter((finding) => finding.severity === "low").length },
   ];
   return <div className="space-y-5">
-    <div><h2 className="text-lg font-semibold text-[var(--ls-text)]">Findings</h2><p className="mt-1 text-sm leading-6 text-[var(--ls-text-secondary)]">Actionable findings retained for this exact review run. Select a finding for its evidence, recommended direction and copyable LLM prompt.</p></div>
+    <div><div className="flex min-w-0 items-center gap-2"><h2 className="text-lg font-semibold text-[var(--ls-text)]">Findings</h2><HelpHint label="Findings">Actionable findings retained for this exact review run. Select a finding for its evidence, recommended direction and copyable LLM prompt.</HelpHint></div></div>
     <div className="flex gap-1 overflow-x-auto border-b border-[var(--ls-line)]" aria-label="Finding severity views">
       {summary.map((item) => item.id === "blocking" && blocking === undefined
         ? <span className="inline-flex h-10 shrink-0 items-center gap-1.5 px-3 text-xs text-[var(--ls-text-tertiary)]" key={item.id} title="No enabled immutable merge-gate threshold was retained">Blocking <span>—</span></span>

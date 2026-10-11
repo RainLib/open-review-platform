@@ -23,6 +23,7 @@ import { findingEvidenceURL } from "@/lib/finding-evidence-url";
 import { findingPreviewText } from "@/lib/finding-format";
 import { providerFileTarget, providerReviewTarget } from "@/lib/provider-review-url";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 function percentage(value: number, total: number) {
   return total > 0 ? Math.round((value / total) * 100) : 0;
@@ -167,9 +168,7 @@ export function FindingFeedbackDashboardView({
 
       <section className="overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
         <div className="border-b border-[var(--ls-line)] px-5 py-4">
-          <h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Repository evidence")}</h2>
-          <p className="mt-1 text-xs leading-5 text-[var(--ls-text-tertiary)]">
-            {t(" Only active feedback is counted. Deleted reactions remain auditable but no longer affect these measurements. ")}</p>
+          <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Repository evidence")}</h2><HelpHint label={t("Repository evidence")}>{t(" Only active feedback is counted. Deleted reactions remain auditable but no longer affect these measurements. ")}</HelpHint></div>
         </div>
         {data.repositories.length ? (
           <div className="divide-y divide-[var(--ls-line)]">
@@ -221,9 +220,7 @@ export function FindingFeedbackDashboardView({
 
       <section className="overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
         <div className="border-b border-[var(--ls-line)] px-5 py-4">
-          <h2 className="text-sm font-semibold text-[var(--ls-text)]">{t(findingHeading)}</h2>
-          <p className="mt-1 text-xs leading-5 text-[var(--ls-text-tertiary)]">
-            {t(" Reviewer dispositions are actor-scoped and auditable; they never rewrite the original AI result. ")}</p>
+          <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">{t(findingHeading)}</h2><HelpHint label={t(findingHeading)}>{t(" Reviewer dispositions are actor-scoped and auditable; they never rewrite the original AI result. ")}</HelpHint></div>
         </div>
         {findingsError ? (
           <EmptyFeedback detail={findingsError} title={t("Finding results are unavailable")} />

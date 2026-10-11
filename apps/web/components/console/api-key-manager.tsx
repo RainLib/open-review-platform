@@ -1,5 +1,9 @@
 "use client";
 
+import { SectionDisclosure } from "./section-disclosure";
+
+import { useWorkflowText } from "./ui-language-context";
+
 import { FormEvent, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -27,6 +31,7 @@ import { useModalFocus } from "@/components/console/use-modal-focus";
 import type { DataSource, WorkspaceAPIKey } from "@/lib/control-api";
 import { cliEnvironmentTemplate } from "@/lib/public-control-plane-url";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 type Scope = WorkspaceAPIKey["scopes"][number];
 type CreatedKey = { api_key: WorkspaceAPIKey; secret: string };
@@ -55,6 +60,7 @@ export function APIKeyManager({
   source: DataSource;
   tab: APIKeyTab;
 }) {
+  const t = useWorkflowText();
   const router = useRouter();
   const [creating, setCreating] = useState(false);
   const [pending, setPending] = useState<"create" | string>();
@@ -148,8 +154,7 @@ export function APIKeyManager({
       <header className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">Enterprise control plane</p>
-          <h1 className="mt-2 text-[32px] font-semibold tracking-[-0.045em] text-[var(--ls-text)]">API & CLI keys</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--ls-text-secondary)]">Issue narrow machine credentials for CI and the Open Review CLI. Secret values are shown once and never stored in plaintext.</p>
+          <div className="mt-2 flex min-w-0 items-center gap-2"><h1 className="text-[32px] font-semibold tracking-[-0.045em] text-[var(--ls-text)]">API & CLI keys</h1><HelpHint label="API & CLI keys">Issue narrow machine credentials for CI and the Open Review CLI. Secret values are shown once and never stored in plaintext.</HelpHint></div>
         </div>
         <div className="flex items-center gap-3">
           <DataFreshness state={source === "live" ? "live" : source === "demo" ? "demo" : "unavailable"} />
@@ -184,11 +189,11 @@ export function APIKeyManager({
               </div>
             )}
           </section>
-          <section className="grid gap-4 lg:grid-cols-3">
+          <SectionDisclosure title={t("Credential safeguards")} >
             <Boundary icon={LockKeyhole} title="One-time plaintext">The control plane returns a secret only on creation. Closing that view permanently discards the retrievable value.</Boundary>
             <Boundary icon={ShieldCheck} title="Least privilege">Every request must satisfy both its action scope and exact repository allowlist. An empty repository list means all repositories in this workspace.</Boundary>
             <Boundary icon={Clock3} title="Expiry and revocation">Expired or revoked credentials are rejected before a workflow is admitted. Historical audit events retain only the visible prefix.</Boundary>
-          </section>
+          </SectionDisclosure>
         </>
       )}
 
@@ -210,7 +215,7 @@ function StatusPill({ status }: { status: "Active" | "Expired" | "Revoked" }) {
 
 function CreateKeySheet({ busy, onClose, onSubmit }: { busy: boolean; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   const dialogRef = useModalFocus<HTMLDivElement>(onClose);
-  return <div aria-labelledby="create-key-title" aria-modal="true" className="fixed inset-0 z-50 flex justify-end bg-black/25 backdrop-blur-[2px]" ref={dialogRef} role="dialog"><form className="luminous-frosted flex h-full w-full max-w-xl flex-col border-l border-[var(--ls-line-strong)] shadow-[var(--ls-shadow-float)]" onSubmit={onSubmit}><div className="flex items-start justify-between border-b border-[var(--ls-line)] px-6 py-5"><div><p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--ls-accent)]">Governed credential</p><h2 className="mt-2 text-xl font-semibold text-[var(--ls-text)]" id="create-key-title">Create API or CLI key</h2><p className="mt-1 text-sm text-[var(--ls-text-secondary)]">Choose the smallest scope and shortest useful lifetime.</p></div><button aria-label="Close" className="luminous-focus grid size-9 place-items-center rounded-[10px] text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]" onClick={onClose} type="button"><X className="size-4" /></button></div><div className="flex-1 space-y-6 overflow-y-auto p-6"><label className="block"><span className="mb-2 block text-xs font-medium text-[var(--ls-text-secondary)]">Key name</span><input className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)]" data-dialog-initial-focus maxLength={80} name="name" placeholder="Release automation" required /></label><fieldset><legend className="text-xs font-medium text-[var(--ls-text-secondary)]">Action scopes</legend><div className="mt-2 divide-y divide-[var(--ls-line)] overflow-hidden rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface)]">{scopeOptions.map((scope, index) => <label className="flex cursor-pointer gap-3 p-4" key={scope.value}><input className="mt-1 size-4 accent-[var(--ls-accent)]" defaultChecked={index < 2} name={scope.value} type="checkbox" /><span><span className="block text-sm font-medium text-[var(--ls-text)]">{scope.label}</span><span className="mt-1 block text-xs leading-5 text-[var(--ls-text-secondary)]">{scope.detail}</span></span></label>)}</div></fieldset><label className="block"><span className="mb-2 block text-xs font-medium text-[var(--ls-text-secondary)]">Repository allowlist <span className="font-normal text-[var(--ls-text-tertiary)]">(optional)</span></span><textarea className="luminous-focus min-h-28 w-full resize-y rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 py-2.5 font-mono text-sm text-[var(--ls-text)]" name="repositories" placeholder={"RainLib/open-review-platform\nRainLib/platform-api"} /><span className="mt-1.5 block text-[11px] text-[var(--ls-text-tertiary)]">One owner/repository per line. Leave empty for all repositories in this workspace.</span></label><label className="block"><span className="mb-2 block text-xs font-medium text-[var(--ls-text-secondary)]">Lifetime</span><select className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)]" defaultValue="90" name="lifetime"><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option><option value="0">No expiry</option></select></label><div className="rounded-[12px] border border-amber-500/25 bg-amber-500/[0.06] p-4 text-xs leading-5 text-[var(--ls-text-secondary)]"><strong className="text-[var(--ls-warning-text)]">One-time display.</strong> The generated secret cannot be recovered. Losing it requires creating a replacement and revoking this key.</div></div><div className="flex justify-end gap-2 border-t border-[var(--ls-line)] px-6 py-4"><button className="luminous-focus h-10 rounded-[10px] px-4 text-sm text-[var(--ls-text-secondary)]" onClick={onClose} type="button">Cancel</button><button className="luminous-focus inline-flex h-10 items-center gap-2 rounded-[10px] bg-[var(--ls-accent)] px-4 text-sm font-medium text-white disabled:opacity-45" disabled={busy} type="submit">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}Create key</button></div></form></div>;
+  return <div aria-labelledby="create-key-title" aria-modal="true" className="fixed inset-0 z-50 flex justify-end bg-black/25 backdrop-blur-[2px]" ref={dialogRef} role="dialog"><form className="luminous-frosted flex h-full w-full max-w-xl flex-col border-l border-[var(--ls-line-strong)] shadow-[var(--ls-shadow-float)]" onSubmit={onSubmit}><div className="flex items-start justify-between border-b border-[var(--ls-line)] px-6 py-5"><div><p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--ls-accent)]">Governed credential</p><div className="mt-2 flex min-w-0 items-center gap-2"><h2 className="text-xl font-semibold text-[var(--ls-text)]" id="create-key-title">Create API or CLI key</h2><HelpHint label="Create API or CLI key">Choose the smallest scope and shortest useful lifetime.</HelpHint></div></div><button aria-label="Close" className="luminous-focus grid size-9 place-items-center rounded-[10px] text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]" onClick={onClose} type="button"><X className="size-4" /></button></div><div className="flex-1 space-y-6 overflow-y-auto p-6"><label className="block"><span className="mb-2 block text-xs font-medium text-[var(--ls-text-secondary)]">Key name</span><input className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)]" data-dialog-initial-focus maxLength={80} name="name" placeholder="Release automation" required /></label><fieldset><legend className="text-xs font-medium text-[var(--ls-text-secondary)]">Action scopes</legend><div className="mt-2 divide-y divide-[var(--ls-line)] overflow-hidden rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface)]">{scopeOptions.map((scope, index) => <label className="flex cursor-pointer gap-3 p-4" key={scope.value}><input className="mt-1 size-4 accent-[var(--ls-accent)]" defaultChecked={index < 2} name={scope.value} type="checkbox" /><span><span className="block text-sm font-medium text-[var(--ls-text)]">{scope.label}</span><span className="mt-1 block text-xs leading-5 text-[var(--ls-text-secondary)]">{scope.detail}</span></span></label>)}</div></fieldset><label className="block"><span className="mb-2 block text-xs font-medium text-[var(--ls-text-secondary)]">Repository allowlist <span className="font-normal text-[var(--ls-text-tertiary)]">(optional)</span></span><textarea className="luminous-focus min-h-28 w-full resize-y rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 py-2.5 font-mono text-sm text-[var(--ls-text)]" name="repositories" placeholder={"RainLib/open-review-platform\nRainLib/platform-api"} /><span className="mt-1.5 block text-[11px] text-[var(--ls-text-tertiary)]">One owner/repository per line. Leave empty for all repositories in this workspace.</span></label><label className="block"><span className="mb-2 block text-xs font-medium text-[var(--ls-text-secondary)]">Lifetime</span><select className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)]" defaultValue="90" name="lifetime"><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option><option value="0">No expiry</option></select></label><div className="rounded-[12px] border border-amber-500/25 bg-amber-500/[0.06] p-4 text-xs leading-5 text-[var(--ls-text-secondary)]"><strong className="text-[var(--ls-warning-text)]">One-time display.</strong> The generated secret cannot be recovered. Losing it requires creating a replacement and revoking this key.</div></div><div className="flex justify-end gap-2 border-t border-[var(--ls-line)] px-6 py-4"><button className="luminous-focus h-10 rounded-[10px] px-4 text-sm text-[var(--ls-text-secondary)]" onClick={onClose} type="button">Cancel</button><button className="luminous-focus inline-flex h-10 items-center gap-2 rounded-[10px] bg-[var(--ls-accent)] px-4 text-sm font-medium text-white disabled:opacity-45" disabled={busy} type="submit">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}Create key</button></div></form></div>;
 }
 
 function OneTimeSecret({ copied, creation, onClose, onCopy }: { copied: boolean; creation: CreatedKey; onClose: () => void; onCopy: () => void }) {
@@ -230,8 +235,7 @@ function UsageGuide({ org, publicAPIURL }: { org: string; publicAPIURL?: string 
         <div className="flex items-start gap-3">
           <span className="grid size-10 place-items-center rounded-[12px] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]"><SquareTerminal className="size-5" /></span>
           <div>
-            <h2 className="text-lg font-semibold text-[var(--ls-text)]">Open Review CLI</h2>
-            <p className="mt-1 text-sm leading-6 text-[var(--ls-text-secondary)]">Install the open-source client, keep the secret in your CI vault, and submit only an existing PR or MR with exact base and head revisions.</p>
+            <div className="flex min-w-0 items-center gap-2"><h2 className="text-lg font-semibold text-[var(--ls-text)]">Open Review CLI</h2><HelpHint label="Open Review CLI">Install the open-source client, keep the secret in your CI vault, and submit only an existing PR or MR with exact base and head revisions.</HelpHint></div>
           </div>
         </div>
         <GuideCode label="Install" value={install} />

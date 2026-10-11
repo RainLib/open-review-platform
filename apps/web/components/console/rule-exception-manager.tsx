@@ -9,6 +9,7 @@ import { Ban, Check, CircleAlert, Clock3, ExternalLink, LoaderCircle, ShieldOff,
 
 import type { RuleException, RuleSet } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 const inputClass = "luminous-focus mt-2 h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3.5 text-sm text-[var(--ls-text)] outline-none placeholder:text-[var(--ls-text-tertiary)] disabled:opacity-45";
 const stateTone: Record<RuleException["effective_state"], string> = {
@@ -72,7 +73,7 @@ export function RuleExceptionManager({ enabled, exceptions, org, ruleSets, sourc
   return <div className="space-y-5">
     {message ? <div aria-live="polite" className="flex items-start gap-2 rounded-[14px] border border-[var(--ls-line-strong)] bg-[var(--ls-accent-soft)] px-4 py-3 text-sm text-[var(--ls-text)]"><CircleAlert className="mt-0.5 size-4 shrink-0 text-[var(--ls-accent)]" />{message}</div> : null}
     <form className="rounded-[14px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6" onSubmit={createException}>
-      <div className="flex items-start gap-3"><span className="grid size-9 place-items-center rounded-[11px] bg-amber-500/[0.08] text-[var(--ls-warning-text)]"><ShieldOff className="size-4" /></span><div><h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Request a bounded exception")}</h2><p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">{t("The rule key must exist in the selected published version. Requests cannot be self-approved.")}</p></div></div>
+      <div className="flex items-start gap-3"><span className="grid size-9 place-items-center rounded-[11px] bg-amber-500/[0.08] text-[var(--ls-warning-text)]"><ShieldOff className="size-4" /></span><div><div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Request a bounded exception")}</h2><HelpHint label={t("Request a bounded exception")}>{t("The rule key must exist in the selected published version. Requests cannot be self-approved.")}</HelpHint></div></div></div>
       {sourceIssue ? <div className="mt-4 rounded-[12px] border border-[var(--ls-line-strong)] bg-[var(--ls-accent-soft)] px-4 py-3 text-xs leading-5 text-[var(--ls-text-secondary)]"><span className="font-semibold text-[var(--ls-accent)]">{t("Linked issue revision ")}{sourceIssue.revision}</span><span className="mx-2 text-[var(--ls-line-strong)]">·</span>{sourceIssue.bodyPreview}<div className="mt-1 font-mono text-[var(--ls-text-tertiary)]">{sourceIssue.provider}@{providerHost(sourceIssue.apiBaseURL)} · {sourceIssue.repository}</div></div> : null}
       <div className="mt-5 grid gap-4 lg:grid-cols-3">
         <label className="text-xs font-medium text-[var(--ls-text-secondary)]">{t("Published version")}<select className={inputClass} disabled={!enabled || Boolean(busy)} name="rule_version_id" required><option value="">{t("Select version")}</option>{published.map((item) => <option key={item.latest_version?.id} value={item.latest_version?.id}>{item.name} · v{item.latest_version?.version}</option>)}</select></label>

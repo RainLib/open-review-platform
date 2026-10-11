@@ -1,5 +1,9 @@
 "use client";
 
+import { SectionDisclosure } from "./section-disclosure";
+
+import { useWorkflowText } from "./ui-language-context";
+
 import { FormEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -27,6 +31,7 @@ import type {
 } from "@/lib/control-api";
 import { PageState, RecoveryAction } from "@/components/console/page-state";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 const providerPresentation = {
   dingtalk: { label: "DingTalk", icon: MessageCircleMore, tone: "text-sky-500" },
@@ -79,6 +84,7 @@ export function NotificationManager({
   source,
   view,
 }: Props) {
+  const t = useWorkflowText();
   const router = useRouter();
   const [busy, setBusy] = useState<string>();
   const [message, setMessage] = useState<string>();
@@ -343,17 +349,16 @@ export function NotificationManager({
       ) : null}
 
       {!enabled ? <section className="rounded-[14px] border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3 text-sm leading-6 text-[var(--ls-warning-text)]">{source === "demo" ? "Preview data is read-only. It can illustrate destinations, routing, and delivery evidence, but cannot create, pause, test, preview, or retry a notification." : "Notifications are read-only until a live control plane is connected."}</section> : null}
-      <fieldset className="contents" disabled={!enabled}>
+      <fieldset className="min-w-0 space-y-5" disabled={!enabled}>
       <div className="grid gap-4">
         {view === "destinations" ? (
-        <form className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6" onSubmit={submitDestination}>
+        <SectionDisclosure title={t("Add a destination")} ><form className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6" onSubmit={submitDestination}>
           <div className="flex items-start gap-3">
             <span className="grid size-9 place-items-center rounded-[10px] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]">
               <BellRing className="size-4" />
             </span>
             <div>
-              <h2 className="text-sm font-semibold text-[var(--ls-text)]">1. Add a destination</h2>
-              <p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">Credentials stay in deployment environment variables; the database only stores an env reference.</p>
+              <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">1. Add a destination</h2><HelpHint label="1. Add a destination">Credentials stay in deployment environment variables; the database only stores an env reference.</HelpHint></div>
             </div>
           </div>
           <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -388,18 +393,17 @@ export function NotificationManager({
             {busy === "destination" ? <LoaderCircle className="size-4 animate-spin" /> : null}
             Create destination
           </button>
-        </form>
+        </form></SectionDisclosure>
         ) : null}
 
         {view === "routing" ? (
-        <form className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6" onSubmit={submitRoute}>
+        <SectionDisclosure title={t("Route repository events")} ><form className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6" onSubmit={submitRoute}>
           <div className="flex items-start gap-3">
             <span className="grid size-9 place-items-center rounded-[10px] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]">
               <Route className="size-4" />
             </span>
             <div>
-              <h2 className="text-sm font-semibold text-[var(--ls-text)]">2. Route repository events</h2>
-              <p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">Fan out different repositories and severities to the right team channel.</p>
+              <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">2. Route repository events</h2><HelpHint label="2. Route repository events">Fan out different repositories and severities to the right team channel.</HelpHint></div>
             </div>
           </div>
           <label className="mt-5 block text-xs font-medium text-[var(--ls-text-secondary)]">
@@ -439,18 +443,17 @@ export function NotificationManager({
             {busy === "route" ? <LoaderCircle className="size-4 animate-spin" /> : null}
             Enable route
           </button>
-        </form>
+        </form></SectionDisclosure>
         ) : null}
 
         {view === "routing" ? (
-        <form className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6" onSubmit={previewRoute}>
+        <SectionDisclosure title={t("Preview delivery")} ><form className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6" onSubmit={previewRoute}>
           <div className="flex items-start gap-3">
             <span className="grid size-9 place-items-center rounded-[10px] bg-[var(--ls-surface-muted)] text-[var(--ls-accent)]">
               <Route className="size-4" />
             </span>
             <div>
-              <h2 className="text-sm font-semibold text-[var(--ls-text)]">Preview delivery</h2>
-              <p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">See which saved route wins for a destination before a real review event arrives. This never sends a message.</p>
+              <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">Preview delivery</h2><HelpHint label="Preview delivery">See which saved route wins for a destination before a real review event arrives. This never sends a message.</HelpHint></div>
             </div>
           </div>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -482,14 +485,14 @@ export function NotificationManager({
             {busy === "route-preview" ? <LoaderCircle className="size-4 animate-spin" /> : <Route className="size-4" />}
             Preview routing
           </button>
-        </form>
+        </form></SectionDisclosure>
         ) : null}
       </div>
 
       {view === "destinations" ? (
       <div className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6">
         <div className="flex items-center justify-between gap-4">
-          <div><h2 className="text-sm font-semibold text-[var(--ls-text)]">Destinations</h2><p className="mt-1 text-xs text-[var(--ls-text-secondary)]">Pause a robot without deleting its routes or delivery evidence.</p></div>
+          <div><div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">Destinations</h2><HelpHint label="Destinations">Pause a robot without deleting its routes or delivery evidence.</HelpHint></div></div>
           <span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">{destinations.length} targets</span>
         </div>
         <div className="mt-5 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
@@ -518,7 +521,7 @@ export function NotificationManager({
       {view === "routing" ? (
       <div className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6">
         <div className="flex items-center justify-between gap-4">
-          <div><h2 className="text-sm font-semibold text-[var(--ls-text)]">Active routing</h2><p className="mt-1 text-xs text-[var(--ls-text-secondary)]">Lower priority runs first. Terminal events are queued and delivered independently from the review gate.</p></div>
+          <div><div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">Active routing</h2><HelpHint label="Active routing">Lower priority runs first. Terminal events are queued and delivered independently from the review gate.</HelpHint></div></div>
           <span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">{routes.length} routes</span>
         </div>
         {routePreview ? (
@@ -560,7 +563,7 @@ export function NotificationManager({
       {view === "deliveries" ? (
       <div className="rounded-[20px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6">
         <div className="flex items-center justify-between gap-4">
-          <div><h2 className="text-sm font-semibold text-[var(--ls-text)]">Delivery history</h2><p className="mt-1 text-xs text-[var(--ls-text-secondary)]">Provider responses are reduced to safe status metadata; secret-bearing bodies are never retained.</p></div>
+          <div><div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">Delivery history</h2><HelpHint label="Delivery history">Provider responses are reduced to safe status metadata; secret-bearing bodies are never retained.</HelpHint></div></div>
           <span className="rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">Latest {deliveries.length}</span>
         </div>
         <div className="mt-5 overflow-hidden rounded-[12px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)]">

@@ -5,6 +5,7 @@ import { FindingFeedbackDashboardView } from "@/components/console/finding-feedb
 import { TabStateRouter } from "@/components/console/tab-state-router";
 import { getFindingExplorerPage, getFindingFeedbackDashboard } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 type FindingView = "active" | "high-risk" | "actioned";
 
@@ -52,13 +53,10 @@ export default async function FindingsPage({
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">
             Cross-run evidence
           </p>
-          <h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
+          <div className="mt-2 flex min-w-0 items-center gap-2"><h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
             Finding explorer
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            Triage findings across review runs without changing the immutable AI
-            result. Dispositions are actor-scoped, auditable feedback.
-          </p>
+          </h1><HelpHint label="Finding explorer">Triage findings across review runs without changing the immutable AI
+            result. Dispositions are actor-scoped, auditable feedback.</HelpHint></div>
         </div>
         <span
           className={cn(

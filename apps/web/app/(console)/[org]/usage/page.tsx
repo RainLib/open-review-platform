@@ -16,6 +16,7 @@ import { DataFreshness, PageState, RecoveryAction } from "@/components/console/p
 import { TabStateRouter } from "@/components/console/tab-state-router";
 import { getUsageDashboard } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 const count = new Intl.NumberFormat("en");
 const timestamp = new Intl.DateTimeFormat("en", {
@@ -58,14 +59,11 @@ export default async function UsagePage({
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">
             Capacity governance
           </p>
-          <h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
+          <div className="mt-2 flex min-w-0 items-center gap-2"><h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
             Usage & quota
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            Reserve review capacity before execution, settle completed runs,
+          </h1><HelpHint label="Usage & quota">Reserve review capacity before execution, settle completed runs,
             and retain a repository-attributed ledger. Commercial billing
-            remains separate.
-          </p>
+            remains separate.</HelpHint></div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {data.source === "live" ? (
@@ -257,13 +255,10 @@ function Ledger({
     <section className="overflow-hidden rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] shadow-[var(--ls-shadow-control)]">
       <div className="flex flex-col justify-between gap-3 border-b border-[var(--ls-line)] px-5 py-4 sm:flex-row sm:items-center">
         <div>
-          <h2 className="text-sm font-semibold text-[var(--ls-text)]">
+          <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">
             Immutable usage ledger
-          </h2>
-          <p className="mt-1 text-xs text-[var(--ls-text-tertiary)]">
-            Reserve, settle, release, and adjustment events are append-only and
-            idempotent.
-          </p>
+          </h2><HelpHint label="Immutable usage ledger">Reserve, settle, release, and adjustment events are append-only and
+            idempotent.</HelpHint></div>
         </div>
         <span className="w-fit rounded-full bg-[var(--ls-surface-muted)] px-2.5 py-1 text-xs text-[var(--ls-text-secondary)]">
           {data.ledger.length} events
@@ -329,14 +324,11 @@ function Limits({
         <span className="grid size-10 place-items-center rounded-[12px] bg-[var(--ls-surface-muted)] text-[var(--ls-accent)]">
           <Gauge className="size-4" />
         </span>
-        <h2 className="mt-4 text-base font-semibold text-[var(--ls-text)]">
+        <div className="mt-4 flex min-w-0 items-center gap-2"><h2 className="text-base font-semibold text-[var(--ls-text)]">
           Self-hosted admission boundary
-        </h2>
-        <p className="mt-2 text-sm leading-6 text-[var(--ls-text-secondary)]">
-          This policy limits review admissions inside this workspace. A value of
+        </h2><HelpHint label="Self-hosted admission boundary">This policy limits review admissions inside this workspace. A value of
           0 means unlimited local operation; it does not activate a paid plan,
-          create an invoice, or call a hosted billing service.
-        </p>
+          create an invoice, or call a hosted billing service.</HelpHint></div>
         <dl className="mt-5 divide-y divide-[var(--ls-line)] rounded-[12px] bg-[var(--ls-surface-muted)] px-4">
           <BoundaryFact
             label="Period"

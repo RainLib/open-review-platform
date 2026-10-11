@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Gauge, LoaderCircle } from "lucide-react";
 
 import type { UsageDashboard } from "@/lib/control-api";
+import { HelpHint } from "@/components/console/help-hint";
 
 export function UsageEntitlementForm({ dashboard, enabled, org }: { dashboard: UsageDashboard; enabled: boolean; org: string }) {
   const router = useRouter();
@@ -34,7 +35,7 @@ export function UsageEntitlementForm({ dashboard, enabled, org }: { dashboard: U
     <form className="rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)]" onSubmit={submit}>
       <div className="flex items-start gap-3">
         <span className="grid size-9 place-items-center rounded-[11px] bg-[var(--ls-surface-muted)] text-[var(--ls-accent)]"><Gauge className="size-4" /></span>
-        <div><h2 className="text-sm font-semibold text-[var(--ls-text)]">Admission quota</h2><p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">Use 0 for unlimited self-hosted operation. Reserved runs count immediately, preventing concurrent over-admission.</p></div>
+        <div><div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">Admission quota</h2><HelpHint label="Admission quota">Use 0 for unlimited self-hosted operation. Reserved runs count immediately, preventing concurrent over-admission.</HelpHint></div></div>
       </div>
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <label className="text-xs font-medium text-[var(--ls-text-secondary)]">Monthly reviews<input className="luminous-focus mt-2 h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3.5 text-sm text-[var(--ls-text)] disabled:opacity-45" defaultValue={dashboard.entitlement.monthly_review_limit} disabled={!enabled || busy} min="0" name="monthly_review_limit" required type="number" /></label>

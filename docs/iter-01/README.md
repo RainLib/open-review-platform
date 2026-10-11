@@ -61,6 +61,7 @@
 | [30-private-deployment-live-acceptance.md](30-private-deployment-live-acceptance.md) | 私有部署实测、自审批配置、执行可靠性与当前验收边界 | 后端、SRE、验收负责人 |
 | [31-agent-feedback-revalidation-request.md](31-agent-feedback-revalidation-request.md) | 新正式任务、真实反馈、准确 head 再审与只读发布确认恢复 | 后端、平台、验收负责人 |
 | [32-console-workflow-i18n-validation.md](32-console-workflow-i18n-validation.md) | 核心界面中英文、源码检查、部署与待登录复验 | 前端、验收负责人 |
+| [34-agent-campaigns.md](34-agent-campaigns.md) | 管理员多仓库检查、替换与文档任务，准确审批、验证修复再审验收、报表及证据边界 | 平台、前后端、验收负责人 |
 
 ## 4. 视觉设计稿
 

@@ -9,6 +9,7 @@ import { reviewFileRows } from "@/lib/review-file-analysis";
 import { observedSeverity, providerObservation, reviewConfigurationEvidence, selectedScopeCount, type ReviewOverviewView } from "@/lib/review-overview";
 import { providerFileTarget, providerReviewDiffTarget } from "@/lib/provider-review-url";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 const views: Array<{ id: ReviewOverviewView; label: string }> = [
   { id: "overview", label: "Overview" },
@@ -24,7 +25,7 @@ function viewURL(org: string, runID: string, view: ReviewOverviewView) {
 
 export function ReviewOverviewEvidence({ evidence, hasRuleSnapshot, org, view }: { evidence: ReviewEvidence; hasRuleSnapshot: boolean; org: string; view: ReviewOverviewView }) {
   return <div className="space-y-5">
-    <div><h2 className="text-lg font-semibold text-[var(--ls-text)]">Review overview</h2><p className="mt-1 text-sm leading-6 text-[var(--ls-text-secondary)]">A compact decision surface for the exact retained revision. Detailed findings, files and checks stay in their own views.</p></div>
+    <div><div className="flex min-w-0 items-center gap-2"><h2 className="text-lg font-semibold text-[var(--ls-text)]">Review overview</h2><HelpHint label="Review overview">A compact decision surface for the exact retained revision. Detailed findings, files and checks stay in their own views.</HelpHint></div></div>
     <TabStateRouter className="flex gap-1 overflow-x-auto border-b border-[var(--ls-line)]" label="Review overview views">
       {views.map((item) => <Link aria-current={view === item.id ? "page" : undefined} aria-selected={view === item.id} className={cn("luminous-focus relative inline-flex h-11 shrink-0 items-center rounded-t-[9px] px-3 text-sm font-medium", view === item.id ? "text-[var(--ls-text)]" : "text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]")} href={viewURL(org, evidence.run.id, item.id)} key={item.id} role="tab" tabIndex={view === item.id ? 0 : -1}>{item.label}{view === item.id ? <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--ls-accent)]" /> : null}</Link>)}
     </TabStateRouter>

@@ -7,6 +7,7 @@ import { formatTime, shortSHA } from "@/lib/format";
 import { groupProviderChecks, prioritizeProviderChecks, providerCheckState, reviewChecksCount, safeProviderCheckURL, type ReviewChecksView } from "@/lib/provider-checks";
 import { providerReviewTarget } from "@/lib/provider-review-url";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 type CheckRow = { id: string; name: string; source: string; state: string; time?: string; duration?: string; url?: string; note?: string };
 
@@ -65,13 +66,13 @@ export function ReviewChecksEvidence({ evidence, org, view }: { evidence: Review
     </TabStateRouter>
     {view !== "provider-ci" ? <div className="space-y-5">
       <section><h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ls-text)]"><ShieldCheck className="size-4 text-[var(--ls-accent)]" />Open Review merge gate</h3><div className="mt-3"><MergeGateCard decision={evidence.merge_gate} org={org} /></div></section>
-      <section><h3 className="text-sm font-semibold text-[var(--ls-text)]">Durable execution stages</h3><p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">These are workflow stages, not independent tests. Historical timing may be conservative.</p><div className="mt-3"><CheckTable empty="No stage evidence retained." rows={stageRows(evidence, org)} /></div></section>
+      <section><div className="flex min-w-0 items-center gap-2"><h3 className="text-sm font-semibold text-[var(--ls-text)]">Durable execution stages</h3><HelpHint label="Durable execution stages">These are workflow stages, not independent tests. Historical timing may be conservative.</HelpHint></div><div className="mt-3"><CheckTable empty="No stage evidence retained." rows={stageRows(evidence, org)} /></div></section>
       {own.length ? <section><h3 className="text-sm font-semibold text-[var(--ls-text)]">Open Review provider status</h3><p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">A platform status is not independent CI evidence{fresh ? "." : "; the provider snapshot is pending or stale."}</p><div className="mt-3"><CheckTable rows={providerRows(own, observed?.observed_at)} stale={!fresh} /></div></section> : null}
       <PublicationReceipts evidence={evidence} />
     </div> : null}
     {view !== "open-review" ? <div className="space-y-4">
       <ProviderObservation observed={observed} independentCount={independent.length} provider={provider} />
-      <section><h3 className="text-sm font-semibold text-[var(--ls-text)]">Independent provider CI</h3><p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">Only checks explicitly classified as independent appear here. A success state is not current evidence when the snapshot is stale or partial.</p><div className="mt-3"><CheckTable empty="No independent CI was confirmed for this exact revision." rows={providerRows(prioritizeProviderChecks(independent), observed?.observed_at)} stale={!fresh} /></div></section>
+      <section><div className="flex min-w-0 items-center gap-2"><h3 className="text-sm font-semibold text-[var(--ls-text)]">Independent provider CI</h3><HelpHint label="Independent provider CI">Only checks explicitly classified as independent appear here. A success state is not current evidence when the snapshot is stale or partial.</HelpHint></div><div className="mt-3"><CheckTable empty="No independent CI was confirmed for this exact revision." rows={providerRows(prioritizeProviderChecks(independent), observed?.observed_at)} stale={!fresh} /></div></section>
       {unclassified.length ? <details className="rounded-[12px] border border-[var(--ls-line)]"><summary className="luminous-focus cursor-pointer px-4 py-3 text-xs font-medium text-[var(--ls-text-secondary)]">{unclassified.length} unclassified provider status{unclassified.length === 1 ? "" : "es"} · not independent CI</summary><div className="px-4 pb-4"><CheckTable rows={providerRows(unclassified, observed?.observed_at)} stale={!fresh} /></div></details> : null}
     </div> : null}
     <p className="border-t border-[var(--ls-line)] pt-4 text-xs leading-5 text-[var(--ls-text-tertiary)]">Branch protection at the Git provider remains authoritative for merge permission. This page does not turn a missing, stale, partial, or unclassified observation into a passing check.</p>

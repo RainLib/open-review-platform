@@ -264,6 +264,7 @@ type AgentTaskAttempt struct {
 // isolated adapter. It deliberately omits any provider credential, clone URL,
 // host workspace path, shell argument or unrestricted user prompt.
 type AgentTaskAttemptTarget struct {
+	Campaign *AgentCampaignBinding     `json:"-"`
 	Attempt  AgentTaskAttempt          `json:"attempt"`
 	Task     AgentTask                 `json:"task"`
 	Plan     AgentTaskPlan             `json:"plan"`
@@ -344,6 +345,7 @@ func (binding AgentTaskFeedbackBinding) ExecutionValid() bool {
 // an Agent-generated value; only a credential-owning provider reader may set
 // it after the Issue command has been durably accepted.
 type AgentTaskSourceSnapshot struct {
+	Campaign           *AgentCampaignBinding      `json:"-"`
 	RepositoryEvidence string                     `json:"-"`
 	BaseRef            string                     `json:"base_ref"`
 	BaseSHA            string                     `json:"base_sha"`

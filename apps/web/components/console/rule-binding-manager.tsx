@@ -1,5 +1,7 @@
 "use client";
 
+import { SectionDisclosure } from "./section-disclosure";
+
 import { useWorkflowStatus, useWorkflowText } from "@/components/console/ui-language-context";
 
 import { FormEvent, useMemo, useState } from "react";
@@ -8,6 +10,7 @@ import { CircleAlert, GitBranch, LoaderCircle, Power, Radar, ShieldCheck } from 
 
 import type { RuleBinding, RuleSet } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 const inputClass = "luminous-focus mt-2 h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3.5 text-sm text-[var(--ls-text)] outline-none placeholder:text-[var(--ls-text-tertiary)] disabled:opacity-45";
 
@@ -50,8 +53,8 @@ export function RuleBindingManager({ bindings, enabled, org, ruleSets }: { bindi
 
   return <div className="space-y-5">
     {message ? <div className="flex items-start gap-2 rounded-[12px] border border-violet-500/20 bg-violet-500/[0.07] px-4 py-3 text-sm text-[var(--ls-text-secondary)]"><CircleAlert className="mt-0.5 size-4 shrink-0 text-[var(--ls-accent)]" />{message}</div> : null}
-    <form className="rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6" onSubmit={submit}>
-      <div className="flex items-start gap-3"><span className="grid size-9 place-items-center rounded-[11px] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]"><Radar className="size-4" /></span><div><h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Create rollout binding")}</h2><p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">{t("Start a candidate in Shadow. Upgrades to an existing baseline use the evidence-gated Shadow & Canary flow below.")}</p></div></div>
+    <SectionDisclosure title={t("Create rollout binding")} ><form className="rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)] sm:p-6" onSubmit={submit}>
+      <div className="flex items-start gap-3"><span className="grid size-9 place-items-center rounded-[11px] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]"><Radar className="size-4" /></span><div><div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">{t("Create rollout binding")}</h2><HelpHint label={t("Create rollout binding")}>{t("Start a candidate in Shadow. Upgrades to an existing baseline use the evidence-gated Shadow & Canary flow below.")}</HelpHint></div></div></div>
       <div className="mt-5 grid gap-4 lg:grid-cols-4">
         <label className="text-xs font-medium text-[var(--ls-text-secondary)]">{t("Published policy")}<select className={inputClass} disabled={!enabled || busy !== undefined} name="rule_version_id" required><option value="">{t("Select version")}</option>{published.map((item) => <option key={item.id} value={item.latest_version?.id}>{item.name} · v{item.latest_version?.version}</option>)}</select></label>
         <label className="text-xs font-medium text-[var(--ls-text-secondary)]">{t("Scope")}<select className={inputClass} disabled={!enabled || busy !== undefined} name="scope_kind" onChange={(event) => setScopeKind(event.target.value as "tenant" | "repository")} value={scopeKind}><option value="repository">{t("Repository")}</option><option value="tenant">{t("Entire workspace")}</option></select></label>
@@ -65,7 +68,7 @@ export function RuleBindingManager({ bindings, enabled, org, ruleSets }: { bindi
         <label className="text-xs font-medium text-[var(--ls-text-secondary)]">{t("Exclude paths")}<input className={inputClass} disabled={!enabled || busy !== undefined} name="path_exclude_glob" placeholder="**/generated/**" /></label>
       </div>
       <button className="luminous-focus mt-5 inline-flex h-9 items-center gap-2 rounded-[9px] bg-[var(--ls-accent)] px-4 text-xs font-semibold text-white hover:bg-[var(--ls-accent-hover)] disabled:opacity-45" disabled={!enabled || busy !== undefined || !published.length} type="submit">{busy === "create" ? <LoaderCircle className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}{t("Create binding")}</button>
-    </form>
+    </form></SectionDisclosure>
     <div className="space-y-3">{bindings.map((binding) => <article className="rounded-[16px] border border-[var(--ls-line)] bg-[var(--ls-surface)] p-5 shadow-[var(--ls-shadow-control)]" key={binding.id}>
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start"><div><div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">{versionNames.get(binding.rule_version_id) ?? `Version ${binding.rule_version_id.slice(0, 8)}`}</h2><span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", binding.state === "active" ? "bg-emerald-500/10 text-[var(--ls-success-text)]" : binding.state === "shadow" ? "bg-amber-500/10 text-[var(--ls-warning-text)]" : "bg-[var(--ls-surface-muted)] text-[var(--ls-text-tertiary)]")}>{status(binding.state)}</span></div><p className="mt-2 flex items-center gap-1.5 text-xs text-[var(--ls-text-secondary)]"><GitBranch className="size-3.5" />{binding.scope_kind === "tenant" ? t("Entire workspace") : `${binding.scope_provider || t("legacy provider")}@${providerHost(binding.scope_api_base_url)} · ${binding.scope_ref}`} · {binding.target_branch_glob || t("all branches")} {t(" · precedence ")}{binding.precedence}</p></div>
       <div className="flex flex-wrap gap-2">{binding.state !== "shadow" ? <button className="luminous-focus rounded-[8px] border border-amber-500/20 px-2.5 py-1.5 text-xs text-[var(--ls-warning-text)] disabled:opacity-45" disabled={!enabled || busy !== undefined} onClick={() => changeState(binding, "shadow")} type="button">{t("Shadow")}</button> : null}{binding.state === "shadow" ? <a className="luminous-focus rounded-[8px] border border-violet-500/20 px-2.5 py-1.5 text-xs text-[var(--ls-accent)]" href="#rollouts">{t("Review rollout evidence")}</a> : null}{binding.state !== "disabled" ? <button className="luminous-focus inline-flex items-center gap-1 rounded-[8px] border border-red-500/20 px-2.5 py-1.5 text-xs text-[var(--ls-critical-text)] disabled:opacity-45" disabled={!enabled || busy !== undefined} onClick={() => changeState(binding, "disabled")} type="button"><Power className="size-3" />{t("Disable")}</button> : null}</div></div>

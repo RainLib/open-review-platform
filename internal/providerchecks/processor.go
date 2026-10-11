@@ -53,7 +53,7 @@ func (p Processor) RunOnce(ctx context.Context) (bool, error) {
 		// The read model records only a bounded code. Raw provider errors and
 		// credential resolver details never become user-visible evidence.
 		retryAt := time.Now().UTC().Add(checkRetryDelay(target.Attempt))
-		if persistErr := p.Store.FailProviderCheckProbe(ctx, *target, "provider_read_failed", retryAt); persistErr != nil {
+		if persistErr := p.Store.FailProviderCheckProbe(ctx, *target, providerReadFailureCode(err), retryAt); persistErr != nil {
 			return true, fmt.Errorf("provider checks read failed; persist failure: %w", persistErr)
 		}
 		return true, fmt.Errorf("provider checks read failed")

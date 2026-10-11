@@ -23,6 +23,7 @@ import { cliReviewTemplate, configuredPublicControlPlaneURL } from "@/lib/public
 import { providerCommitTarget, providerRepositoryTarget, providerReviewTarget } from "@/lib/provider-review-url";
 import { reviewDuration } from "@/lib/review-duration";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 type CLIReviewTab = "runs" | "quickstart";
 
@@ -45,14 +46,11 @@ export default async function CLIReviewsPage({
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">
             Machine-triggered review
           </p>
-          <h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
+          <div className="mt-2 flex min-w-0 items-center gap-2"><h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">
             CLI Reviews
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            Trigger the existing durable review workflow for a real pull or
+          </h1><HelpHint label="CLI Reviews">Trigger the existing durable review workflow for a real pull or
             merge request. The installation, repository allowlist, exact
-            revision, rules, model route, and evidence remain pinned to the run.
-          </p>
+            revision, rules, model route, and evidence remain pinned to the run.</HelpHint></div>
         </div>
         <div className="flex items-center gap-2 text-xs text-[var(--ls-text-tertiary)]">
           <span
@@ -274,14 +272,11 @@ function Quickstart({
             <Code2 className="size-4.5" />
           </span>
           <div>
-            <h2 className="text-lg font-semibold text-[var(--ls-text)]">
+            <div className="flex min-w-0 items-center gap-2"><h2 className="text-lg font-semibold text-[var(--ls-text)]">
               Review an existing pull request
-            </h2>
-            <p className="mt-1 text-sm leading-6 text-[var(--ls-text-secondary)]">
-              The control plane derives the trusted clone destination from the
+            </h2><HelpHint label="Review an existing pull request">The control plane derives the trusted clone destination from the
               installation. It rejects arbitrary clone URLs, partial revisions,
-              unsafe refs, and repositories outside the key allowlist.
-            </p>
+              unsafe refs, and repositories outside the key allowlist.</HelpHint></div>
           </div>
         </div>
         {command ? (
@@ -381,15 +376,12 @@ function Quickstart({
           <div className="flex gap-3">
             <CircleAlert className="mt-0.5 size-4 shrink-0 text-[var(--ls-warning-text)]" />
             <div>
-              <h2 className="text-sm font-semibold text-[var(--ls-text)]">
+              <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">
                 Idempotent by default
-              </h2>
-              <p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">
-                The CLI derives a stable key from tenant, repository, review
+              </h2><HelpHint label="Idempotent by default">The CLI derives a stable key from tenant, repository, review
                 number, exact head SHA, and mode. Repeating the command returns
                 the original run; a concurrent request for the same active head
-                is coalesced.
-              </p>
+                is coalesced.</HelpHint></div>
             </div>
           </div>
         </section>

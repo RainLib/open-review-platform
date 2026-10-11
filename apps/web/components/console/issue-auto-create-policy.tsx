@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import type { IssueAutoCreatePolicy, IssueAutoCreatePreview } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
 import { useModalFocus } from "@/components/console/use-modal-focus";
+import { HelpHint } from "@/components/console/help-hint";
 
 type DraftPolicy = Omit<IssueAutoCreatePolicy, "repository_scopes" | "categories" | "labels"> & {
   repository_scopes: string;
@@ -125,8 +126,7 @@ export function IssueAutoCreatePolicyEditor({ enabled, org, policy }: { enabled:
             <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-[var(--ls-line)] bg-[var(--ls-surface)] px-5 py-4 sm:px-6">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--ls-accent)]">Issue automation</p>
-                <h2 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-[var(--ls-text)]">Create provider Issues with a bounded policy</h2>
-                <p className="mt-1 text-sm text-[var(--ls-text-secondary)]">GitHub and GitLab issues are created only for matching future aggregates. One fingerprint retains one durable external Issue receipt.</p>
+                <div className="mt-1 flex min-w-0 items-center gap-2"><h2 className="text-xl font-semibold tracking-[-0.03em] text-[var(--ls-text)]">Create provider Issues with a bounded policy</h2><HelpHint label="Create provider Issues with a bounded policy">GitHub and GitLab issues are created only for matching future aggregates. One fingerprint retains one durable external Issue receipt.</HelpHint></div>
               </div>
               <button aria-label="Close policy editor" className="luminous-focus grid size-9 shrink-0 place-items-center rounded-[10px] text-[var(--ls-text-tertiary)] hover:bg-[var(--ls-surface-muted)]" onClick={() => setOpen(false)} type="button"><X className="size-4" /></button>
             </header>

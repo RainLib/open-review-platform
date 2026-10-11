@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -72,6 +72,7 @@ const railItems = [
   { key: "issues", label: "issues", icon: ListChecks },
   { key: "reviews", label: "pullRequests", icon: GitPullRequest },
   { key: "agent-work", label: "agentWork", icon: SquareTerminal },
+  { key: "agent-campaigns", label: "agentCampaigns", icon: SquareTerminal },
   { key: "rules", label: "policyStudio", icon: ShieldCheck },
   { key: "connect", label: "operate", icon: Settings2 },
   { key: "settings/members", label: "enterprise", icon: Building2 },
@@ -173,7 +174,7 @@ export function LuminousConsoleShell({
       </a>
       <header aria-hidden={commandOpen || undefined} className="luminous-frosted sticky top-0 z-40 flex h-14 items-center border-b border-[var(--ls-line)] px-3 sm:px-5">
         <Link
-          className="luminous-focus flex min-w-0 items-center gap-2.5 rounded-lg"
+          className="luminous-focus flex min-w-0 shrink-0 items-center gap-2.5 rounded-lg"
           href={`/${org}/home`}
         >
           <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-[var(--ls-accent)] text-white shadow-[var(--ls-shadow-control)]">
@@ -185,13 +186,13 @@ export function LuminousConsoleShell({
         </Link>
 
         <span className="mx-4 hidden h-6 w-px bg-[var(--ls-line)] sm:block" />
-        <details className="group relative">
-          <summary className="luminous-focus flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-[var(--ls-text)] transition hover:bg-[var(--ls-surface-muted)] [&::-webkit-details-marker]:hidden">
-            <Building2 className="size-4 text-[var(--ls-text-secondary)]" />
-            <span className="max-w-28 truncate">{title}</span>
-            <ChevronDown className="size-3.5 text-[var(--ls-text-tertiary)] transition group-open:rotate-180" />
+        <details className="group relative min-w-0">
+          <summary className="luminous-focus flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-1 py-1.5 text-sm text-[var(--ls-text)] transition hover:bg-[var(--ls-surface-muted)] sm:px-2 [&::-webkit-details-marker]:hidden">
+            <Building2 className="hidden size-4 shrink-0 text-[var(--ls-text-secondary)] sm:block" />
+            <span className="min-w-0 max-w-28 truncate">{title}</span>
+            <ChevronDown className="size-3.5 shrink-0 text-[var(--ls-text-tertiary)] transition group-open:rotate-180" />
           </summary>
-          <div className="luminous-frosted absolute left-0 top-[calc(100%+12px)] z-50 w-72 overflow-hidden rounded-[14px] border border-[var(--ls-line-strong)] p-1.5 shadow-[var(--ls-shadow-float)]">
+          <div className="luminous-frosted absolute left-0 top-[calc(100%+12px)] z-50 w-[min(18rem,calc(100vw-3.5rem))] overflow-hidden rounded-[14px] border border-[var(--ls-line-strong)] p-1.5 shadow-[var(--ls-shadow-float)]">
             <p className="px-2.5 pb-2 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ls-text-tertiary)]">
               {t("workspaces")}
             </p>
@@ -238,19 +239,9 @@ export function LuminousConsoleShell({
           </div>
         </details>
 
-        <nav aria-label="Primary domains" className="ml-6 hidden rounded-[10px] bg-[var(--ls-surface-muted)] p-1 lg:flex">
-          <DomainLink active={pathname.startsWith(`/${org}/issues`) || pathname.startsWith(`/${org}/provider-issues`) || pathname.startsWith(`/${org}/findings`) || pathname.startsWith(`/${org}/reviews`) || pathname.startsWith(`/${org}/tasks`) || pathname.startsWith(`/${org}/cli-reviews`)} href={`/${org}/issues`}>
-            {t("review")}
-          </DomainLink>
-          <DomainLink active={pathname.startsWith(`/${org}/rules`) || pathname.startsWith(`/${org}/review-config`)} href={`/${org}/review-config/general`}>
-            {t("policy")}
-          </DomainLink>
-          <DomainLink active={pathname.startsWith(`/${org}/connect`) || pathname.startsWith(`/${org}/notifications`) || pathname.startsWith(`/${org}/audit`) || pathname.startsWith(`/${org}/settings`) || pathname.startsWith(`/${org}/agent-work`)} href={`/${org}/connect`}>
-            {t("operate")}
-          </DomainLink>
-        </nav>
 
-        <div className="ml-auto flex items-center gap-1.5">
+
+        <div className="ml-auto flex shrink-0 items-center gap-0 sm:gap-1.5">
           <label className="luminous-focus flex h-9 items-center gap-1 rounded-[10px] px-2 text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)]" title={t("language")}>
             <Languages aria-hidden="true" className="size-4" />
             <span className="sr-only">{t("language")}</span>
@@ -336,12 +327,14 @@ export function LuminousConsoleShell({
           <TooltipContent side="right" sideOffset={12}>{t("expand")}</TooltipContent>
         </Tooltip>
         <nav aria-label="Workspace navigation" className="flex flex-col gap-2" id="console-sidebar-navigation">
-          {railItems.map((item) => {
+          {railItems.map((item, index) => {
             const href = `/${org}/${item.key}`;
             const active = pathname.startsWith(href) || (item.key === "issues" && pathname.startsWith(`/${org}/provider-issues`));
             const Icon = item.icon;
             return (
-              <Tooltip key={item.key} open={sidebarExpanded ? false : undefined}>
+              <Fragment key={item.key}>
+                {sidebarExpanded && (index === 1 || index === 5) ? <p className="px-3 pb-1 pt-4 text-[10px] font-medium tracking-wide text-[var(--ls-text-tertiary)]">{index === 1 ? (language === "zh-CN" ? "工作区" : "Workspace") : (language === "zh-CN" ? "管理" : "Manage")}</p> : null}
+              <Tooltip open={sidebarExpanded ? false : undefined}>
                 <TooltipTrigger asChild>
                   <Link
                     aria-current={active ? "page" : undefined}
@@ -362,6 +355,7 @@ export function LuminousConsoleShell({
                 </TooltipTrigger>
                 <TooltipContent side="right" sideOffset={12}>{t(item.label)}</TooltipContent>
               </Tooltip>
+              </Fragment>
             );
           })}
         </nav>
@@ -373,7 +367,7 @@ export function LuminousConsoleShell({
         id="main-content"
         tabIndex={-1}
       >
-        <div className="mx-auto max-w-[1600px] px-4 py-6 sm:px-7 lg:px-10 lg:py-8">
+        <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           {preview ? <PreviewModeNotice org={org} /> : null}
           {children}
         </div>
@@ -745,31 +739,6 @@ function CommandPaletteLink({
         <span className="block font-medium text-[var(--ls-text)]">{item.label}</span>
         <span className="mt-0.5 block truncate text-xs text-[var(--ls-text-tertiary)]">{item.description}</span>
       </span>
-    </Link>
-  );
-}
-
-function DomainLink({
-  active,
-  children,
-  href,
-}: {
-  active: boolean;
-  children: React.ReactNode;
-  href: string;
-}) {
-  return (
-    <Link
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "luminous-focus rounded-[8px] px-5 py-1.5 text-xs font-medium transition",
-        active
-          ? "bg-[var(--ls-surface)] text-[var(--ls-text)] shadow-[var(--ls-shadow-control)]"
-          : "text-[var(--ls-text-secondary)] hover:text-[var(--ls-text)]",
-      )}
-      href={href}
-    >
-      {children}
     </Link>
   );
 }

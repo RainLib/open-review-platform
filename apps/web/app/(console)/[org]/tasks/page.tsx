@@ -10,6 +10,7 @@ import { ReviewInterventionControls } from "@/components/console/review-interven
 import { getReviewScheduleData, getWorkQueueData, type ReviewSchedule, type WorkQueueView } from "@/lib/control-api";
 import { formatTime, isAttentionRun, shortSHA } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 type QueueTab = "running" | "needs-attention" | "scheduled";
 type QueueQuery = {
@@ -40,7 +41,7 @@ export default async function TasksPage({ params, searchParams }: { params: Prom
 
   return <div className="space-y-7">
     <header className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
-      <div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">Review operations</p><h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">Work queue</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">Live operational runs only. Review evidence and completed history stay in Pull requests, so this queue remains useful when attention is scarce.</p></div>
+      <div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">Review operations</p><div className="mt-2 flex min-w-0 items-center gap-2"><h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">Work queue</h1><HelpHint label="Work queue">Live operational runs only. Review evidence and completed history stay in Pull requests, so this queue remains useful when attention is scarce.</HelpHint></div></div>
       <DataFreshness detail={displaySource.detail} state={displaySource.source === "live" ? "live" : displaySource.source === "demo" ? "demo" : "unavailable"} />
     </header>
 

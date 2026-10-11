@@ -1499,7 +1499,7 @@ export type AgentTask = {
   provider: "github" | "gitlab";
   api_base_url: string;
   repository: string;
-  origin_kind: "issue" | "pull_request";
+  origin_kind: "issue" | "pull_request" | "campaign";
   origin_number: number;
   origin_revision: string;
   intent: "implement";

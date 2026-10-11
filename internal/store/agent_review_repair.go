@@ -56,6 +56,13 @@ func prepareAgentReviewRepairTx(ctx context.Context, tx pgx.Tx, task domain.Agen
 
 // All internal repairs share one branch budget, lineage and fresh approval.
 func prepareAgentRepairTx(ctx context.Context, tx pgx.Tx, task domain.AgentTask, attempt domain.AgentTaskAttempt, kind, key string, runID *uuid.UUID, instruction string) (string, error) {
+	var cancelled bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_campaign_targets ct JOIN agent_campaigns c ON c.id=ct.campaign_id JOIN agent_tasks root ON root.id=ct.task_id WHERE root.tenant_id=$1 AND root.execution_branch=$2 AND c.state='cancelled')`, task.TenantID, task.ExecutionBranch).Scan(&cancelled); err != nil {
+		return "", err
+	}
+	if cancelled {
+		return "Repair stopped: the campaign was cancelled", nil
+	}
 	if !task.Workflow.Enabled || task.FeedbackCycle >= 3 {
 		return "Repair stopped: the frozen feedback depth is exhausted", nil
 	}

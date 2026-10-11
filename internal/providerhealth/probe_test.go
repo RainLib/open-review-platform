@@ -341,6 +341,24 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
+func TestGitHubCheckPermissionDeclarationDoesNotInferObservedCI(t *testing.T) {
+	for _, tc := range []struct{ checks, statuses, want string }{
+		{"write", "", "missing_commit_statuses_read"},
+		{"", "read", "missing_checks_read"},
+		{"read", "read", "app_permissions_declared"},
+		{"write", "write", "app_permissions_declared"},
+	} {
+		t.Run(tc.checks+"/"+tc.statuses, func(t *testing.T) {
+			result := domain.ProviderProbeResult{Receipt: map[string]any{}}
+			client := Client{Resolver: githubAppAwareResolver{configuration: credentials.GitHubAppConfiguration{Permissions: map[string]string{"checks": tc.checks, "statuses": tc.statuses}}}}
+			client.observeGitHubIssueTriage(context.Background(), domain.Installation{CredentialRef: "github-app"}, &result)
+			if result.Receipt["independent_checks_app_permission_state"] != tc.want || !containsString(result.Permissions, "independent_checks:"+tc.want) {
+				t.Fatalf("check declaration was omitted or overstated: %+v", result)
+			}
+		})
+	}
+}
+
 func TestClientVerifiesDeclaredGitHubRepositoryOutsideInventoryPage(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

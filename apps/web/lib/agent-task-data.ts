@@ -116,6 +116,15 @@ export function agentLinkedReviewOutcome(review: AgentTaskDetail["linked_reviews
 }
 
 export function agentTaskOriginGuidance(originKind: AgentTask["origin_kind"]) {
+  if (originKind === "campaign") return {
+    resource: "Campaign request", command: "Campaign request",
+    sourcePending: "Scanning the frozen campaign request and repository commit before planning.",
+    sourceFailure: "Campaign scan or decision evidence is incomplete. Inspect the campaign and retry failed scans within the retained budget.",
+    recovery: "Create a new campaign if the request, path scope, or repository base changed.",
+    planSource: "A complete campaign scan and immutable request are required before planning.",
+    planClassification: "This campaign classification does not permit coding. Inspect the admission evidence.",
+  };
+
   if (originKind === "pull_request") {
     return {
       resource: "Agent Draft feedback",

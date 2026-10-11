@@ -15,15 +15,21 @@ import (
 )
 
 func TestAgentReviewRepairIsIdempotentBoundedAndRequiresFreshApproval(t *testing.T) {
-	testAgentInternalRepair(t, "review")
+	for _, origin := range []string{"issue", "campaign"} {
+		t.Run(origin, func(t *testing.T) { testAgentInternalRepair(t, "review", origin) })
+	}
 }
 func TestAgentAcceptanceRejectionPreparesRepairWithoutManualFeedbackBudget(t *testing.T) {
-	testAgentInternalRepair(t, "acceptance")
+	for _, origin := range []string{"issue", "campaign"} {
+		t.Run(origin, func(t *testing.T) { testAgentInternalRepair(t, "acceptance", origin) })
+	}
 }
 func TestAgentCIFailurePreparesOnlyDiagnosedCodeRepair(t *testing.T) {
-	testAgentInternalRepair(t, "ci")
+	for _, origin := range []string{"issue", "campaign"} {
+		t.Run(origin, func(t *testing.T) { testAgentInternalRepair(t, "ci", origin) })
+	}
 }
-func testAgentInternalRepair(t *testing.T, kind string) {
+func testAgentInternalRepair(t *testing.T, kind, origin string) {
 	if os.Getenv("OPEN_REVIEW_TEST_DATABASE_URL") == "" || os.Getenv("OPEN_REVIEW_TEST_ISOLATED_DATABASE") != "true" {
 		t.Skip("requires isolated PostgreSQL")
 	}
@@ -42,9 +48,13 @@ func testAgentInternalRepair(t *testing.T, kind string) {
 		}
 	}
 	exec(`INSERT INTO tenants(id,slug,name) VALUES($1,$2,'Review repair fixture')`, tenant, slug)
-	exec(`INSERT INTO memberships(tenant_id,subject,role,active) VALUES($1,'owner','owner',true),($1,'reviewer','reviewer',true)`, tenant)
+	exec(`INSERT INTO memberships(tenant_id,subject,role,active) VALUES($1,'owner','owner',true),($1,'reviewer','reviewer',true),($1,'campaign-author','admin',true)`, tenant)
 	exec(`INSERT INTO provider_installations(id,tenant_id,provider,external_id,repository_scope,api_base_url,credential_ref,verification_state) VALUES($1,$2,'github',$3,'team/repo','https://api.github.com','fixture','verified')`, installation, tenant, installation.String())
 	workflow := domain.AgentWorkflowPolicy{Enabled: true, MaxRepairCycles: 2, MaxTaskAttempts: 3}
+	if origin == "campaign" {
+		workflow.RequireCriterionEvidence = true
+		workflow.RequiredChecks = []string{"go tests"}
+	}
 	_, err = s.SaveAgentTaskPolicy(ctx, "owner", slug, domain.AgentTaskPolicyInput{Provider: domain.ProviderGitHub, APIBaseURL: "https://api.github.com", Repository: "team/repo", Mode: "manual", DecisionBackend: "deterministic", Workflow: &workflow})
 	if err != nil {
 		t.Fatal(err)
@@ -69,6 +79,35 @@ func testAgentInternalRepair(t *testing.T, kind string) {
 	task, err = s.RecordAgentTaskSourceSnapshot(ctx, task.ID, snapshot)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if origin == "campaign" {
+		_, _ = s.pool.Exec(ctx, `UPDATE agent_tasks SET state='cancelled' WHERE id=$1`, task.ID)
+		exec(`INSERT INTO provider_repository_inventory(installation_id,external_id,name) VALUES($1,'repo','team/repo')`, installation)
+		c, e := s.CreateAgentCampaign(ctx, "campaign-author", slug, domain.AgentCampaignInput{IdempotencyKey: uuid.NewString(), Title: "Campaign repair fixture", Mode: "docs", Requirements: issue.Body, AcceptanceCriteria: []string{"Retry exactly twice", "Retain the final failure"}, Paths: []string{"README.md", "internal/**"}, Repositories: []domain.AgentCampaignRepository{{InstallationID: installation, Repository: "team/repo"}}, Concurrency: 1})
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, ct, e := s.ClaimAgentCampaignScan(ctx, "campaign-repair-scan")
+		if e != nil {
+			t.Fatal(e)
+		}
+		receipt := domain.AgentCampaignScan{BaseRef: "main", BaseSHA: snapshot.BaseSHA, Complete: true, FilesScanned: 1, Files: []domain.AgentCampaignFile{{Path: "README.md", SHA256: strings.Repeat("1", 64)}}}
+		ct.Scan = receipt
+		b := CampaignBinding(c, ct)
+		snapshot = domain.AgentTaskSourceSnapshot{BaseRef: "main", BaseSHA: receipt.BaseSHA, Campaign: &b}
+		generated, e := (agentplan.Planner{}).Generate(ctx, ct.PlanningTask, snapshot)
+		if e != nil {
+			t.Fatal(e)
+		}
+		snapshot.GeneratedPlan = &generated
+		if e = s.FinishAgentCampaignScan(ctx, "campaign-repair-scan", ct, receipt, snapshot, ""); e != nil {
+			t.Fatal(e)
+		}
+		d, e := s.GetAgentTask(ctx, "owner", slug, ct.PlanningTask.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		task = d.Task
 	}
 	detail, err := s.GetAgentTask(ctx, "owner", slug, task.ID)
 	if err != nil {
@@ -207,6 +246,12 @@ func testAgentInternalRepair(t *testing.T, kind string) {
 	childDetail, err := s.GetAgentTask(ctx, "owner", slug, childID)
 	if err != nil || len(childDetail.Plans) != 1 || len(childDetail.Plans[0].Sections.AcceptanceCriteria) != 2 || len(childDetail.Attempts) != 0 || childDetail.Feedback == nil || childDetail.Feedback.InternalRepairKind != kind || childDetail.Plans[0].Sections.SourceRequirements != issue.Body {
 		t.Fatalf("repair lost requirements or self-approved: %+v %v", childDetail, err)
+	}
+	if origin == "campaign" {
+		binding, e := s.loadCampaignBinding(ctx, childDetail.Task)
+		if e != nil || binding == nil || !binding.Valid() {
+			t.Fatalf("repair lost campaign path scope: %+v %v", binding, e)
+		}
 	}
 	childPlan := childDetail.Plans[0]
 	if _, err = s.ApproveAgentTaskPlan(ctx, "reviewer", slug, childID, childPlan.ID, domain.AgentTaskPlanApprovalInput{Revision: childPlan.Revision}); !errors.Is(err, ErrForbidden) {

@@ -41,6 +41,7 @@ import type {
   RetentionPolicy,
 } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 type DataGovernanceTab = "residency" | "retention" | "jobs";
 type PendingAction = string | undefined;
@@ -131,14 +132,11 @@ export function DataGovernanceManager({
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">
             Enterprise data controls
           </p>
-          <h1 className="mt-2 text-[32px] font-semibold tracking-[-0.045em] text-[var(--ls-text)]">
+          <div className="mt-2 flex min-w-0 items-center gap-2"><h1 className="text-[32px] font-semibold tracking-[-0.045em] text-[var(--ls-text)]">
             Data governance
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ls-text-secondary)]">
-            Trace where workspace data crosses boundaries, govern retention with
+          </h1><HelpHint label="Data governance">Trace where workspace data crosses boundaries, govern retention with
             impact evidence, and run exports or destructive operations through
-            durable approval-aware jobs.
-          </p>
+            durable approval-aware jobs.</HelpHint></div>
         </div>
         <DataFreshness detail={data.detail} state={data.source} />
       </header>
@@ -384,13 +382,10 @@ function RetentionView({ data, mutate, pending }: ViewProps) {
               <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--ls-accent)]">
                 Policy revision
               </p>
-              <h2 className="mt-2 text-xl font-semibold text-[var(--ls-text)]">
+              <div className="mt-2 flex min-w-0 items-center gap-2"><h2 className="text-xl font-semibold text-[var(--ls-text)]">
                 Retention by data class
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-[var(--ls-text-secondary)]">
-                Shortening an active period generates an impact preview and
-                requires approval. Extending retention can activate immediately.
-              </p>
+              </h2><HelpHint label="Retention by data class">Shortening an active period generates an impact preview and
+                requires approval. Extending retention can activate immediately.</HelpHint></div>
             </div>
             <Clock3 className="size-5 text-[var(--ls-text-tertiary)]" />
           </div>
@@ -711,12 +706,9 @@ function JobsView({ data, mutate, org, pending }: ViewProps) {
       <section className="rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface)]">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--ls-line)] px-5 py-4">
           <div>
-            <h2 className="text-sm font-semibold text-[var(--ls-text)]">
+            <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">
               Operation history
-            </h2>
-            <p className="mt-1 text-xs text-[var(--ls-text-tertiary)]">
-              Newest requests first · revisions prevent stale actions
-            </p>
+            </h2><HelpHint label="Operation history">Newest requests first · revisions prevent stale actions</HelpHint></div>
           </div>
           <StatusPill tone="neutral">{data.jobs.length} jobs</StatusPill>
         </div>

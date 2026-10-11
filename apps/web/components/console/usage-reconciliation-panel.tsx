@@ -6,6 +6,7 @@ import { CircleAlert, RefreshCw, ShieldCheck } from "lucide-react";
 
 import type { UsageDashboard } from "@/lib/control-api";
 import { cn } from "@/lib/utils";
+import { HelpHint } from "@/components/console/help-hint";
 
 const timestamp = new Intl.DateTimeFormat("en", {
   dateStyle: "medium",
@@ -104,14 +105,11 @@ export function UsageReconciliationPanel({
             )}
           </span>
           <div>
-            <h2 className="text-base font-semibold text-[var(--ls-text)]">
+            <div className="flex min-w-0 items-center gap-2"><h2 className="text-base font-semibold text-[var(--ls-text)]">
               Usage reconciliation
-            </h2>
-            <p className="mt-1 max-w-2xl text-xs leading-5 text-[var(--ls-text-secondary)]">
-              Review-run state is authoritative. Reconciliation repairs mutable
+            </h2><HelpHint label="Usage reconciliation">Review-run state is authoritative. Reconciliation repairs mutable
               reservations and appends adjustment evidence; it never updates or
-              deletes an existing ledger event.
-            </p>
+              deletes an existing ledger event.</HelpHint></div>
           </div>
         </div>
         <span

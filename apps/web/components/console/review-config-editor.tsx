@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   Braces,
   BookOpen,
@@ -38,6 +38,7 @@ import { TabStateRouter } from "@/components/console/tab-state-router";
 import { ReviewConfigVersionHistory } from "@/components/console/review-config-version-history";
 import { cn } from "@/lib/utils";
 import { useUiLanguage, useUiText } from "@/components/console/ui-language-context";
+import { FieldLabel, HelpHint } from "@/components/console/help-hint";
 
 const sections: Array<{
   key: ReviewConfigSection;
@@ -179,7 +180,10 @@ function ReviewConfigEditorDraft({
           }),
         },
       );
-      const body = (await response.json()) as ReviewConfigView | { error?: string };
+      const body = (await response.json().catch(() => ({ error: tr(
+        "The service returned an unexpected response. Refresh the saved configuration before retrying.",
+        "服务返回了异常响应。请先刷新已保存的配置，再重试。",
+      ) }))) as ReviewConfigView | { error?: string };
       if (!response.ok || !("content" in body)) {
         throw new Error("error" in body && body.error ? body.error : `Save failed (${response.status}).`);
       }
@@ -213,7 +217,10 @@ function ReviewConfigEditorDraft({
         `/api/tenants/${encodeURIComponent(org)}/review-config/${section}?${params.toString()}`,
         { method: "DELETE" },
       );
-      const body = (await response.json()) as ReviewConfigView | { error?: string };
+      const body = (await response.json().catch(() => ({ error: tr(
+        "The service returned an unexpected response. Refresh the saved configuration before retrying.",
+        "服务返回了异常响应。请先刷新已保存的配置，再重试。",
+      ) }))) as ReviewConfigView | { error?: string };
       if (!response.ok || !("content" in body)) {
         throw new Error("error" in body && body.error ? body.error : `Restore failed (${response.status}).`);
       }
@@ -236,8 +243,7 @@ function ReviewConfigEditorDraft({
       <header className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ls-accent)]">{tr("Policy studio", "策略中心")}</p>
-          <h1 className="mt-2 text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">{tr("Review settings", "审核设置")}</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--ls-text-secondary)]">{tr("Tune what the reviewer analyzes and how evidence is published. Repository settings inherit until you create an explicit override.", "配置审核范围和证据发布方式。仓库默认继承工作空间设置，直到创建单独的覆盖配置。")}</p>
+          <div className="mt-2 flex min-w-0 items-center gap-2"><h1 className="text-[32px] font-semibold leading-[38px] tracking-[-0.045em] text-[var(--ls-text)]">{tr("Review settings", "审核设置")}</h1><HelpHint label={tr("Review settings", "审核设置")}>{tr("Tune what the reviewer analyzes and how evidence is published. Repository settings inherit until you create an explicit override.", "配置审核范围和证据发布方式。仓库默认继承工作空间设置，直到创建单独的覆盖配置。")}</HelpHint></div>
         </div>
         <span className={cn("inline-flex w-fit items-center gap-2 rounded-full px-3 py-1.5 text-xs", source === "live" ? "bg-emerald-500/10 text-[var(--ls-success-text)]" : "bg-amber-500/10 text-[var(--ls-warning-text)]")}>
           <span className="size-1.5 rounded-full bg-current" />
@@ -329,8 +335,7 @@ function ReviewConfigEditorDraft({
 
           <aside className="space-y-4 xl:sticky xl:top-20 xl:self-start">
             <section className="rounded-[18px] border border-[var(--ls-line)] bg-[var(--ls-surface-raised)] p-5 shadow-[var(--ls-shadow-control)]">
-              <h2 className="text-sm font-semibold text-[var(--ls-text)]">{tr("Publish configuration", "发布配置")}</h2>
-              <p className="mt-2 text-xs leading-5 text-[var(--ls-text-secondary)]">{tr("Saving creates a new immutable revision guarded by the revision shown above. A stale editor is rejected rather than overwriting another administrator.", "保存将创建新的不可变版本，并依据上方版本号校验。过期编辑器会被拒绝，不会覆盖其他管理员的修改。")}</p>
+              <div className="flex min-w-0 items-center gap-2"><h2 className="text-sm font-semibold text-[var(--ls-text)]">{tr("Publish configuration", "发布配置")}</h2><HelpHint label={tr("Publish configuration", "发布配置")}>{tr("Saving creates a new immutable revision guarded by the revision shown above. A stale editor is rejected rather than overwriting another administrator.", "保存将创建新的不可变版本，并依据上方版本号校验。过期编辑器会被拒绝，不会覆盖其他管理员的修改。")}</HelpHint></div>
               {notice ? <p className={cn("mt-4 rounded-[10px] px-3 py-2.5 text-xs leading-5", notice.tone === "success" ? "bg-emerald-500/10 text-[var(--ls-success-text)]" : "bg-red-500/10 text-[var(--ls-critical-text)]")}>{notice.text}</p> : null}
               <button className="luminous-focus mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--ls-accent)] px-4 text-sm font-medium text-white transition hover:bg-[var(--ls-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45" disabled={readOnly || !dirty || Boolean(pending)} onClick={save} type="button">{pending === "save" ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />} {tr("Save new revision", "保存新版本")}</button>
               {view.requested_scope_kind === "repository" && !view.inherited ? <button className="luminous-focus mt-2 inline-flex h-10 w-full items-center justify-center gap-2 rounded-[10px] border border-[var(--ls-line-strong)] text-sm font-medium text-[var(--ls-text-secondary)] hover:bg-[var(--ls-surface-muted)] disabled:opacity-45" disabled={readOnly || Boolean(pending)} onClick={restoreInheritance} type="button">{pending === "restore" ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />} {tr("Restore inheritance", "恢复继承")}</button> : null}
@@ -649,7 +654,7 @@ function IssueFormatTemplateLibrary({ content, detail, onApply, onCatalogChanged
     <section className="rounded-[16px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] p-4 sm:p-5">
       <div className="flex items-start gap-3">
         <span className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-[var(--ls-accent-soft)] text-[var(--ls-accent)]"><Library className="size-4" /></span>
-        <div><h3 className="text-sm font-semibold text-[var(--ls-text)]">Reusable workspace formats</h3><p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">Save a named, versioned format once and apply it to any repository draft. Applying never publishes by itself.</p></div>
+        <div><div className="flex min-w-0 items-center gap-2"><h3 className="text-sm font-semibold text-[var(--ls-text)]">Reusable workspace formats</h3><HelpHint label="Reusable workspace formats">Save a named, versioned format once and apply it to any repository draft. Applying never publishes by itself.</HelpHint></div></div>
       </div>
       <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
         <label className="grid gap-1.5 text-xs font-medium text-[var(--ls-text-secondary)]">Saved format<select className="luminous-focus h-10 rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)]" onChange={(event) => chooseTemplate(event.target.value)} value={selectedID}><option value="">{templates.length ? "Choose a workspace format" : "No reusable formats yet"}</option>{templates.map((item) => <option key={item.id} value={item.id}>{item.name} · r{item.revision}</option>)}</select></label>
@@ -738,7 +743,7 @@ function MessageFields({ content, onChange }: { content: Record<string, unknown>
 }
 
 function ToggleRow({ checked, description, label, onChange, warning = false }: { checked: boolean; description: string; label: string; onChange: (value: boolean) => void; warning?: boolean }) {
-  return <div className={cn("flex items-start justify-between gap-4 rounded-[14px] border p-4", warning ? "border-amber-500/25 bg-amber-500/[0.06]" : "border-[var(--ls-line)] bg-[var(--ls-surface-muted)]")}><div><p className="text-sm font-medium text-[var(--ls-text)]">{label}</p><p className="mt-1 text-xs leading-5 text-[var(--ls-text-secondary)]">{description}</p></div><Toggle checked={checked} label={label} onChange={onChange} /></div>;
+  return <div className={cn("flex items-start justify-between gap-4 rounded-[14px] border p-4", warning ? "border-amber-500/25 bg-amber-500/[0.06]" : "border-[var(--ls-line)] bg-[var(--ls-surface-muted)]")}><div className="flex items-center gap-2"><p className="text-sm font-medium text-[var(--ls-text)]">{label}</p><HelpHint label={label}>{description}</HelpHint></div><Toggle checked={checked} label={label} onChange={onChange} /></div>;
 }
 
 function Toggle({ checked, label, onChange }: { checked: boolean; label: string; onChange: (value: boolean) => void }) {
@@ -746,7 +751,8 @@ function Toggle({ checked, label, onChange }: { checked: boolean; label: string;
 }
 
 function SelectField({ help, label, onChange, options, value }: { help?: string; label: string; onChange: (value: string) => void; options: SelectOption[]; value: string }) {
-  return <label className="block"><span className="mb-2 block text-xs font-medium text-[var(--ls-text-secondary)]">{label}</span><select className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)]" onChange={(event) => onChange(event.target.value)} value={value}>{options.map((option) => { const normalized = typeof option === "string" ? { value: option, label: titleCase(option) } : option; return <option key={normalized.value} value={normalized.value}>{normalized.label}</option>; })}</select>{help ? <span className="mt-2 block text-xs leading-5 text-[var(--ls-text-tertiary)]">{help}</span> : null}</label>;
+  const id = useId();
+  return <div><FieldLabel htmlFor={id} label={label} help={help} /><select id={id} className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)]" onChange={(event) => onChange(event.target.value)} value={value}>{options.map((option) => { const normalized = typeof option === "string" ? { value: option, label: titleCase(option) } : option; return <option key={normalized.value} value={normalized.value}>{normalized.label}</option>; })}</select></div>;
 }
 
 function NumberField({ label, max, min, onChange, value }: { label: string; max: number; min: number; onChange: (value: number) => void; value: number }) {
@@ -754,11 +760,13 @@ function NumberField({ label, max, min, onChange, value }: { label: string; max:
 }
 
 function ListField({ help, label, onChange, placeholder, value }: { help?: string; label: string; onChange: (value: string[]) => void; placeholder: string; value: string[] }) {
-  return <label className="block"><span className="mb-2 block text-xs font-medium text-[var(--ls-text-secondary)]">{label}</span><input className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)] placeholder:text-[var(--ls-text-tertiary)]" onChange={(event) => onChange(event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} placeholder={placeholder} value={value.join(", ")} />{help ? <span className="mt-2 block text-xs leading-5 text-[var(--ls-text-tertiary)]">{help}</span> : null}</label>;
+  const id = useId();
+  return <div><FieldLabel htmlFor={id} label={label} help={help} /><input id={id} className="luminous-focus h-10 w-full rounded-[10px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 text-sm text-[var(--ls-text)] placeholder:text-[var(--ls-text-tertiary)]" onChange={(event) => onChange(event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} placeholder={placeholder} value={value.join(", ")} /></div>;
 }
 
 function TextAreaField({ help, label, maxLength, onChange, rows, value }: { help?: string; label: string; maxLength?: number; onChange: (value: string) => void; rows: number; value: string }) {
-  return <label className="block"><span className="mb-2 flex items-center justify-between gap-3 text-xs font-medium text-[var(--ls-text-secondary)]"><span>{label}</span>{maxLength ? <span className="font-mono text-[10px] font-normal text-[var(--ls-text-tertiary)]">{[...value].length}/{maxLength}</span> : null}</span><textarea className="luminous-focus w-full resize-y rounded-[12px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 py-2.5 font-mono text-sm leading-6 text-[var(--ls-text)] placeholder:text-[var(--ls-text-tertiary)]" maxLength={maxLength} onChange={(event) => onChange(event.target.value)} rows={rows} value={value} />{help ? <span className="mt-2 block text-xs leading-5 text-[var(--ls-text-tertiary)]">{help}</span> : null}</label>;
+  const id = useId();
+  return <div><FieldLabel htmlFor={id} label={label} help={help}>{maxLength ? <span className="font-mono text-[10px] font-normal text-[var(--ls-text-tertiary)]">{[...value].length}/{maxLength}</span> : null}</FieldLabel><textarea id={id} className="luminous-focus w-full resize-y rounded-[12px] border border-[var(--ls-line-strong)] bg-[var(--ls-surface)] px-3 py-2.5 font-mono text-sm leading-6 text-[var(--ls-text)] placeholder:text-[var(--ls-text-tertiary)]" maxLength={maxLength} onChange={(event) => onChange(event.target.value)} rows={rows} value={value} /></div>;
 }
 
 function scopeButton(active: boolean) {
